@@ -2,7 +2,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import type { WebBridge } from './bridge.js';
-import { parseClientMessage, type ServerEvent } from './protocol.js';
+import { MAX_IMAGE_BYTES, parseClientMessage, UPLOAD_TYPES, type ServerEvent } from './protocol.js';
 
 // The HTTP layer of the web front end (#584/#595): bridge events out to tabs over SSE, a tab's
 // messages in over POST. Whoever passes these checks can drive the agent, so each one is a rule.
@@ -153,13 +153,13 @@ function eventFrame(event: ServerEvent): string {
 }
 
 // Not `for await`: leaving that loop early destroys the socket, and the 413 could not be sent.
-function readBody(req: IncomingMessage): Promise<Buffer | 'too-large'> {
+function readBody(req: IncomingMessage, limit = MAX_MESSAGE_BYTES): Promise<Buffer | 'too-large'> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
     const onData = (chunk: Buffer): void => {
       size += chunk.length;
-      if (size > MAX_MESSAGE_BYTES) {
+      if (size > limit) {
         req.pause();
         req.off('data', onData);
         resolve('too-large');
@@ -335,6 +335,39 @@ export async function startWebServer(
     } else sendJson(req, res, result.conflict ? 409 : 400, { error: result.error });
   }
 
+  // An image's raw bytes (#979): token-only like /message, and a type no cross-site form or
+  // no-cors fetch can send without the preflight that is refused.
+  async function acceptUpload(
+    req: IncomingMessage,
+    res: ServerResponse,
+    query: URLSearchParams,
+  ): Promise<void> {
+    if (query.has('token') || !tokenMatches(bearerToken(req), tokenHash)) {
+      sendText(req, res, 401, 'unauthorized');
+      return;
+    }
+    const contentType = req.headers['content-type'];
+    const mediaType =
+      typeof contentType === 'string' ? contentType.split(';')[0].trim().toLowerCase() : '';
+    if (!(UPLOAD_TYPES as readonly string[]).includes(mediaType)) {
+      sendText(req, res, 415, 'unsupported media type');
+      return;
+    }
+    const declared = req.headers['content-length'];
+    if (declared !== undefined && !(Number(declared) <= MAX_IMAGE_BYTES)) {
+      sendText(req, res, 413, 'payload too large');
+      return;
+    }
+    const body = await readBody(req, MAX_IMAGE_BYTES);
+    if (body === 'too-large') {
+      sendText(req, res, 413, 'payload too large');
+      return;
+    }
+    const result = await bridge.upload(new Uint8Array(body), mediaType);
+    if (result.ok) sendJson(req, res, 200, { ok: true, reply: result.reply });
+    else sendJson(req, res, result.status, { error: result.error });
+  }
+
   // The one route that hands out the token, so the one that never takes a credential in its URL
   // and answers every failed code alike.
   async function exchangeLinkCode(
@@ -422,6 +455,7 @@ export async function startWebServer(
     const query = new URLSearchParams(queryAt === -1 ? '' : target.slice(queryAt + 1));
     if (req.method === 'POST') {
       if (rawPath === '/message') await acceptMessage(req, res, query);
+      else if (rawPath === '/upload') await acceptUpload(req, res, query);
       else if (rawPath === '/session') await exchangeLinkCode(req, res, query);
       else sendText(req, res, 404, 'not found');
       return;

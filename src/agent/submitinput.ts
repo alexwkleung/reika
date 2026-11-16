@@ -114,6 +114,10 @@ export async function buildSubmitInput(
     }
   }
   let modelText = attachImageBlocks(expansion.augmented, images);
+  for (const a of images) {
+    if (a.receipt && modelText.includes(a.marker))
+      notices.push({ content: a.receipt, tone: 'info' });
+  }
   // attachImageBlocks' liveness rule: a marker the user deleted sends neither text nor bytes.
   const nativeImages = images
     .filter((a): a is ImageAttachment & { native: NativeImageBytes } =>

@@ -1,4 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import type { Controller, InputFrontEnd } from '../controller.js';
+import { sniffKnownImageMime } from '../ocr/vision.js';
 import type { ImageAttachment } from '../agent/attachments.js';
 import { loadSession, type SessionEntry, type SessionSides } from '../store/sessions.js';
 import type { ApprovalRequest, Message, QuestionRequest } from '../types.js';
@@ -31,6 +33,8 @@ import {
   wireCatalog,
   type WireCatalog,
   type WireCompletion,
+  type WireUpload,
+  type SubmittedImage,
   confirmDialog,
   dialogEvent,
   helloEvent,
@@ -70,6 +74,8 @@ export type WebBridge = {
   subscribe(listener: (event: ServerEvent) => void): () => void;
   // Never throws or rejects. A message that reads the history directory answers in a promise.
   handle(message: ClientMessage): HandleResult | Promise<HandleResult>;
+  // An image's raw bytes, from `POST /upload`: read now, held until a submit names it (#979).
+  upload(bytes: Uint8Array, contentType: string): Promise<UploadResult>;
   close(): void;
 };
 
@@ -77,6 +83,19 @@ export type WebBridge = {
 export type HandleResult =
   | { ok: true; reply?: WireCompletion | WireSessionList }
   | { ok: false; error: string; conflict?: true };
+
+// `status` is the HTTP answer for a refusal.
+export type UploadResult =
+  | { ok: true; reply: WireUpload }
+  | { ok: false; error: string; status: 400 | 409 | 413 | 415 | 422 | 429 };
+
+// Bounds on what tabs may leave waiting. An upload read as text keeps only its text; one sent to a
+// model that can see keeps its bytes, so those are what the byte cap counts.
+export const MAX_PENDING_UPLOADS = 16;
+export const MAX_PENDING_UPLOAD_BYTES = 128 * 1024 * 1024;
+export const UPLOAD_TTL_MS = 30 * 60_000;
+
+type HeldUpload = Omit<ImageAttachment, 'marker' | 'receipt'> & { detail: string; at: number };
 
 type ControllerDialogKind = 'approval' | 'question' | 'confirm';
 
@@ -197,6 +216,82 @@ export function createWebBridge(
 
   // A resume is reading its file: a submit now would land in the conversation it is replacing.
   let resuming = false;
+  // Uploads by id, per session rather than per tab: a POST is not tied to a stream. Freed by the
+  // submit that takes them, a `discard`, age, a new conversation, a resume and close.
+  const uploads = new Map<string, HeldUpload>();
+  // One read at a time: a vision model or the OCR child is the slow part, and a second tab's
+  // paste waits for its own answer rather than racing it.
+  let reading = false;
+  const heldBytes = (): number =>
+    [...uploads.values()].reduce((n, u) => n + (u.native?.bytes.length ?? 0), 0);
+  const sweepUploads = (): void => {
+    for (const [id, u] of uploads) if (now() - u.at > UPLOAD_TTL_MS) uploads.delete(id);
+  };
+
+  const upload = async (bytes: Uint8Array, contentType: string): Promise<UploadResult> => {
+    if (closed) return { ok: false, error: 'closed', status: 409 };
+    // The bytes decide, and the declared type must agree: a refusal names a mislabelled file
+    // rather than sending a model data under a type it is not.
+    const mime = sniffKnownImageMime(bytes);
+    if (mime === null || mime !== contentType) {
+      return { ok: false, error: 'not a PNG, JPEG, WebP or GIF image', status: 415 };
+    }
+    // Shell mode sends the line to bash, which would try to run `[Image 1]`.
+    if (controller.mode === 'shell') {
+      return { ok: false, error: "can't attach an image in shell mode", status: 409 };
+    }
+    if (reading) return { ok: false, error: 'another image is still being read', status: 429 };
+    sweepUploads();
+    if (uploads.size >= MAX_PENDING_UPLOADS) {
+      return { ok: false, error: 'too many images waiting to be sent', status: 429 };
+    }
+    if (heldBytes() + bytes.length > MAX_PENDING_UPLOAD_BYTES) {
+      return { ok: false, error: 'the images waiting to be sent are too large', status: 413 };
+    }
+    reading = true;
+    try {
+      const read = await controller.readImage(bytes, 'image');
+      if (!read.ok) {
+        // Persistent, for every tab: the chip goes when it is removed, and the failure must not.
+        controller.append({ role: 'system', content: read.notice, tone: 'warn' });
+        return { ok: false, error: read.notice, status: 422 };
+      }
+      if (closed) return { ok: false, error: 'closed', status: 409 };
+      const id = randomUUID();
+      uploads.set(id, {
+        text: read.text,
+        source: 'upload',
+        ...(read.native ? { native: read.native } : {}),
+        detail: read.detail,
+        at: now(),
+      });
+      return {
+        ok: true,
+        reply: { id, chars: read.native ? null : read.text.length },
+      };
+    } catch (e) {
+      return { ok: false, error: (e as Error).message, status: 422 };
+    } finally {
+      reading = false;
+    }
+  };
+
+  // Every named upload, or a refusal and nothing taken: a line must not run without an image the
+  // user saw on its chip.
+  const takeUploads = (
+    images: SubmittedImage[],
+  ): { images: ImageAttachment[] } | { error: string } => {
+    sweepUploads();
+    const out: ImageAttachment[] = [];
+    for (const { marker, id } of images) {
+      const held = uploads.get(id);
+      if (!held) return { error: `${marker} is no longer held: attach it again` };
+      const { detail, at: _at, ...attachment } = held;
+      out.push({ ...attachment, marker, receipt: `${marker} — ${detail}.` });
+    }
+    for (const { id } of images) uploads.delete(id);
+    return { images: out };
+  };
 
   const emit = (event: ServerEvent): void => {
     if (closed) return;
@@ -460,6 +555,7 @@ export function createWebBridge(
       // A `/resume` picker's list no longer says what is open.
       supersedePicker('session');
       const loaded = await resume(picked);
+      if (loaded) uploads.clear();
       return loaded ? { ok: true } : { ok: false, error: 'the session could not be read' };
     } catch (e) {
       return { ok: false, error: (e as Error).message };
@@ -662,14 +758,24 @@ export function createWebBridge(
               conflict: true,
             };
           }
+          const named = message.images ?? [];
+          if (named.length > 0 && controller.mode === 'shell') {
+            return { ok: false, error: "can't attach an image in shell mode", conflict: true };
+          }
+          // Before anything awaits, like the pastes below, so two submits cannot take one upload.
+          const taken = takeUploads(named);
+          if ('error' in taken) return { ok: false, error: taken.error, conflict: true };
           // Before anything awaits, so two tabs' pastes can never be given the same number.
           const adopted = adoptPastes(pastes, message.text, message.pastes ?? []);
           pastes = adopted.pastes;
-          void submitSafely(adopted.text, inputFrontEnd());
+          void submitSafely(adopted.text, inputFrontEnd(taken.images));
           return { ok: true };
         }
         case 'abort':
           controller.abort();
+          return { ok: true };
+        case 'discard':
+          for (const id of message.ids) uploads.delete(id);
           return { ok: true };
         case 'mode': {
           if (message.mode === controller.mode) return { ok: true };
@@ -711,6 +817,7 @@ export function createWebBridge(
           const busy = switchRefusal('conversations');
           if (busy) return busy;
           supersedePicker('session');
+          uploads.clear();
           controller.newConversation({ role: 'user', content: '/new', meta: true });
           return { ok: true };
         }
@@ -742,6 +849,7 @@ export function createWebBridge(
         listeners.delete(listener);
       };
     },
+    upload,
     handle: message => {
       const result = handleRaw(message);
       return result instanceof Promise ? result.then(scrubResult) : scrubResult(result);
@@ -751,6 +859,7 @@ export function createWebBridge(
       supersedePicker('model');
       supersedePicker('session');
       closed = true;
+      uploads.clear();
       unsubscribeController();
       unsubscribeLive();
       unsubscribeSession?.();
