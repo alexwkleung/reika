@@ -1,14 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createController } from '../controller.js';
 import type { Session, SubmitOptions } from '../session.js';
 import { newSessionPath, projectHistoryDir, writeSession } from '../store/sessions.js';
 import { TRANSCRIPT_VERSION } from '../store/transcript.js';
 import type { Config, Message, Mode, Profile } from '../types.js';
+import { clearIdentity, setIdentity } from '../ui/identity.js';
 import { createWebBridge } from './bridge.js';
-import { MAX_LISTED_SESSIONS, type ServerEvent } from './protocol.js';
+import { MAX_LISTED_SESSIONS, sessionId, type ServerEvent } from './protocol.js';
 import type * as PastedUrls from '../agent/pastedurls.js';
 
 // A pasted-link fetch that announces itself and waits for the test to let it finish.
@@ -446,15 +447,16 @@ describe('pickers', () => {
     const [picker] = dialogs(events);
     expect(picker.dialog).toMatchObject({
       kind: 'session',
-      entries: [expect.objectContaining({ path })],
+      entries: [expect.objectContaining({ id: sessionId(path) })],
     });
+    expect(JSON.stringify(picker.dialog)).not.toContain(path);
 
     expect(
-      bridge.handle({ type: 'answer', id: picker.id, kind: 'session', path: '/etc/passwd' }),
+      bridge.handle({ type: 'answer', id: picker.id, kind: 'session', session: 'other.jsonl' }),
     ).toEqual({ ok: false, error: expect.any(String) });
-    expect(bridge.handle({ type: 'answer', id: picker.id, kind: 'session', path })).toEqual({
-      ok: true,
-    });
+    expect(
+      bridge.handle({ type: 'answer', id: picker.id, kind: 'session', session: sessionId(path) }),
+    ).toEqual({ ok: true });
     // The TUI leaves a prompt in the box while a resume loads; a tab keeps it the same way.
     expect(bridge.handle({ type: 'submit', text: 'too soon' })).toMatchObject({ ok: false });
     await vi.waitFor(() => expect(types(events)).toContain('reset'));
@@ -481,7 +483,8 @@ describe('pickers', () => {
     bridge.handle({ type: 'submit', text: '/resume' });
     await vi.waitFor(() => expect(dialogs(events)).toHaveLength(1));
     const [picker] = dialogs(events);
-    const pick = () => bridge.handle({ type: 'answer', id: picker.id, kind: 'session', path });
+    const pick = () =>
+      bridge.handle({ type: 'answer', id: picker.id, kind: 'session', session: sessionId(path) });
     const refused = { ok: false, conflict: true };
 
     // A line held before its turn starts: preparing, with the status still idle.
@@ -542,7 +545,7 @@ describe('pickers', () => {
     await vi.waitFor(() => expect(dialogs(events)).toHaveLength(1));
     const [picker] = dialogs(events);
     await rm(path);
-    bridge.handle({ type: 'answer', id: picker.id, kind: 'session', path });
+    bridge.handle({ type: 'answer', id: picker.id, kind: 'session', session: sessionId(path) });
     await vi.waitFor(() =>
       expect(controller.messages.at(-1)).toMatchObject({
         role: 'error',
@@ -716,7 +719,7 @@ describe('history drawer', () => {
     await vi.waitFor(() => expect(dialogs(events)).toHaveLength(2));
     const picker = dialogs(events)[1];
     const offered = picker.dialog.kind === 'session' ? picker.dialog.entries : [];
-    expect(offered.some(e => e.path === b)).toBe(false);
+    expect(offered.some(e => e.id === sessionId(b))).toBe(false);
   });
 });
 
@@ -731,15 +734,15 @@ describe('live', () => {
       ev.onMessage!(user(text));
       ev.onPhase!('thinking');
       ev.onReasoningDelta!('let me ');
-      ev.onReasoningDelta!('see');
-      ev.onContentDelta!('Hi');
+      ev.onReasoningDelta!('see ');
+      ev.onContentDelta!('Hi ');
       ev.onPlanProgress!(steps as never);
       await gate.promise;
       ev.onMessage!({ role: 'assistant', content: 'Hi' });
       ev.onToolStart!('bash');
-      ev.onToolProgress!('out', 'bash');
-      ev.onToolProgress!('put', 'bash');
-      ev.onToolProgress!('x', 'grep');
+      ev.onToolProgress!('out\n', 'bash');
+      ev.onToolProgress!('put\n', 'bash');
+      ev.onToolProgress!('x\n', 'grep');
       ev.onMessage!({ role: 'tool', callId: 'c1', summary: 'Ran: ls' });
       opts.onTurnEnd?.();
       return [];
@@ -748,13 +751,13 @@ describe('live', () => {
     await flush();
     expect(events.filter(e => e.type === 'delta')).toEqual([
       { type: 'delta', channel: 'reasoning', text: 'let me ' },
-      { type: 'delta', channel: 'reasoning', text: 'see' },
-      { type: 'delta', channel: 'content', text: 'Hi' },
+      { type: 'delta', channel: 'reasoning', text: 'see ' },
+      { type: 'delta', channel: 'content', text: 'Hi ' },
     ]);
     const mid = bridge.connect().at(-1);
     expect(mid).toMatchObject({
       type: 'live',
-      live: { phase: 'thinking', reasoning: 'let me see', content: 'Hi' },
+      live: { phase: 'thinking', reasoning: 'let me see ', content: 'Hi ' },
     });
     // The loop mutates its array in place.
     steps[0].done = true;
@@ -766,9 +769,9 @@ describe('live', () => {
     const lives = events.flatMap(e => (e.type === 'live' ? [e.live] : []));
     expect(lives[0]).toMatchObject({ content: '', reasoning: '' });
     expect(lives[1]).toMatchObject({ pending: { name: 'bash', since: 1000 } });
-    expect(lives[2]).toMatchObject({ tool: { name: 'bash', output: 'out' } });
-    expect(events).toContainEqual({ type: 'delta', channel: 'tool', text: 'put' });
-    expect(lives[3]).toMatchObject({ tool: { name: 'grep', output: 'x' } });
+    expect(lives[2]).toMatchObject({ tool: { name: 'bash', output: 'out\n' } });
+    expect(events).toContainEqual({ type: 'delta', channel: 'tool', text: 'put\n' });
+    expect(lives[3]).toMatchObject({ tool: { name: 'grep', output: 'x\n' } });
     expect(lives[4]).toMatchObject({ tool: null, pending: null });
     expect(lastLive(events)).toMatchObject({
       phase: null,
@@ -1125,5 +1128,99 @@ describe('close', () => {
     expect(calls).toBe(1);
     expect(events.length).toBeGreaterThanOrEqual(before + 2);
     expect(controller.messages).toHaveLength(2);
+  });
+});
+
+describe('scrub (#990)', () => {
+  const HOME = homedir();
+  afterEach(() => clearIdentity());
+  const anon = () => setIdentity({ names: ['Mona Lisa'], emails: ['octocat@example.com'] });
+  const sent = (events: ServerEvent[]) => JSON.stringify(events);
+
+  it('sends home paths as ~/… and keeps the input history raw', async () => {
+    const { controller, bridge, events } = setup();
+    controller.append(note(`wrote ${HOME}/notes.md`));
+    bridge.handle({ type: 'submit', text: `look at ${HOME}/notes.md` });
+    await vi.waitFor(() => expect(controller.getSnapshot().history).toHaveLength(1));
+    expect(sent(events.filter(e => e.type !== 'historyAdd'))).not.toContain(HOME);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: 'message',
+        message: expect.objectContaining({ content: 'wrote ~/notes.md' }),
+      }),
+    );
+    // Recalled into the box and sent again, so the real text.
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: 'historyAdd', entry: `look at ${HOME}/notes.md` }),
+    );
+    expect(controller.messages.some(m => 'content' in m && m.content.includes(HOME))).toBe(true);
+  });
+
+  it('re-sends everything under /anon, to open tabs and to one that reconnects', () => {
+    const { controller, bridge, events } = setup();
+    controller.append(note('by Mona Lisa'));
+    void controller.requestApproval({ tool: 'bash', subject: 'Mona Lisa', preview: 'ls' });
+    const before = bridge.connect().at(0)!;
+    const oldSeq = 'seq' in before ? before.seq : 0;
+    expect(sent(events)).toContain('Mona Lisa');
+
+    events.length = 0;
+    anon();
+    controller.append(note('anon on'));
+    expect(types(events).slice(0, 3)).toEqual(['reset', 'state', 'dialog']);
+    expect(types(events)).toContain('live');
+    expect(sent(events)).not.toContain('Mona Lisa');
+    // The log no longer holds what was sent before the switch.
+    const replay = bridge.connect(oldSeq);
+    expect(types(replay)).toContain('reset');
+    expect(sent(replay)).not.toContain('Mona Lisa');
+    expect(sent(bridge.connect())).not.toContain('Mona Lisa');
+  });
+
+  it('scrubs a reply’s error', async () => {
+    const { controller, bridge } = setup();
+    anon();
+    vi.spyOn(controller, 'sessionList').mockRejectedValue(
+      new Error(`ENOENT ${HOME}/Mona Lisa/history`),
+    );
+    expect(await bridge.handle({ type: 'sessions', scope: 'project' })).toEqual({
+      ok: false,
+      error: 'ENOENT ~/<user>/history',
+    });
+  });
+
+  it('filters sessions on the titles a tab draws, not the raw ones', async () => {
+    const { controller, bridge } = setup();
+    anon();
+    vi.spyOn(controller, 'sessionList').mockResolvedValue([
+      { path: '/h/a.jsonl', title: 'ask Mona Lisa', savedAt: '2026-01-01', messageCount: 2 },
+    ]);
+    const reply = (filter: string) => bridge.handle({ type: 'sessions', scope: 'project', filter });
+    expect(await reply('mona')).toMatchObject({ reply: { entries: [], total: 0 } });
+    expect(await reply('<user>')).toMatchObject({
+      reply: { entries: [{ id: 'a.jsonl', title: 'ask <user>' }], total: 1 },
+    });
+  });
+
+  it('streams a path without ever drawing part of it', async () => {
+    const { session, bridge, events } = setup();
+    const gate = deferred();
+    session.turn = async (_text, opts) => {
+      opts.onTurnStart?.();
+      const ev = opts.events!;
+      ev.onPhase!('thinking');
+      ev.onContentDelta!(`open ${HOME.slice(0, 4)}`);
+      ev.onContentDelta!(`${HOME.slice(4)}/notes.md now`);
+      await gate.promise;
+      opts.onTurnEnd?.();
+      return [];
+    };
+    bridge.handle({ type: 'submit', text: 'go' });
+    await flush();
+    const deltas = events.flatMap(e => (e.type === 'delta' ? [e] : []));
+    expect(deltas.map(d => d.text).join('')).toBe('open ~/notes.md ');
+    expect(sent(events)).not.toContain(HOME.slice(0, 4) + HOME.slice(4, 6));
+    expect(lastLive(bridge.connect()).content).toBe('open ~/notes.md ');
+    gate.resolve();
   });
 });

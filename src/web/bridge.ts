@@ -6,6 +6,21 @@ import type { ConfirmSpec } from '../ui/dialogspecs.js';
 import type { ModelTarget } from '../ui/models.js';
 import { adoptPastes, type PastedText } from '../ui/pastes.js';
 import { submitStageLabel } from '../agent/submitinput.js';
+import { scrubGeneration } from '../ui/identity.js';
+import { scrubDisplay, scrubOutput } from '../ui/scrub.js';
+import {
+  createStreamScrubber,
+  liveChannelText,
+  scrubCompletion,
+  scrubDialog,
+  scrubError,
+  scrubLive,
+  scrubMessage,
+  scrubSessionList,
+  scrubState,
+  type LiveChannel,
+  type StreamScrubber,
+} from './scrubwire.js';
 import {
   approvalDialog,
   catalogEvent,
@@ -19,10 +34,8 @@ import {
   dialogEvent,
   helloEvent,
   liveEvent,
-  messageEvent,
   modelDialog,
   questionDialog,
-  resetEvent,
   resolvedEvent,
   sameState,
   sessionId,
@@ -37,6 +50,7 @@ import {
   type CommittedEvent,
   type ServerEvent,
   type WireDialog,
+  type WireMessage,
   type WireState,
 } from './protocol.js';
 
@@ -101,8 +115,55 @@ export function createWebBridge(
 
   // What a submit is waiting on, from the controller's onStage hook; the controller keeps none.
   let stage: string | null = null;
+  // The scrub rules in force (#990): `/anon` swaps them, and everything a tab holds is re-sent.
+  let generation = scrubGeneration();
+  // Read at each scrub: `/cd` moves it, and the process's own cwd never follows.
+  const cwd = (): string => controller.session?.bundle.cwd ?? process.cwd();
+  // A message is scrubbed once per rule set, against the cwd it was first sent under, so its rows
+  // do not change on a reload after a `/cd`.
+  const wired = new WeakMap<Message, { generation: number; cwd: string; wire: WireMessage }>();
+  const wire = (m: Message): WireMessage => {
+    const hit = wired.get(m);
+    if (hit && hit.generation === generation) return hit.wire;
+    const at = hit?.cwd ?? cwd();
+    const out = scrubMessage(m, at);
+    wired.set(m, { generation, cwd: at, wire: out });
+    return out;
+  };
+  const scrubbedState = (): WireState => scrubState(wireState(controller, stage));
+  const scrubbedDialog = (d: WireDialog): WireDialog => scrubDialog(d, cwd());
+  const streamed: Record<LiveChannel, StreamScrubber> = {
+    content: createStreamScrubber(s => scrubDisplay(s, cwd())),
+    reasoning: createStreamScrubber(s => scrubDisplay(s, cwd())),
+    tool: createStreamScrubber(s => scrubOutput(s, cwd())),
+  };
+  let streamedTool: string | null = null;
+  // Brought up to the controller's live text: a delta missed, a new round, a new tool block.
+  const catchUpStreams = (force = false): void => {
+    const toolName = controller.live.tool?.name ?? null;
+    for (const channel of ['content', 'reasoning', 'tool'] as const) {
+      const scrubber = streamed[channel];
+      const raw = liveChannelText(controller.live, channel);
+      const sameBlock = channel !== 'tool' || toolName === streamedTool;
+      if (!force && sameBlock && raw === scrubber.raw) continue;
+      if (!force && sameBlock && raw.startsWith(scrubber.raw)) {
+        scrubber.push(raw.slice(scrubber.raw.length));
+      } else scrubber.reset(raw);
+    }
+    streamedTool = toolName;
+  };
+  const messageEvent = (seq: number, m: Message): CommittedEvent => ({
+    type: 'message',
+    seq,
+    message: wire(m),
+  });
+  const resetEvent = (seq: number, all: Message[]): CommittedEvent => ({
+    type: 'reset',
+    seq,
+    messages: all.map(wire),
+  });
   let messages = controller.messages;
-  let state: WireState = wireState(controller, stage);
+  let state: WireState = scrubbedState();
   let catalog: WireCatalog = wireCatalog(controller);
   let history = controller.getSnapshot().history;
   // Pastes from every tab, session-long as the TUI keeps its own: a recalled line's markers must
@@ -141,11 +202,20 @@ export function createWebBridge(
     emit(event);
   };
 
-  const emitLive = (): void => emit(liveEvent(controller.live, now()));
+  const scrubbedLive = (): ServerEvent => {
+    catchUpStreams();
+    const text = {
+      content: streamed.content.text(),
+      reasoning: streamed.reasoning.text(),
+      tool: streamed.tool.text(),
+    };
+    return liveEvent(scrubLive(controller.live, text, cwd()), now());
+  };
+  const emitLive = (): void => emit(scrubbedLive());
 
   const openDialog = (entry: OpenDialog): void => {
     dialogs.set(entry.id, entry);
-    commit(seq => dialogEvent(seq, entry.id, entry.dialog));
+    commit(seq => dialogEvent(seq, entry.id, scrubbedDialog(entry.dialog)));
   };
   const closeDialog = (entry: OpenDialog): void => {
     if (!dialogs.delete(entry.id)) return;
@@ -223,6 +293,22 @@ export function createWebBridge(
       do {
         dirty = false;
         followSession();
+        const nextGeneration = scrubGeneration();
+        if (nextGeneration !== generation) {
+          // A tab reconnecting must not be replayed what was sent under the old rules: the log
+          // empties, so anything older than now gets a snapshot.
+          generation = nextGeneration;
+          log.length = 0;
+          droppedThrough = lastSeq;
+          catchUpStreams(true);
+          commit(seq => resetEvent(seq, messages));
+          state = scrubbedState();
+          commit(seq => stateEvent(seq, state));
+          for (const entry of dialogs.values()) {
+            commit(seq => dialogEvent(seq, entry.id, scrubbedDialog(entry.dialog)));
+          }
+          liveHeld = true;
+        }
         const next = controller.messages;
         if (next !== messages) {
           const prev = messages;
@@ -234,7 +320,7 @@ export function createWebBridge(
           }
         }
         syncDialogs();
-        const nextState = wireState(controller, stage);
+        const nextState = scrubbedState();
         if (!sameState(state, nextState)) {
           state = nextState;
           commit(seq => stateEvent(seq, nextState));
@@ -317,25 +403,29 @@ export function createWebBridge(
 
   // Everything a tab is sent goes out through the bridge, replies included, so a later scrub of
   // what reaches a browser (#990) has one place to stand.
-  const completionReply = (text: string): WireCompletion => controller.completions(text);
+  const completionReply = (text: string): WireCompletion =>
+    scrubCompletion(controller.completions(text), cwd());
 
   // Answered while busy, unlike `/resume`: the drawer is only looking. Filtered here rather than in
   // the tab, so a session past the cap can still be found.
+  // The filter reads the titles as the tab draws them: matched raw, it would say what `/anon` hid.
   const sessionsReply = async (scope: SessionScope, filter = ''): Promise<WireSessionList> => {
     const all = await controller.sessionList(scope);
+    const current = controller.sessionPath;
+    const listed = scrubSessionList(
+      {
+        scope,
+        entries: all.map(e => wireSessionEntry(e, e.path === current)),
+        total: all.length,
+        autosave: Boolean(controller.session?.getSnapshot().config.autosave),
+      },
+      cwd(),
+    );
     const needle = filter.trim().toLowerCase();
     const matched = needle
-      ? all.filter(e => (e.title ?? 'untitled').toLowerCase().includes(needle))
-      : all;
-    const current = controller.sessionPath;
-    return {
-      scope,
-      entries: matched
-        .slice(0, MAX_LISTED_SESSIONS)
-        .map(e => wireSessionEntry(e, e.path === current)),
-      total: matched.length,
-      autosave: Boolean(controller.session?.getSnapshot().config.autosave),
-    };
+      ? listed.entries.filter(e => (e.title ?? 'untitled').toLowerCase().includes(needle))
+      : listed.entries;
+    return { ...listed, entries: matched.slice(0, MAX_LISTED_SESSIONS), total: matched.length };
   };
 
   // The drawer names a session by its file name; the file opened is one this list has just found,
@@ -465,15 +555,15 @@ export function createWebBridge(
         return { ok: true };
       }
       case 'session': {
-        if (message.path === null) {
+        if (message.session === null) {
           entry.answered = true;
           closeDialog(entry);
           return { ok: true };
         }
         const offered = entry.kind === 'session' ? entry.entries : [];
-        const picked = offered.find(e => e.path === message.path);
-        // Only a file this dialog listed: a tab's path is never read as given.
-        if (!picked) return { ok: false, error: 'path is not one this dialog offered' };
+        const picked = offered.find(e => sessionId(e.path) === message.session);
+        // Only a file this dialog listed: a tab's id is never read as a path.
+        if (!picked) return { ok: false, error: 'session is not one this dialog offered' };
         // The drawer may have opened it since this picker listed it.
         if (picked.path === controller.sessionPath) {
           return { ok: false, error: 'that session is the one open', conflict: true };
@@ -498,8 +588,24 @@ export function createWebBridge(
 
   const unsubscribeController = controller.subscribe(sync);
   const unsubscribeLive = controller.subscribeLive(change => {
-    if (change.type === 'delta') emit(change);
-    else if (syncing) liveHeld = true;
+    if (change.type === 'delta') {
+      const scrubber = streamed[change.channel];
+      const raw = liveChannelText(controller.live, change.channel);
+      const sameBlock = change.channel !== 'tool' || controller.live.tool?.name === streamedTool;
+      if (sameBlock && raw === scrubber.raw + change.text) {
+        const out = scrubber.push(change.text);
+        if (out) {
+          emit({
+            type: 'delta',
+            channel: change.channel,
+            text: out.text,
+            ...(out.drop > 0 ? { drop: out.drop } : {}),
+          });
+        }
+        return;
+      }
+    }
+    if (syncing) liveHeld = true;
     else emitLive();
   });
   // Dialogs already open when the bridge is made are listed by the next snapshot, not replayed.
@@ -518,10 +624,88 @@ export function createWebBridge(
     resetEvent(lastSeq, messages),
     stateEvent(lastSeq, state),
     catalogEvent(lastSeq, catalog),
+    // The user's own lines, raw as the TUI's box holds them: a recalled one is sent again.
     historyEvent(lastSeq, history),
-    ...[...dialogs.values()].map(d => dialogEvent(lastSeq, d.id, d.dialog)),
-    liveEvent(controller.live, now()),
+    ...[...dialogs.values()].map(d => dialogEvent(lastSeq, d.id, scrubbedDialog(d.dialog))),
+    scrubbedLive(),
   ];
+
+  const handleRaw = (message: ClientMessage): HandleResult | Promise<HandleResult> => {
+    if (closed) return { ok: false, error: 'closed' };
+    try {
+      switch (message.type) {
+        case 'submit': {
+          // Left with the tab, as the TUI leaves it in the box: the resume replaces the
+          // conversation it was typed against.
+          if (resuming) return { ok: false, error: 'a session is still loading' };
+          // Another tab switched the mode before this tab saw it: a prompt typed for agent must
+          // not run as a shell command.
+          if (message.mode !== undefined && message.mode !== controller.mode) {
+            return {
+              ok: false,
+              error: `the mode is now ${controller.mode}, not ${message.mode}`,
+              conflict: true,
+            };
+          }
+          // Before anything awaits, so two tabs' pastes can never be given the same number.
+          const adopted = adoptPastes(pastes, message.text, message.pastes ?? []);
+          pastes = adopted.pastes;
+          void submitSafely(adopted.text, inputFrontEnd());
+          return { ok: true };
+        }
+        case 'abort':
+          controller.abort();
+          return { ok: true };
+        case 'mode': {
+          if (message.mode === controller.mode) return { ok: true };
+          const busy = switchRefusal('modes');
+          if (busy) return busy;
+          controller.transition(message.mode);
+          return { ok: true };
+        }
+        case 'model': {
+          // A typed `/model x` reaches an ad-hoc model; a pill offers only the listed ones.
+          if (!controller.modelTargets().some(t => t.name === message.name)) {
+            return { ok: false, error: 'name is not one of the listed models' };
+          }
+          const busy = switchRefusal('models');
+          if (busy) return busy;
+          supersedePicker('model');
+          controller.pickModel(message.name);
+          return { ok: true };
+        }
+        case 'complete':
+          return { ok: true, reply: completionReply(message.text) };
+        case 'sessions':
+          return sessionsReply(message.scope, message.filter).then(
+            (reply): HandleResult => ({ ok: true, reply }),
+            (e: unknown): HandleResult => ({ ok: false, error: (e as Error).message }),
+          );
+        case 'resume': {
+          const busy = switchRefusal('sessions');
+          if (busy) return busy;
+          return resumeById(message.scope, message.id);
+        }
+        case 'new': {
+          // Its own message rather than a submitted `/new`, which mid-turn would be queued and
+          // wipe the conversation whenever the turn ended.
+          const busy = switchRefusal('conversations');
+          if (busy) return busy;
+          supersedePicker('session');
+          controller.newConversation({ role: 'user', content: '/new', meta: true });
+          return { ok: true };
+        }
+        case 'answer':
+          return answer(message);
+      }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    }
+  };
+
+  // An error can quote a path, as a resume's ENOENT does.
+  const scrubResult = (result: HandleResult): HandleResult =>
+    result.ok ? result : { ...result, error: scrubError(result.error, cwd()) };
 
   return {
     connect: afterSeq => {
@@ -531,7 +715,7 @@ export function createWebBridge(
         afterSeq >= droppedThrough &&
         afterSeq <= lastSeq;
       if (!covered) return snapshotEvents();
-      return [...log.filter(e => e.seq > afterSeq), liveEvent(controller.live, now())];
+      return [...log.filter(e => e.seq > afterSeq), scrubbedLive()];
     },
     subscribe: listener => {
       listeners.add(listener);
@@ -540,76 +724,8 @@ export function createWebBridge(
       };
     },
     handle: message => {
-      if (closed) return { ok: false, error: 'closed' };
-      try {
-        switch (message.type) {
-          case 'submit': {
-            // Left with the tab, as the TUI leaves it in the box: the resume replaces the
-            // conversation it was typed against.
-            if (resuming) return { ok: false, error: 'a session is still loading' };
-            // Another tab switched the mode before this tab saw it: a prompt typed for agent must
-            // not run as a shell command.
-            if (message.mode !== undefined && message.mode !== controller.mode) {
-              return {
-                ok: false,
-                error: `the mode is now ${controller.mode}, not ${message.mode}`,
-                conflict: true,
-              };
-            }
-            // Before anything awaits, so two tabs' pastes can never be given the same number.
-            const adopted = adoptPastes(pastes, message.text, message.pastes ?? []);
-            pastes = adopted.pastes;
-            void submitSafely(adopted.text, inputFrontEnd());
-            return { ok: true };
-          }
-          case 'abort':
-            controller.abort();
-            return { ok: true };
-          case 'mode': {
-            if (message.mode === controller.mode) return { ok: true };
-            const busy = switchRefusal('modes');
-            if (busy) return busy;
-            controller.transition(message.mode);
-            return { ok: true };
-          }
-          case 'model': {
-            // A typed `/model x` reaches an ad-hoc model; a pill offers only the listed ones.
-            if (!controller.modelTargets().some(t => t.name === message.name)) {
-              return { ok: false, error: 'name is not one of the listed models' };
-            }
-            const busy = switchRefusal('models');
-            if (busy) return busy;
-            supersedePicker('model');
-            controller.pickModel(message.name);
-            return { ok: true };
-          }
-          case 'complete':
-            return { ok: true, reply: completionReply(message.text) };
-          case 'sessions':
-            return sessionsReply(message.scope, message.filter).then(
-              (reply): HandleResult => ({ ok: true, reply }),
-              (e: unknown): HandleResult => ({ ok: false, error: (e as Error).message }),
-            );
-          case 'resume': {
-            const busy = switchRefusal('sessions');
-            if (busy) return busy;
-            return resumeById(message.scope, message.id);
-          }
-          case 'new': {
-            // Its own message rather than a submitted `/new`, which mid-turn would be queued and
-            // wipe the conversation whenever the turn ended.
-            const busy = switchRefusal('conversations');
-            if (busy) return busy;
-            supersedePicker('session');
-            controller.newConversation({ role: 'user', content: '/new', meta: true });
-            return { ok: true };
-          }
-          case 'answer':
-            return answer(message);
-        }
-      } catch (e) {
-        return { ok: false, error: (e as Error).message };
-      }
+      const result = handleRaw(message);
+      return result instanceof Promise ? result.then(scrubResult) : scrubResult(result);
     },
     close: () => {
       if (closed) return;
