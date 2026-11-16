@@ -326,6 +326,22 @@ describe('Composer', () => {
       await m.unmount();
     });
 
+    it("a line sent back by Don't send brings its image chips back", async () => {
+      const u = uploading();
+      const restoreLine = { current: () => {} };
+      const m = await mount({ upload: u.upload, restoreLine });
+      await m.paste({ files: [shot()] });
+      await u.answer({ kind: 'ok', upload: { id, chars: 40 } });
+      await m.press('Enter');
+      expect(m.container.querySelector('.composer-images')).toBeNull();
+      await act(async () => restoreLine.current());
+      expect(m.box().value).toBe('[Image 1] ');
+      expect(m.container.querySelector('.composer-image-ready')?.textContent).toContain('40 chars');
+      await m.press('Enter');
+      expect(m.sent.at(-1)).toMatchObject({ images: [{ marker: '[Image 1]', id }] });
+      await m.unmount();
+    });
+
     it('refuses a type the server does not take, and anything in shell mode', async () => {
       const u = uploading();
       const m = await mount({ upload: u.upload });
