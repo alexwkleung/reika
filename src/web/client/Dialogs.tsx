@@ -12,7 +12,8 @@ import './dialogs.css';
 import { tip } from './Tooltip.js';
 
 // The first open dialog, inline above the input box: one neutral card for every kind, a small
-// label saying what is asked, the subject, and real buttons carrying their digit. Each kind sends
+// label saying what is asked, the subject, and real buttons carrying their digit (which focuses
+// the button; Enter answers). Each kind sends
 // exactly the `answer` message protocol.ts parseClientMessage accepts.
 
 type Answer = Extract<ClientMessage, { type: 'answer' }>;
@@ -49,18 +50,26 @@ function isTextField(target: EventTarget | null): boolean {
   return target instanceof HTMLElement && /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);
 }
 
-// Digits pick a numbered row from anywhere but a text field.
-function useDigitKeys(count: number, pick: (index: number) => void, disabled: boolean): void {
-  const latest = useRef(pick);
-  latest.current = pick;
+// Digits (and a dialog's own letters) move focus to that numbered button, from anywhere but a
+// text field; Enter or Space then answers. As in the TUI, a key that picks a row never answers:
+// one stray `2` on an approval would otherwise turn auto-approve on for the session.
+function useFocusKeys(count: number, disabled: boolean, letters: Record<string, number> = {}) {
+  const latest = useRef(letters);
+  latest.current = letters;
   useEffect(() => {
     if (disabled) return;
     const onKey = (e: globalThis.KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return;
-      const index = digitPick(e.key, isTextField(e.target), count);
-      if (index === null) return;
+      const inField = isTextField(e.target);
+      const index =
+        digitPick(e.key, inField, count) ?? (inField ? null : latest.current[e.key.toLowerCase()]);
+      if (index === null || index === undefined) return;
+      const target = document.querySelector<HTMLButtonElement>(
+        `.dialog [data-dialog-n="${index + 1}"]`,
+      );
+      if (!target) return;
       e.preventDefault();
-      latest.current(index);
+      target.focus();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -140,6 +149,7 @@ function Action({
       ref={ref}
       type="button"
       className={`dialog-button${kind}`}
+      data-dialog-n={n}
       disabled={disabled}
       {...tip(title)}
       onClick={onPick}
@@ -182,6 +192,7 @@ function Row({
         ref={ref}
         type="button"
         className={`dialog-row${current ? ' dialog-row--current' : ''}`}
+        data-dialog-n={n}
         disabled={disabled}
         onClick={onPick}
       >
@@ -238,13 +249,10 @@ function ApprovalDialog({ id, d, send }: { id: string; d: Of<'approval'>; send: 
   const [reason, setReason] = useState('');
   const heading = approvalHeading(d.tool, d.subject);
   const stat = d.tool === 'bash' || d.tool === 'fetch_url' ? null : diffStat(d.preview);
+  // The TUI's order: Approve, Decline, Always. Its fourth row (decline and say why) is the reason
+  // field under the buttons, which turns No into a decline with feedback.
   const answers: [string, () => Answer][] = [
     ['Yes', () => ({ type: 'answer', id, kind: 'approval', answer: true })],
-    // Approves this one and turns the session's auto-approve on; a warning still prompts after it.
-    [
-      'Always this session',
-      () => ({ type: 'answer', id, kind: 'approval', answer: true, always: true }),
-    ],
     [
       reason.trim() ? 'No, with reason' : 'No',
       () => ({
@@ -254,9 +262,15 @@ function ApprovalDialog({ id, d, send }: { id: string; d: Of<'approval'>; send: 
         answer: reason.trim() ? { feedback: reason.trim() } : false,
       }),
     ],
+    // Approves this one and turns the session's auto-approve on; a warning still prompts after it.
+    [
+      'Always this session',
+      () => ({ type: 'answer', id, kind: 'approval', answer: true, always: true }),
+    ],
   ];
   const pick = (i: number) => void a.answer(answers[i]![1]());
-  useDigitKeys(answers.length, pick, a.disabled);
+  // y and n focus Yes and No; unlike the TUI's y/n, they do not answer, as the digits do not.
+  useFocusKeys(answers.length, a.disabled, { y: 0, n: 1 });
   return (
     <Frame
       kicker="Approval needed"
@@ -308,7 +322,7 @@ function ApprovalDialog({ id, d, send }: { id: string; d: Of<'approval'>; send: 
             disabled={a.disabled}
             autoFocus={i === 0}
             title={
-              i === 1
+              i === 2
                 ? 'Approve this and every ordinary action for the rest of the session. A warning still asks.'
                 : undefined
             }
@@ -325,7 +339,7 @@ function ApprovalDialog({ id, d, send }: { id: string; d: Of<'approval'>; send: 
         disabled={a.disabled}
         onChange={e => setReason(e.target.value)}
         onKeyDown={e => {
-          if (e.key === 'Enter' && reason.trim()) pick(2);
+          if (e.key === 'Enter' && reason.trim()) pick(1);
         }}
       />
     </Frame>
@@ -335,19 +349,25 @@ function ApprovalDialog({ id, d, send }: { id: string; d: Of<'approval'>; send: 
 function QuestionDialog({ id, d, send }: { id: string; d: Of<'question'>; send: Send }) {
   const a = useAnswer(send);
   const [free, setFree] = useState('');
+  const [note, setNote] = useState('');
+  // A note rides the picked option, as the TUI's Tab on an option adds one: the model gets both.
   const pick = (index: number) =>
     void a.answer({
       type: 'answer',
       id,
       kind: 'question',
-      answer: { text: d.options[index]!.label, index },
+      answer: {
+        text: d.options[index]!.label,
+        index,
+        ...(note.trim() ? { notes: note.trim() } : {}),
+      },
     });
   const sendFree = () => {
     if (free.trim()) {
       void a.answer({ type: 'answer', id, kind: 'question', answer: { text: free.trim() } });
     }
   };
-  useDigitKeys(d.options.length, pick, a.disabled);
+  useFocusKeys(d.options.length, a.disabled);
   return (
     <Frame kicker="The model asks" error={a.error} title={<span>{d.question}</span>}>
       <ol className="dialog-rows">
@@ -364,6 +384,15 @@ function QuestionDialog({ id, d, send }: { id: string; d: Of<'question'>; send: 
           />
         ))}
       </ol>
+      <input
+        className="dialog-input"
+        type="text"
+        aria-label="Note for the option you pick"
+        placeholder="Add a note to the option you pick (optional)"
+        value={note}
+        disabled={a.disabled}
+        onChange={e => setNote(e.target.value)}
+      />
       <div className="dialog-free">
         <input
           className="dialog-input"
@@ -411,7 +440,7 @@ function ConfirmDialog({
 }) {
   const a = useAnswer(send);
   const pick = (choice: number) => void a.answer({ type: 'answer', id, kind: 'confirm', choice });
-  useDigitKeys(d.options.length, pick, a.disabled);
+  useFocusKeys(d.options.length, a.disabled);
   const dontSend = () => {
     // Before the answer: the line's preparation ends with it, and the box decides whether the
     // line was its own while that is still known.
@@ -460,7 +489,7 @@ function ModelDialog({ id, d, send }: { id: string; d: Of<'model'>; send: Send }
   useEscape(() => void a.answer({ type: 'answer', id, kind: 'model', name: null }), a.disabled);
   const pick = (i: number) =>
     void a.answer({ type: 'answer', id, kind: 'model', name: d.targets[i]!.name });
-  useDigitKeys(d.targets.length, pick, a.disabled);
+  useFocusKeys(d.targets.length, a.disabled);
   const active = Math.max(
     0,
     d.targets.findIndex(t => t.active),
@@ -501,7 +530,7 @@ function SessionDialog({ id, d, send }: { id: string; d: Of<'session'>; send: Se
   );
   const pick = (i: number) =>
     void a.answer({ type: 'answer', id, kind: 'session', session: d.entries[i]!.id });
-  useDigitKeys(d.entries.length, pick, a.disabled);
+  useFocusKeys(d.entries.length, a.disabled);
   const now = Date.now();
   return (
     <Frame kicker="Resume" error={a.error} title={<span>{d.heading}</span>}>
