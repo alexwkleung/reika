@@ -19,7 +19,9 @@ function fakeBridge(connectEvents: ServerEvent[] = []) {
   let result: HandleResult | Promise<HandleResult> = { ok: true };
   const uploaded: { bytes: Uint8Array; type: string }[] = [];
   let uploadResult: UploadResult = { ok: true, reply: { id: 'u1', chars: 12 } };
+  let refusal: Extract<UploadResult, { ok: false }> | null = null;
   const bridge: WebBridge = {
+    uploadRefusal: () => refusal,
     async upload(bytes, type) {
       uploaded.push({ bytes, type });
       return uploadResult;
@@ -49,6 +51,9 @@ function fakeBridge(connectEvents: ServerEvent[] = []) {
     uploaded,
     setUploadResult(next: UploadResult) {
       uploadResult = next;
+    },
+    setUploadRefusal(next: Extract<UploadResult, { ok: false }> | null) {
+      refusal = next;
     },
     push(event: ServerEvent) {
       for (const listener of listeners) listener(event);
@@ -738,6 +743,15 @@ describe('/upload (#979)', () => {
     const { server, fake } = await start();
     const big = Buffer.alloc(MAX_IMAGE_BYTES + 1);
     expect((await up(server, { body: big, chunked: true })).status).toBe(413);
+    expect(fake.uploaded).toEqual([]);
+  });
+
+  it('answers a refusal the bridge knows before reading the bytes', async () => {
+    const { server, fake } = await start();
+    fake.setUploadRefusal({ ok: false, error: 'another image is still being read', status: 429 });
+    const res = await up(server);
+    expect(res.status).toBe(429);
+    expect(JSON.parse(res.body)).toEqual({ error: 'another image is still being read' });
     expect(fake.uploaded).toEqual([]);
   });
 

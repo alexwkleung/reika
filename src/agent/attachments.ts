@@ -89,7 +89,13 @@ export async function readNativeAttachments(
     attachments.map(async (a): Promise<ImageAttachment> => {
       if (!a.native) return a;
       const result = await ocr(a.native.bytes);
-      if (result.ok) return { marker: a.marker, text: result.text, source: a.source };
+      if (result.ok) {
+        // A receipt written for bytes sent as they are would now say the wrong thing.
+        const receipt = a.receipt
+          ? { receipt: `${a.marker} — ${result.text.length} chars read from the image.` }
+          : {};
+        return { marker: a.marker, text: result.text, source: a.source, ...receipt };
+      }
       failed.push(a.marker);
       return { marker: a.marker, text: '(image could not be read)', source: a.source };
     }),
