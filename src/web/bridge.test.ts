@@ -9,7 +9,7 @@ import { TRANSCRIPT_VERSION } from '../store/transcript.js';
 import type { Config, Message, Mode, Profile } from '../types.js';
 import { clearIdentity, setIdentity } from '../ui/identity.js';
 import { compactThreshold } from '../agent/compaction.js';
-import { createWebBridge } from './bridge.js';
+import { createWebBridge, MAX_PENDING_UPLOADS } from './bridge.js';
 import { MAX_LISTED_SESSIONS, sessionId, type ServerEvent } from './protocol.js';
 import type * as PastedUrls from '../agent/pastedurls.js';
 
@@ -1083,6 +1083,120 @@ describe('completions', () => {
       createController({ mode: 'agent', remember: vi.fn(), historyRoot: root }),
     );
     expect(unbooted.handle({ type: 'complete', text: '/mod' })).toEqual({ ok: true, reply: null });
+  });
+});
+
+describe('image uploads (#979)', () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+  const reads = (controller: ReturnType<typeof setup>['controller'], text = 'error: ENOENT') =>
+    vi.spyOn(controller, 'readImage').mockResolvedValue({
+      ok: true,
+      text,
+      detail: `${text.length} chars read from the image`,
+    });
+  const idOf = (r: Awaited<ReturnType<ReturnType<typeof setup>['bridge']['upload']>>) => {
+    if (!r.ok) throw new Error(r.error);
+    return r.reply.id;
+  };
+
+  it('reads an upload, and the submit that names it sends the text with a receipt under it', async () => {
+    const { controller, session, bridge } = setup();
+    reads(controller);
+    const r = await bridge.upload(png, 'image/png');
+    expect(r).toEqual({ ok: true, reply: { id: expect.any(String), chars: 13 } });
+    expect(controller.messages).toEqual([]);
+    const id = idOf(r);
+    expect(
+      bridge.handle({
+        type: 'submit',
+        text: 'what is [Image 1]',
+        images: [{ marker: '[Image 1]', id }],
+      }),
+    ).toEqual({ ok: true });
+    await vi.waitFor(() => expect(session.submit).toHaveBeenCalledOnce());
+    expect(session.submit.mock.calls[0][0]).toContain('error: ENOENT');
+    await vi.waitFor(() =>
+      expect(controller.messages.map(m => ('content' in m ? m.content : ''))).toContain(
+        '[Image 1] — 13 chars read from the image.',
+      ),
+    );
+    // Taken by that submit: naming it again refuses the line.
+    expect(
+      bridge.handle({
+        type: 'submit',
+        text: 'again [Image 1]',
+        images: [{ marker: '[Image 1]', id }],
+      }),
+    ).toMatchObject({ ok: false, conflict: true });
+  });
+
+  it('refuses bytes that are not the declared image type, and reads nothing', async () => {
+    const { controller, bridge } = setup();
+    const spy = reads(controller);
+    expect(await bridge.upload(png, 'image/jpeg')).toMatchObject({ ok: false, status: 415 });
+    expect(await bridge.upload(new Uint8Array([1, 2, 3]), 'image/png')).toMatchObject({
+      ok: false,
+      status: 415,
+    });
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('a failed read is a warn line every tab sees', async () => {
+    const { controller, bridge } = setup();
+    vi.spyOn(controller, 'readImage').mockResolvedValue({
+      ok: false,
+      notice: 'No text found in the pasted image.',
+    });
+    expect(await bridge.upload(png, 'image/png')).toMatchObject({ ok: false, status: 422 });
+    expect(controller.messages.at(-1)).toMatchObject({
+      role: 'system',
+      tone: 'warn',
+      content: 'No text found in the pasted image.',
+    });
+  });
+
+  it('reads one image at a time, and refuses one in shell mode', async () => {
+    const { controller, bridge } = setup();
+    let release!: () => void;
+    vi.spyOn(controller, 'readImage').mockReturnValue(
+      new Promise(resolve => {
+        release = () => resolve({ ok: true, text: 'x', detail: '1 chars' });
+      }),
+    );
+    const first = bridge.upload(png, 'image/png');
+    expect(await bridge.upload(png, 'image/png')).toMatchObject({ ok: false, status: 429 });
+    release();
+    expect((await first).ok).toBe(true);
+    const shell = setup('shell');
+    expect(await shell.bridge.upload(png, 'image/png')).toMatchObject({ ok: false, status: 409 });
+  });
+
+  it('a discard, a new conversation and close free what is held', async () => {
+    const { controller, session, bridge } = setup();
+    reads(controller);
+    const named = (id: string) => ({
+      type: 'submit' as const,
+      text: '[Image 1]',
+      images: [{ marker: '[Image 1]', id }],
+    });
+    const a = idOf(await bridge.upload(png, 'image/png'));
+    expect(bridge.handle({ type: 'discard', ids: [a] })).toEqual({ ok: true });
+    expect(bridge.handle(named(a))).toMatchObject({ ok: false });
+    const b = idOf(await bridge.upload(png, 'image/png'));
+    expect(bridge.handle({ type: 'new' })).toEqual({ ok: true });
+    expect(bridge.handle(named(b))).toMatchObject({ ok: false });
+    expect(session.submit).not.toHaveBeenCalled();
+    bridge.close();
+    expect(await bridge.upload(png, 'image/png')).toMatchObject({ ok: false, status: 409 });
+  });
+
+  it('holds at most MAX_PENDING_UPLOADS', async () => {
+    const { controller, bridge } = setup();
+    reads(controller);
+    for (let i = 0; i < MAX_PENDING_UPLOADS; i++) {
+      expect((await bridge.upload(png, 'image/png')).ok).toBe(true);
+    }
+    expect(await bridge.upload(png, 'image/png')).toMatchObject({ ok: false, status: 429 });
   });
 });
 

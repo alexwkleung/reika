@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { connect, Server as NetServer } from 'node:net';
 import { request as httpRequest, type IncomingHttpHeaders, type IncomingMessage } from 'node:http';
-import type { HandleResult, WebBridge } from './bridge.js';
-import type { ClientMessage, ServerEvent } from './protocol.js';
+import type { HandleResult, UploadResult, WebBridge } from './bridge.js';
+import { MAX_IMAGE_BYTES, type ClientMessage, type ServerEvent } from './protocol.js';
 import {
   LINK_CODE_TTL_MS,
   MAX_MESSAGE_BYTES,
@@ -17,7 +17,13 @@ function fakeBridge(connectEvents: ServerEvent[] = []) {
   const connectCalls: (number | undefined)[] = [];
   const handled: ClientMessage[] = [];
   let result: HandleResult | Promise<HandleResult> = { ok: true };
+  const uploaded: { bytes: Uint8Array; type: string }[] = [];
+  let uploadResult: UploadResult = { ok: true, reply: { id: 'u1', chars: 12 } };
   const bridge: WebBridge = {
+    async upload(bytes, type) {
+      uploaded.push({ bytes, type });
+      return uploadResult;
+    },
     connect(afterSeq) {
       connectCalls.push(afterSeq);
       return connectEvents;
@@ -39,6 +45,10 @@ function fakeBridge(connectEvents: ServerEvent[] = []) {
     handled,
     setResult(next: HandleResult | Promise<HandleResult>) {
       result = next;
+    },
+    uploaded,
+    setUploadResult(next: UploadResult) {
+      uploadResult = next;
     },
     push(event: ServerEvent) {
       for (const listener of listeners) listener(event);
@@ -695,6 +705,53 @@ describe('link code', () => {
     expect(root.status).toBe(404);
     expect(root.body).not.toContain(server.token);
     await expectStillLive(server, code);
+  });
+});
+
+describe('/upload (#979)', () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+  const up = (server: WebServer, req: Req = {}) =>
+    send(server.port, {
+      method: 'POST',
+      path: '/upload',
+      body: png,
+      ...req,
+      headers: { ...bearer(server.token), 'Content-Type': 'image/png', ...req.headers },
+    });
+
+  it('takes the token in the header only', async () => {
+    const { server, fake } = await start();
+    expect((await up(server, { headers: { Authorization: 'Bearer nope' } })).status).toBe(401);
+    expect((await up(server, { path: `/upload?token=${server.token}` })).status).toBe(401);
+    expect(fake.uploaded).toEqual([]);
+  });
+
+  it('refuses every type but the image types', async () => {
+    const { server, fake } = await start();
+    for (const type of ['application/json', 'text/plain', 'multipart/form-data', 'image/svg+xml']) {
+      expect((await up(server, { headers: { 'Content-Type': type } })).status).toBe(415);
+    }
+    expect(fake.uploaded).toEqual([]);
+  });
+
+  it('refuses a body past the image cap while reading it', async () => {
+    const { server, fake } = await start();
+    const big = Buffer.alloc(MAX_IMAGE_BYTES + 1);
+    expect((await up(server, { body: big, chunked: true })).status).toBe(413);
+    expect(fake.uploaded).toEqual([]);
+  });
+
+  it('hands the bridge the bytes and type, and sends its answer back', async () => {
+    const { server, fake } = await start();
+    const res = await up(server, { headers: { 'Content-Type': 'image/png; charset=binary' } });
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({ ok: true, reply: { id: 'u1', chars: 12 } });
+    expect(Buffer.from(fake.uploaded[0].bytes)).toEqual(png);
+    expect(fake.uploaded[0].type).toBe('image/png');
+    fake.setUploadResult({ ok: false, error: 'too many', status: 429 });
+    const refused = await up(server);
+    expect(refused.status).toBe(429);
+    expect(JSON.parse(refused.body)).toEqual({ error: 'too many' });
   });
 });
 

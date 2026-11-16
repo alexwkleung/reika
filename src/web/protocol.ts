@@ -26,7 +26,8 @@ import type { Approvals } from '../ui/summary.js';
 // 3: the session list, a resume by id, a new conversation, and the current session in state.
 // 4: scrubbed on the server (#990): a delta's `drop`, the /resume dialog by id, no user `display`.
 // 5: `typing`, the box becoming a prompt, so the server can warm the engine's cache (#998).
-export const PROTOCOL_VERSION = 5;
+// 6: images: `POST /upload` answers a `WireUpload`, `submit.images` names them, `discard` (#979).
+export const PROTOCOL_VERSION = 6;
 
 // Spelled out rather than imported from the mode module; a test holds it to MODE_CYCLE.
 export const WIRE_MODES = [
@@ -43,6 +44,12 @@ export const WIRE_MODES = [
 // the server's main thread; a tab past the cap sends only the trailing `@word`.
 export const MAX_COMPLETE_CHARS = 2000;
 export const MAX_SUBMIT_PASTES = 32;
+// An upload is the image's raw bytes. 32MB holds a busy 6K screenshot, which the TUI's clipboard
+// read takes too; none of these types is CORS-safelisted, so another site cannot send one without
+// the preflight the server refuses.
+export const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
+export const UPLOAD_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const;
+export const MAX_SUBMIT_IMAGES = 8;
 // The session list's filter matches titles, which a prompt's first line makes short.
 export const MAX_SESSION_FILTER_CHARS = 200;
 // A list is read fresh each time a tab asks; the filter reaches the ones past the cap.
@@ -193,6 +200,13 @@ export function wireCatalog(controller: Controller): WireCatalog {
 
 // A completion list, or null for none. `partial` is the tail of the text an item replaces.
 export type WireCompletion = SuggestionState | null;
+
+// An uploaded image, read and held for the line that names it. `chars` is how much text came out
+// of it, null when the bytes go to a model that can see. The text itself stays on the server.
+export type WireUpload = { id: string; chars: number | null };
+
+// Which upload an `[Image N]` in the text is.
+export type SubmittedImage = { marker: string; id: string };
 
 // What the history drawer lists. No path: `id` is what a `resume` names.
 export type WireSessionEntry = Omit<SessionEntry, 'path'> & { id: string; current?: true };
@@ -348,11 +362,18 @@ export function resolvedEvent(
   return { type: 'resolved', seq, id, outcome };
 }
 
-// Images are left out by decision (#979): they need an upload path of their own. A large paste
+// An image rides as an upload id (#979): its bytes went up in `POST /upload`. A large paste
 // rides beside the text, as the TUI parks it, so the questions read the user's own words (#448).
 // `mode` is the mode the line was typed in: a submit is refused if it has changed since.
 export type ClientMessage =
-  | { type: 'submit'; text: string; mode?: Mode; pastes?: PastedText[] }
+  | {
+      type: 'submit';
+      text: string;
+      mode?: Mode;
+      pastes?: PastedText[];
+      images?: SubmittedImage[];
+    }
+  | { type: 'discard'; ids: string[] }
   | { type: 'abort' }
   | { type: 'mode'; mode: Mode }
   | { type: 'model'; name: string }
@@ -427,6 +448,40 @@ function parsePastes(value: unknown): PastedText[] | { error: string } {
   return out;
 }
 
+const IMAGE_MARKER_RE = /^\[Image \d+\]$/;
+const UPLOAD_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+function parseUploadIds(value: unknown): string[] | { error: string } {
+  if (!Array.isArray(value)) return { error: 'ids must be an array' };
+  if (value.length > MAX_SUBMIT_IMAGES * 2) return { error: 'too many ids' };
+  for (const id of value) {
+    if (typeof id !== 'string' || !UPLOAD_ID_RE.test(id))
+      return { error: 'id is not an upload id' };
+  }
+  return value as string[];
+}
+
+function parseImages(value: unknown): SubmittedImage[] | { error: string } {
+  if (!Array.isArray(value)) return { error: 'images must be an array' };
+  if (value.length > MAX_SUBMIT_IMAGES) return { error: `at most ${MAX_SUBMIT_IMAGES} images` };
+  const out: SubmittedImage[] = [];
+  const markers = new Set<string>();
+  const ids = new Set<string>();
+  for (const i of value) {
+    if (!isRecord(i) || typeof i.marker !== 'string' || typeof i.id !== 'string') {
+      return { error: 'each image must be { marker, id } strings' };
+    }
+    if (!IMAGE_MARKER_RE.test(i.marker))
+      return { error: 'image marker is not an [Image N] marker' };
+    if (!UPLOAD_ID_RE.test(i.id)) return { error: 'id is not an upload id' };
+    if (markers.has(i.marker) || ids.has(i.id)) return { error: 'images must be distinct' };
+    markers.add(i.marker);
+    ids.add(i.id);
+    out.push({ marker: i.marker, id: i.id });
+  }
+  return out;
+}
+
 function parseScope(value: unknown): SessionScope | { error: string } {
   return (
     SESSION_SCOPES.find(s => s === value) ?? {
@@ -458,6 +513,11 @@ function parseSubmit(value: Record<string, unknown>): ParseResult {
     const pastes = parsePastes(value.pastes);
     if (!Array.isArray(pastes)) return pastes;
     out.pastes = pastes;
+  }
+  if (value.images !== undefined) {
+    const images = parseImages(value.images);
+    if (!Array.isArray(images)) return images;
+    out.images = images;
   }
   return out;
 }
@@ -535,6 +595,10 @@ export function parseClientMessage(value: unknown): ParseResult {
         return { error: `text must be at most ${MAX_COMPLETE_CHARS} chars` };
       }
       return { type: 'complete', text: value.text };
+    case 'discard': {
+      const ids = parseUploadIds(value.ids);
+      return Array.isArray(ids) ? { type: 'discard', ids } : ids;
+    }
     case 'typing':
       if (typeof value.text !== 'string') return { error: 'text must be a string' };
       if (value.text.length > MAX_COMPLETE_CHARS) {

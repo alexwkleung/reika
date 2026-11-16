@@ -21,6 +21,7 @@ import {
   turnTools,
 } from './agent/modes.js';
 import { createPrefixWarmer } from './agent/warm.js';
+import { imageReadLabel, readImageAttachment, type ImageRead } from './agent/imageattach.js';
 import { isWarmableInput } from './ui/warmtrigger.js';
 import { resolveReplyCommand, unknownCommandText } from './agent/replycommands.js';
 import {
@@ -417,6 +418,10 @@ export type Controller = {
   // engine's cache with the prefix the submit will send (#81, #998). Only while idle and outside
   // shell mode; a repeat on the same prefix (a second tab) dedupes in the warmer.
   warm(text: string): void;
+  // Image bytes a front end got hold of, read on the active profile's route (#979).
+  readImage(bytes: Uint8Array, origin: string): Promise<ImageRead>;
+  // What readImage is about to run, for a front end that narrates the wait; null for native bytes.
+  imageReadLabel(): string | null;
   // When this conversation began: launch, or the last `newConversation`.
   readonly startedAt: number;
   // `/new`: drops both sides and everything the session learned about the engine, and starts over
@@ -1580,6 +1585,8 @@ export function createController(opts: {
     get modelPinned() {
       return modelPinned;
     },
+    readImage: (bytes, origin) => readImageAttachment(bytes, session?.config ?? null, origin),
+    imageReadLabel: () => imageReadLabel(session?.config ?? null),
     warm: text => {
       if (!session || snapshot.status !== 'idle' || snapshot.preparing) return;
       if (snapshot.mode === 'shell' || !isWarmableInput(text)) return;

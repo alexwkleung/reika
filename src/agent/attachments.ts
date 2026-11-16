@@ -26,6 +26,9 @@ export type ImageAttachment = {
   // dropped with the attachment (the ref is cleared the moment a turn sends), so an image reaches
   // the model exactly once and is never re-sent.
   native?: NativeImageBytes;
+  // Printed under the user row when the line is sent, for a front end whose box is not the
+  // scrollback's only reader: a page with several tabs open (#979). The TUI prints at paste time.
+  receipt?: string;
 };
 
 export type NativeImageBytes = {
