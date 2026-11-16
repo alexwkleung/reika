@@ -26,23 +26,26 @@ of that state.
 These modules depend on nothing model-specific. Each one solves a problem any harness that runs
 shell commands, talks to a local engine or draws a terminal UI will run into.
 
-| Module                                                      | What it does                                                                                                                                                                                      | Local imports                |
-| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
-| [`tools/_heredoc.ts`](../src/tools/_heredoc.ts)             | A small shell lexer: which `<<` is an operator, where a heredoc body ends, which text is quoted. Reports what it cannot read exactly as uncertain so callers can fail closed                      | none                         |
-| [`tools/_carriers.ts`](../src/tools/_carriers.ts)           | A table of command wrappers (`sudo`, `env`, `timeout`, `nice`, …): their value-taking flags, and whether they change what the command means                                                       | none                         |
-| [`tools/_readonly.ts`](../src/tools/_readonly.ts)           | Two predicates: "provably read-only" (an allowlist that must under-allow) and "inspection escape" (catches a looping model reading through the shell). Why there are two is explained in the file | `_heredoc`, `_carriers`      |
-| [`tools/_danger.ts`](../src/tools/_danger.ts)               | Which bash commands need a human: destructive commands, publishing, package installs at any scope, network verbs in command position                                                              | the three above, `_markdown` |
-| [`tools/_sandbox.ts`](../src/tools/_sandbox.ts)             | A macOS Seatbelt profile generator plus a per-command network classifier, with no proxy layer                                                                                                     | `_heredoc`, `_readonly`      |
-| [`tools/_treediff.ts`](../src/tools/_treediff.ts)           | Diffs for files a shell command changed, with git as the change detector instead of parsing the command                                                                                           | `_diff`, `_writetargets`     |
-| [`tools/_spill.ts`](../src/tools/_spill.ts)                 | Writes a capped tool result in full to a session temp file, and gives the model a short path it can page with `read`                                                                              | none                         |
-| [`tools/_hosts.ts`](../src/tools/_hosts.ts)                 | A private-address guard that runs at connect time, which closes DNS rebinding                                                                                                                     | `provider/dispatcher`        |
-| [`mcp/`](../src/mcp/)                                       | A stdio MCP client that speaks both the pre- and post-`2026-07-28` protocol, plus a bridge that narrows server schemas to what providers accept                                                   | `debug`, `version` (client)  |
-| [`provider/latches.ts`](../src/provider/latches.ts)         | Per-endpoint degrade latches, so one strict server's quirks don't follow you to the next                                                                                                          | none                         |
-| [`provider/dispatcher.ts`](../src/provider/dispatcher.ts)   | Lifts undici's 300s timeouts, which kill a turn mid-prefill, without adding a dependency                                                                                                          | `debug`                      |
-| [`agent/prefixtrace.ts`](../src/agent/prefixtrace.ts)       | Classifies why each request diverged from the previous one: append-only, trailing note, mid-history rewrite, tool list changed                                                                    | none                         |
-| [`agent/reasoningtrace.ts`](../src/agent/reasoningtrace.ts) | Detects rumination from 8-gram similarity across rounds and within one block                                                                                                                      | none                         |
-| [`ui/syncframe.ts`](../src/ui/syncframe.ts)                 | Coalesces Ink's writes into one DEC 2026 synchronized frame, which stops flicker under memory pressure                                                                                            | `framedrops`                 |
-| [`search/_chrome.ts`](../src/search/_chrome.ts)             | A dependency-free CDP client and browser host: discovery, a hidden launch, reattach                                                                                                               | `debug`, `search/types`      |
+| Module                                                      | What it does                                                                                                                                                                                      | Local imports                  |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| [`tools/_heredoc.ts`](../src/tools/_heredoc.ts)             | A small shell lexer: which `<<` is an operator, where a heredoc body ends, which text is quoted. Reports what it cannot read exactly as uncertain so callers can fail closed                      | none                           |
+| [`tools/_carriers.ts`](../src/tools/_carriers.ts)           | A table of command wrappers (`sudo`, `env`, `timeout`, `nice`, …): their value-taking flags, and whether they change what the command means                                                       | none                           |
+| [`tools/_readonly.ts`](../src/tools/_readonly.ts)           | Two predicates: "provably read-only" (an allowlist that must under-allow) and "inspection escape" (catches a looping model reading through the shell). Why there are two is explained in the file | `_heredoc`, `_carriers`        |
+| [`tools/_danger.ts`](../src/tools/_danger.ts)               | Which bash commands need a human: destructive commands, publishing, package installs at any scope, network verbs in command position                                                              | the three above, `_markdown`   |
+| [`tools/_sandbox.ts`](../src/tools/_sandbox.ts)             | A macOS Seatbelt profile generator plus a per-command network classifier, with no proxy layer                                                                                                     | `_heredoc`, `_readonly`        |
+| [`tools/_treediff.ts`](../src/tools/_treediff.ts)           | Diffs for files a shell command changed, with git as the change detector instead of parsing the command                                                                                           | `_diff`, `_writetargets`       |
+| [`tools/_spill.ts`](../src/tools/_spill.ts)                 | Writes a capped tool result in full to a session temp file, and gives the model a short path it can page with `read`                                                                              | none                           |
+| [`tools/_hosts.ts`](../src/tools/_hosts.ts)                 | A private-address guard that runs at connect time, which closes DNS rebinding                                                                                                                     | `provider/dispatcher`          |
+| [`mcp/`](../src/mcp/)                                       | A stdio MCP client that speaks both the pre- and post-`2026-07-28` protocol, plus a bridge that narrows server schemas to what providers accept                                                   | `debug`, `version` (client)    |
+| [`provider/latches.ts`](../src/provider/latches.ts)         | Per-endpoint degrade latches, so one strict server's quirks don't follow you to the next                                                                                                          | none                           |
+| [`provider/dispatcher.ts`](../src/provider/dispatcher.ts)   | Lifts undici's 300s timeouts, which kill a turn mid-prefill, without adding a dependency                                                                                                          | `debug`                        |
+| [`agent/prefixtrace.ts`](../src/agent/prefixtrace.ts)       | Classifies why each request diverged from the previous one: append-only, trailing note, mid-history rewrite, tool list changed                                                                    | none                           |
+| [`agent/prefillcost.ts`](../src/agent/prefillcost.ts)       | Prices each cache divergence in tokens reprocessed and seconds, from a prefill rate learned off time-to-first-token                                                                               | `decoderate` (types otherwise) |
+| [`agent/decoderate.ts`](../src/agent/decoderate.ts)         | Decode tok/s: the engine's own timings where it reports them (llama.cpp), a derivation from the stream otherwise                                                                                  | types only                     |
+| [`agent/entropytrace.ts`](../src/agent/entropytrace.ts)     | Drift as numbers: per-round entropy (engine logprobs or the output's own) and smoothed KL against the previous and first round                                                                    | types only                     |
+| [`agent/reasoningtrace.ts`](../src/agent/reasoningtrace.ts) | Detects rumination from 8-gram similarity across rounds and within one block                                                                                                                      | none                           |
+| [`ui/syncframe.ts`](../src/ui/syncframe.ts)                 | Coalesces Ink's writes into one DEC 2026 synchronized frame, which stops flicker under memory pressure                                                                                            | `framedrops`                   |
+| [`search/_chrome.ts`](../src/search/_chrome.ts)             | A dependency-free CDP client and browser host: discovery, a hidden launch, reattach                                                                                                               | `debug`, `search/types`        |
 
 Each module has a colocated `*.test.ts`. For the permission-boundary files (`_readonly`, `_danger`,
 `_sandbox`) the tests are worth taking as well, since they enumerate the bypasses that were found.
@@ -95,9 +98,36 @@ families. Treat them as starting points to re-measure, not as constants.
 - **Engine-specific pieces**: logit recovery needs llama.cpp's `/tokenize`, and the note-slot probe
   reads llama.cpp's own prompt-token counts.
 
-The thing that does transfer is the method: put each intervention behind a flag with a baseline arm,
-log the mechanism under a debug flag, and judge it over 3+ runs, because byte-identical inputs to a
-Q2 model have produced 52, 16 and 6 tool calls.
+The thing that does transfer is the method, below.
+
+## Instrument before you intervene
+
+Most of what Reika knows about small models came from logs and replays, not from reading
+transcripts and guessing. The code for this is small; the habit is the part worth copying.
+
+- **Log the mechanism, not just the outcome.** "The turn failed" says nothing about what to change.
+  A line per round saying why the request diverged from the last one (`prefixtrace`), what that
+  cost in prefill (`prefillcost`), or how similar this round's reasoning was to the last few
+  (`reasoningtrace`) does. Write it to a file, never stderr, so it can't break a terminal UI.
+- **Record the configuration in every log.** Each Reika debug log opens with a `flags` line listing
+  the experiment variables that were set (values reduced to numbers or `set`, so no keys or paths
+  leak). It's a few lines of code, and it caught an A/B whose two arms, named on/off by filename,
+  turned out to be the same configuration.
+- **Check the arms before reading the numbers.** A report script should refuse to compare an arm
+  whose build never fired the feature, and call two identical configurations a variance baseline
+  rather than a result. [`evals/readtrace-report.ts`](../evals/readtrace-report.ts) does both.
+- **Replay saved sessions before spending a model run.** A change to a classifier or an aging rule
+  can be run against everything users have already done: [`evals/danger-replay.ts`](../evals/danger-replay.ts)
+  prints every bash command whose approval label moves, and [`evals/aging-replay.ts`](../evals/aging-replay.ts)
+  priced a shed-order change as null with no model at all. The scripts are tied to Reika's session
+  format, but the pattern isn't.
+- **Repeat when the question is how often; instrument when it's why.** One run tells you a
+  mechanism exists. It can't tell you a rate, because byte-identical inputs to a Q2 model have
+  produced 52, 16 and 6 tool calls. Put each intervention behind a flag with a baseline arm and
+  judge it over 3+ runs.
+- **Make a failure say what happened instead.** An eval assertion that returns a bare `false`
+  throws away an expensive, non-deterministic run. Say whether the model re-ran the command,
+  routed around it, or answered from what it already had.
 
 ## Decisions measured, not assumed
 
