@@ -107,10 +107,13 @@
   stroke-width: 1.6;
   stroke-linecap: round;
   stroke-linejoin: round;
+  /* The icon centres on the line box, a little above the text's x-height; the down caret is half
+     as tall as the right one and reads higher still, so it drops a little more. */
+  transform: translateY(0.06em);
   transition: transform 120ms ease;
 }
 .reasoning-details[open] .reasoning-chevron {
-  transform: rotate(90deg);
+  transform: translateY(0.12em) rotate(90deg);
 }
 .reasoning-details > summary:hover .reasoning-toggle,
 .reasoning-details:has(~ .reasoning-tail-toggle:hover) .reasoning-toggle,
