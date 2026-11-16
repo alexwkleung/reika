@@ -81,8 +81,9 @@
 /* The toggle reads as one: a chevron and the line count beside the label, both brightening when
    the summary or the preview under it is hovered. */
 .reasoning-details > summary {
+  /* Baselines, not centres: the bold label and the smaller chip text share no centre line. */
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 0.5em;
   width: fit-content;
 }
@@ -90,7 +91,7 @@
   display: inline-flex;
   align-items: center;
   gap: 0.2em;
-  padding: 0 0.4em 0 0.2em;
+  padding: 0 0.25em 0 0.45em;
   border-radius: 999px;
   color: var(--reika-muted);
   font-size: 0.9em;

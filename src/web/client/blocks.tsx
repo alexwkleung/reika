@@ -76,10 +76,10 @@ export function ReasoningBlock({
           <summary>
             {label}
             <span className="reasoning-toggle">
+              {`${lines.length} lines`}
               <svg className="reasoning-chevron" viewBox="0 0 16 16" aria-hidden="true">
                 <path d="M6 4l4 4-4 4" />
               </svg>
-              {`${lines.length} lines`}
             </span>
           </summary>
           <div className="reasoning-text">{shown}</div>
