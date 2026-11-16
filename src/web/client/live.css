@@ -83,6 +83,8 @@
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
+  /* A percent or a countdown ticking must not shift the line's width under the sweep. */
+  font-variant-numeric: tabular-nums;
   animation-name: busy-sweep;
   animation-timing-function: linear;
   animation-iteration-count: infinite;
