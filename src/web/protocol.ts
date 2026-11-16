@@ -25,7 +25,8 @@ import type { Approvals } from '../ui/summary.js';
 // 2: mode and model switches, pastes on submit, completions, input history, the model list (#584).
 // 3: the session list, a resume by id, a new conversation, and the current session in state.
 // 4: scrubbed on the server (#990): a delta's `drop`, the /resume dialog by id, no user `display`.
-export const PROTOCOL_VERSION = 4;
+// 5: `typing`, the box becoming a prompt, so the server can warm the engine's cache (#998).
+export const PROTOCOL_VERSION = 5;
 
 // Spelled out rather than imported from the mode module; a test holds it to MODE_CYCLE.
 export const WIRE_MODES = [
@@ -356,6 +357,7 @@ export type ClientMessage =
   | { type: 'mode'; mode: Mode }
   | { type: 'model'; name: string }
   | { type: 'complete'; text: string }
+  | { type: 'typing'; text: string }
   | { type: 'sessions'; scope: SessionScope; filter?: string }
   | { type: 'resume'; scope: SessionScope; id: string }
   | { type: 'new' }
@@ -533,6 +535,12 @@ export function parseClientMessage(value: unknown): ParseResult {
         return { error: `text must be at most ${MAX_COMPLETE_CHARS} chars` };
       }
       return { type: 'complete', text: value.text };
+    case 'typing':
+      if (typeof value.text !== 'string') return { error: 'text must be a string' };
+      if (value.text.length > MAX_COMPLETE_CHARS) {
+        return { error: `text must be at most ${MAX_COMPLETE_CHARS} chars` };
+      }
+      return { type: 'typing', text: value.text };
     case 'sessions': {
       const scope = parseScope(value.scope);
       if (typeof scope === 'object') return scope;

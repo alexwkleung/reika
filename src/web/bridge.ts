@@ -691,6 +691,10 @@ export function createWebBridge(
         }
         case 'complete':
           return { ok: true, reply: completionReply(message.text) };
+        case 'typing':
+          // Sent once, on the edge into a prompt (`isWarmEdge`); the controller decides the rest.
+          if (!resuming) controller.warm(message.text);
+          return { ok: true };
         case 'sessions':
           return sessionsReply(message.scope, message.filter).then(
             (reply): HandleResult => ({ ok: true, reply }),
