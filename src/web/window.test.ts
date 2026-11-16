@@ -6,10 +6,13 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  centredPosition,
   claimProfileSlot,
   EARLY_EXIT_MS,
   findAppBrowser,
+  fittedSize,
   openWindow,
+  type ScreenArea,
   sweepStaleRedirects,
   writeRedirectFile,
 } from './window.js';
@@ -146,7 +149,7 @@ function fakeChild(ignores: string[] = []) {
 }
 
 describe('openWindow', () => {
-  const setup = (opts: { browser?: boolean; ignores?: string[] } = {}) => {
+  const setup = (opts: { browser?: boolean; ignores?: string[]; area?: ScreenArea } = {}) => {
     let clock = 0;
     const child = fakeChild(opts.ignores);
     const spawned: string[][] = [];
@@ -161,6 +164,7 @@ describe('openWindow', () => {
         return child;
       },
       openDefault: (url: string) => void openedDefault.push(url),
+      screenArea: async () => opts.area,
       now: () => clock,
       killAfterMs: 20,
     };
@@ -176,6 +180,35 @@ describe('openWindow', () => {
     expect(args[0]).toMatch(/^--app=file:\/\//);
     expect(args).toContain(`--user-data-dir=${join(root, '0')}`);
     await win.close();
+  });
+
+  it('centres the window on the screen area, and leaves placement alone without one', async () => {
+    const t = setup({ area: { x: 0, y: 30, width: 2560, height: 1410 } });
+    const win = await openWindow(link, t.deps);
+    expect(t.spawned[0]).toContain('--window-size=1280,960');
+    expect(t.spawned[0]).toContain('--window-position=640,255');
+    await win.close();
+
+    const bare = setup();
+    const w2 = await openWindow(link, bare.deps);
+    expect(bare.spawned[0].some(a => a.startsWith('--window-position'))).toBe(false);
+    await w2.close();
+  });
+
+  it('shrinks the window to a screen shorter than it, and centres what is left', async () => {
+    const t = setup({ area: { x: 0, y: 37, width: 1470, height: 856 } });
+    const win = await openWindow(link, t.deps);
+    expect(t.spawned[0]).toContain('--window-size=1280,856');
+    expect(t.spawned[0]).toContain('--window-position=95,37');
+    await win.close();
+    expect(fittedSize(undefined)).toEqual({ width: 1280, height: 960 });
+  });
+
+  it('keeps the top-left on a screen smaller than the window', () => {
+    expect(centredPosition({ x: -1024, y: 0, width: 1024, height: 768 })).toEqual({
+      x: -1024,
+      y: 0,
+    });
   });
 
   it('reads an exit right after launch as a failure, and a later one as closed', async () => {

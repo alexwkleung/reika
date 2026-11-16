@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import {
@@ -200,11 +200,70 @@ export type WindowDeps = {
   findBrowser?: () => AppBrowser | undefined;
   claimSlot?: () => Promise<ProfileSlot>;
   spawnBrowser?: (path: string, args: string[]) => ChildProcess;
+  screenArea?: () => Promise<ScreenArea | undefined>;
   openDefault?: (url: string) => void;
   now?: () => number;
   // How long a browser asked to close may take before it is killed.
   killAfterMs?: number;
 };
+
+export const WINDOW_SIZE = { width: 1280, height: 960 };
+
+// In the browser's screen coordinates: origin at the primary display's top-left, y down.
+export type ScreenArea = { x: number; y: number; width: number; height: number };
+
+// AppKit's origin is the primary display's bottom-left with y up, so the area is flipped against
+// the primary's height. `mainScreen` is the display holding the key window: the terminal reika was
+// typed in. `visibleFrame` leaves out the menu bar and the Dock.
+const SCREEN_AREA_JXA = [
+  'ObjC.import("AppKit");',
+  'const p = $.NSScreen.screens.objectAtIndex(0).frame;',
+  'const v = $.NSScreen.mainScreen.visibleFrame;',
+  'JSON.stringify({ x: v.origin.x, y: p.size.height - v.origin.y - v.size.height,',
+  '  width: v.size.width, height: v.size.height });',
+].join('\n');
+
+// macOS only, and fail-open: without an answer the browser places the window itself.
+function macScreenArea(): Promise<ScreenArea | undefined> {
+  if (osPlatform() !== 'darwin') return Promise.resolve(undefined);
+  return new Promise(resolve => {
+    execFile(
+      'osascript',
+      ['-l', 'JavaScript', '-e', SCREEN_AREA_JXA],
+      { timeout: 1000 },
+      (err, out) => {
+        if (err) return resolve(undefined);
+        try {
+          const a = JSON.parse(out) as ScreenArea;
+          const ok = [a.x, a.y, a.width, a.height].every(
+            n => typeof n === 'number' && Number.isFinite(n),
+          );
+          resolve(ok && a.width > 0 && a.height > 0 ? a : undefined);
+        } catch {
+          resolve(undefined);
+        }
+      },
+    );
+  });
+}
+
+// A screen smaller than the window keeps the window's top-left on it rather than off its edge.
+// 960 is taller than a 13-inch laptop's usable height, so the window shrinks to what the screen
+// shows rather than opening under the Dock.
+export function fittedSize(area: ScreenArea | undefined): { width: number; height: number } {
+  if (!area) return WINDOW_SIZE;
+  return {
+    width: Math.round(Math.min(WINDOW_SIZE.width, area.width)),
+    height: Math.round(Math.min(WINDOW_SIZE.height, area.height)),
+  };
+}
+
+export function centredPosition(area: ScreenArea, size = WINDOW_SIZE): { x: number; y: number } {
+  return {
+    x: Math.round(area.x + Math.max(0, (area.width - size.width) / 2)),
+    y: Math.round(area.y + Math.max(0, (area.height - size.height) / 2)),
+  };
+}
 
 function openInDefaultBrowser(url: string): void {
   const platform = osPlatform();
@@ -257,6 +316,9 @@ export async function openWindow(link: string, deps: WindowDeps = {}): Promise<O
     };
   }
   const slot = await (deps.claimSlot ?? (() => claimProfileSlot()))();
+  const area = await (deps.screenArea ?? macScreenArea)();
+  const size = fittedSize(area);
+  const position = area ? centredPosition(area, size) : undefined;
   const now = deps.now ?? Date.now;
   const started = now();
   const child = (deps.spawnBrowser ?? ((path, args) => spawn(path, args, { stdio: 'ignore' })))(
@@ -266,7 +328,8 @@ export async function openWindow(link: string, deps: WindowDeps = {}): Promise<O
       `--user-data-dir=${slot.dir}`,
       '--no-first-run',
       '--no-default-browser-check',
-      '--window-size=1200,860',
+      `--window-size=${size.width},${size.height}`,
+      ...(position ? [`--window-position=${position.x},${position.y}`] : []),
     ],
   );
   let closing = false;
