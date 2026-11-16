@@ -6,6 +6,7 @@ import type { ConfirmSpec } from '../ui/dialogspecs.js';
 import type { ModelTarget } from '../ui/models.js';
 import { adoptPastes, type PastedText } from '../ui/pastes.js';
 import { submitStageLabel } from '../agent/submitinput.js';
+import { compactThreshold } from '../agent/compaction.js';
 import { scrubGeneration } from '../ui/identity.js';
 import { scrubDisplay, scrubOutput } from '../ui/scrub.js';
 import {
@@ -94,6 +95,19 @@ type OpenDialog = {
 
 type ControllerOpenDialog = Extract<OpenDialog, { kind: ControllerDialogKind }>;
 
+// The TUI status line's ceiling (ui/App.tsx): the session's config carries the reserve it resolved,
+// learned or pinned, which is what the next request will be held under.
+export function contextUsable(controller: Controller): number | null {
+  const session = controller.session;
+  if (!session) return null;
+  const cfg = session.getSnapshot().config;
+  const profile = cfg.profiles[session.profile] ?? cfg.profiles.default;
+  // The window as wireState names it, so the meter's two numbers come from one profile.
+  const window = profile?.contextWindow ?? cfg.contextWindow;
+  if (!window) return null;
+  return Math.round(compactThreshold(window, session.config?.minGenTokens ?? cfg.minGenTokens));
+}
+
 function startsWithByIdentity(next: Message[], prev: Message[]): boolean {
   return next.length >= prev.length && prev.every((m, i) => next[i] === m);
 }
@@ -130,7 +144,8 @@ export function createWebBridge(
     wired.set(m, { generation, cwd: at, wire: out });
     return out;
   };
-  const scrubbedState = (): WireState => scrubState(wireState(controller, stage));
+  const scrubbedState = (): WireState =>
+    scrubState(wireState(controller, stage, contextUsable(controller)));
   const scrubbedDialog = (d: WireDialog): WireDialog => scrubDialog(d, cwd());
   const streamed: Record<LiveChannel, StreamScrubber> = {
     content: createStreamScrubber(s => scrubDisplay(s, cwd())),

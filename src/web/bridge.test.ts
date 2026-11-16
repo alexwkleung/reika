@@ -8,6 +8,7 @@ import { newSessionPath, projectHistoryDir, writeSession } from '../store/sessio
 import { TRANSCRIPT_VERSION } from '../store/transcript.js';
 import type { Config, Message, Mode, Profile } from '../types.js';
 import { clearIdentity, setIdentity } from '../ui/identity.js';
+import { compactThreshold } from '../agent/compaction.js';
 import { createWebBridge } from './bridge.js';
 import { MAX_LISTED_SESSIONS, sessionId, type ServerEvent } from './protocol.js';
 import type * as PastedUrls from '../agent/pastedurls.js';
@@ -1078,6 +1079,31 @@ describe('completions', () => {
       createController({ mode: 'agent', remember: vi.fn(), historyRoot: root }),
     );
     expect(unbooted.handle({ type: 'complete', text: '/mod' })).toEqual({ ok: true, reply: null });
+  });
+});
+
+describe('context usable (#1001)', () => {
+  const sentState = (bridge: ReturnType<typeof setup>['bridge']) => {
+    const event = bridge.connect().find(e => e.type === 'state');
+    if (event?.type !== 'state') throw new Error('no state');
+    return event.state;
+  };
+
+  it('sends the TUI gauge’s ceiling, follows the session’s reserve, and is null with no window', () => {
+    const { controller, session, bridge } = setup();
+    expect(sentState(bridge).contextUsable).toBeNull();
+    (session.config as { contextWindow?: number }).contextWindow = 32000;
+    const resolved = session as unknown as { config: Config };
+    resolved.config = { ...session.config, minGenTokens: 4096 } as Config;
+    controller.append(note('tick'));
+    expect(sentState(bridge)).toMatchObject({
+      contextWindow: 32000,
+      contextUsable: Math.round(compactThreshold(32000, 4096)),
+    });
+    // A learned reserve rides the resolved config (#551); the ceiling moves with it.
+    resolved.config = { ...session.config, minGenTokens: 8192 } as Config;
+    controller.append(note('tock'));
+    expect(sentState(bridge).contextUsable).toBe(Math.round(compactThreshold(32000, 8192)));
   });
 });
 

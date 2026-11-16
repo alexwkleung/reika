@@ -92,6 +92,10 @@ export type WireState = {
   lastUsage: Usage | null;
   estimatedContext: number | null;
   contextWindow: number | null;
+  // Where history starts being shed: the window less the generation reserve, under the safety
+  // factor (#1001). The TUI's gauge measures against it; the reserve is learned per session (#551),
+  // so only the server can say. Null without a window.
+  contextUsable: number | null;
   shrink: ShrinkCounts;
   // Null rather than undefined: JSON would drop the key.
   decodeRate: number | null;
@@ -117,7 +121,13 @@ export function sessionId(path: string): string {
   return path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1);
 }
 
-export function wireState(controller: Controller, stage: string | null = null): WireState {
+// `contextUsable` is computed by the server (web/bridge.ts) and passed in: the page bundles this
+// file, and the threshold lives with the compaction code.
+export function wireState(
+  controller: Controller,
+  stage: string | null = null,
+  contextUsable: number | null = null,
+): WireState {
   const snap = controller.getSnapshot();
   const session = controller.session;
   const cfg = session?.getSnapshot().config;
@@ -136,6 +146,7 @@ export function wireState(controller: Controller, stage: string | null = null): 
     lastUsage: snap.lastUsage,
     estimatedContext: snap.estimatedContext,
     contextWindow: profile?.contextWindow ?? cfg?.contextWindow ?? null,
+    contextUsable,
     shrink: snap.shrink,
     decodeRate: snap.decodeRate ?? null,
     queue: snap.queue.map(m => ({ content: m.content, images: m.images?.length ?? 0 })),
