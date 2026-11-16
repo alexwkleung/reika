@@ -44,6 +44,14 @@ another). Without any of those it opens a tab in your default browser and says s
   completion; ↑ and ↓ for the lines you sent; a line ending in `\` continues on the next line instead
   of sending. A large paste is parked behind a marker, as in the terminal. While a turn runs, Enter
   queues the line and Esc in an empty box stops the turn.
+- **Images** go in by pasting (⌘V or Ctrl+V) or dropping a PNG, JPEG, WebP or GIF of up to 32 MB
+  on the box, up to 8 per message. Each lands as an `[Image N]` marker in the text and a chip under
+  it, and is read straight away, the same way the terminal reads a pasted one: described by your
+  vision model or system OCR, or sent as it is to a model that can see (see
+  [Images](configuration.md#images)). The chip shows how many characters came out, or why the
+  image could not be read; click its thumbnail to see the image full size, and × to remove it.
+  Enter waits until every image is read. Once sent, a line under your prompt says what was read
+  from each image.
 - **Two pills under the input** switch the mode and the model. They are off while a prompt runs or
   waits, since a switch then would change what the waiting line was typed for.
 - **The status line** shows the approval mode, how full the context is, the token counts, decode
@@ -56,8 +64,6 @@ another). Without any of those it opens a tab in your default browser and says s
 
 ## Not yet
 
-- **Pasting or dropping images.** The page refuses them for now; use the terminal, or an `@` path
-  to the image.
 - **More than one session per server.** The page drives one conversation. Opening a saved one
   replaces it rather than opening a second.
 - **Joining a terminal session.** A browser tab cannot attach to a `reika` already running in a
@@ -76,6 +82,9 @@ link:
 - `--window` never puts the link on a command line, where other users on the machine could read it
   from the process list. The browser opens a private redirect file instead, deleted as soon as the
   code is used.
+- An image goes up with the same token, as the image's own bytes, and the server checks that they
+  are the image type they claim to be. What was read from it stays on the server; the thumbnail is
+  drawn from the browser's own copy of the file.
 - Everything the page sends goes through the same approval gate and shell sandbox as the terminal.
 
 ## Configuration
