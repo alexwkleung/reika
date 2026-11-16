@@ -1,4 +1,5 @@
 import { Box, Text } from 'ink';
+import { scrubConfirm } from './scrubdialogs.js';
 import { type ConfirmSpec } from './dialogspecs.js';
 import { glyphs } from './glyphs.js';
 import { theme } from './theme.js';
@@ -7,7 +8,14 @@ import { theme } from './theme.js';
 // action) and Question (the model asks). Same merged frame as those (`borderBottom={false}` over
 // the input, see Input's `attachedAbove`): it fires at submit, and the prompt it is asking about
 // is still sitting in the input underneath.
-export function Confirm({ spec, selectedIndex }: { spec: ConfirmSpec; selectedIndex: number }) {
+export function Confirm({
+  spec: asked,
+  selectedIndex,
+}: {
+  spec: ConfirmSpec;
+  selectedIndex: number;
+}) {
+  const spec = scrubConfirm(asked);
   return (
     <Box
       borderStyle={glyphs.border}

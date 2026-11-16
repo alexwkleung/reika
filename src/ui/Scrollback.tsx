@@ -13,7 +13,7 @@ import {
 import { glyphs } from './glyphs.js';
 import { theme, themeChalk } from './theme.js';
 import { scrubGeneration } from './identity.js';
-import { scrubDisplay, scrubOutput } from './scrub.js';
+import { holdPartialPath, scrubDisplay, scrubLines, scrubOutput } from './scrub.js';
 import { DiffView } from './DiffView.js';
 import {
   changeLabel,
@@ -91,9 +91,14 @@ export function Scrollback({
   // instead of landing in the content area and jumping up to the Thinking block on commit.
   // Skipped for the compaction note, whose content is a harness aside rather than model reasoning
   // and whose block is sized for that aside's shape.
-  const folded = streamingNote
+  const unfolded = streamingNote
     ? { reasoning: streamingReasoning, content: streaming }
     : foldedLiveFields(streamingReasoning, streaming);
+  // Committed rows are scrubbed whole; a live tail may stop halfway through a path.
+  const folded = {
+    reasoning: holdPartialPath(unfolded.reasoning),
+    content: holdPartialPath(unfolded.content),
+  };
   // Each block's fixed rows: its marginTop, plus the reasoning block's "Thinking" label. The block
   // builders are the memoized ones: a render where this block's text (or width, or the terminal's
   // columns) is unchanged reuses the rows it built last time instead of re-parsing the same text.
@@ -113,7 +118,11 @@ export function Scrollback({
     blocks.push({ kind: 'content', live, fixed: streamingNote ? 3 : 1 });
   }
   if (streamingTool) {
-    const live = liveToolRows(streamingTool, liveContentWidth(indent + toolOffset), region);
+    const live = liveToolRows(
+      holdPartialPath(streamingTool),
+      liveContentWidth(indent + toolOffset),
+      region,
+    );
     blocks.push({ kind: 'tool', live, fixed: 1 });
   }
   const { log: scrollback, held } = useScrollbackLog(messages);
@@ -357,7 +366,7 @@ function streamingContentRows(text: string, width: number, bound: number): LiveR
   const pre = markdownTail(text, bound * 4);
   // A pre-trimmed tail starts mid-message, so its first row gets the indent, not the marker.
   const prose = markProse(
-    renderMarkdown(hideDanglingMarkers(pre.text), width - CALL_MARKER_MEASURED),
+    renderMarkdown(scrubDisplay(hideDanglingMarkers(pre.text)), width - CALL_MARKER_MEASURED),
     !pre.truncated,
   );
   return { rows: displayRows(prose, width), cut: pre.truncated };
@@ -372,7 +381,7 @@ function streamingNoteRows(text: string, width: number, bound: number): LiveRows
 
 function noteBodyRows(text: string, width: number): string[] {
   const inner = width - NOTE_BAR.length;
-  return displayRows(renderMarkdown(text, inner), inner);
+  return displayRows(renderMarkdown(scrubDisplay(text), inner), inner);
 }
 
 // The live tail of a running command. The App accumulates the run's whole output, and scrubbing
@@ -667,7 +676,7 @@ function PlanChecksBlock({ checks, width }: { checks: PlanChecks; width: number 
       hint: 'Likely wrong or invented. The agent is told not to rely on them.',
     });
   }
-  const rows = (text: string) => displayRows(renderMarkdown(text, inner), inner);
+  const rows = (text: string) => displayRows(renderMarkdown(scrubDisplay(text), inner), inner);
   return (
     <Box flexDirection="column" marginTop={1} marginLeft={CALL_MARKER_WIDTH}>
       <NoteBarRow color={theme.warning}>
@@ -994,7 +1003,9 @@ function renderMessage(
         {hasContent ? (
           <Box marginTop={folded.reasoning ? 1 : 0}>
             <Text>
-              {markProse(renderMarkdown(prose, contentWidth(indent) - CALL_MARKER_MEASURED))}
+              {markProse(
+                renderMarkdown(scrubDisplay(prose), contentWidth(indent) - CALL_MARKER_MEASURED),
+              )}
             </Text>
           </Box>
         ) : null}
@@ -1077,8 +1088,8 @@ function renderMessage(
         {msg.diff ? (
           <Box flexDirection="column" marginTop={1} marginLeft={4}>
             <DiffView
-              diff={msg.diff.text}
-              path={msg.diff.path}
+              diff={scrubLines(msg.diff.text)}
+              path={scrubDisplay(msg.diff.path)}
               maxWidth={diffViewWidth(indent)}
               startLine={msg.diff.startLine}
             />
@@ -1131,8 +1142,8 @@ function renderMessage(
                 {f.hunks.map((h, hi) => (
                   <Box key={hi} flexDirection="column" marginTop={hi > 0 ? 1 : 0}>
                     <DiffView
-                      diff={h.text}
-                      path={f.path}
+                      diff={scrubLines(h.text)}
+                      path={scrubDisplay(f.path)}
                       maxWidth={diffViewWidth(indent)}
                       startLine={h.startLine}
                       oldStartLine={h.oldStartLine}
@@ -1218,7 +1229,7 @@ function reasoningLines(
   const contentW = Math.max(1, avail - 2); // '▎ ' gutter (2).
   // Models often emit leading/trailing newlines and blank-line runs; those would
   // become empty bar rows, so collapse blank lines and trim the ends first.
-  const cleaned = renderReasoningMarkdown(text, contentW)
+  const cleaned = renderReasoningMarkdown(scrubDisplay(text), contentW)
     .replace(/\n\s*\n/g, '\n')
     .replace(/^\s*\n|\s+$/g, '');
   return displayRows(cleaned, contentW);
