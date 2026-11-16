@@ -1,3 +1,5 @@
+import { commandTail } from '../../ui/commandtail.js';
+import { CommandChip } from './MessageRow.js';
 import { useEffect, useRef, useState } from 'react';
 import { prefillLabel, toolTimer, toolVerb } from '../../ui/format.js';
 import { planWindow } from '../../ui/planwindow.js';
@@ -176,11 +178,14 @@ export function LiveTurn({
   busy,
   planShown,
   clockOffset = null,
+  command = null,
 }: {
   live: WireLive;
   busy: boolean;
   planShown: boolean;
   clockOffset?: number | null;
+  // The running bash call's command (livecommand.ts), drawn as its result will draw it.
+  command?: string | null;
 }) {
   const pending = busy ? live.pending : null;
   const due = pending ? pending.since + PENDING_ROW_DELAY_MS : 0;
@@ -201,6 +206,12 @@ export function LiveTurn({
   const tool = live.tool;
   const showPending = !!pending && pendingRowDue(pending.since, now, !!tool?.output);
   const elapsed = pending ? pendingElapsedMs(pending.since, now) : 0;
+  // A running command draws as its result will: the `$ command` line, then the same tail of its
+  // output, so the commit changes the verb and moves nothing.
+  const commandBlock =
+    showPending && pending?.name === 'bash' && command !== null
+      ? { text: command, ...commandTail(tool?.name === 'bash' ? tool.output : '') }
+      : null;
   return (
     <section
       className={`live${live.subagent ? ' nest' : ''}`}
@@ -216,25 +227,20 @@ export function LiveTurn({
           <span className="tool-duration">{toolTimer(pending.name, elapsed)}</span>
         </div>
       ) : null}
+      {commandBlock ? <CommandChip command={commandBlock} /> : null}
       {live.note ? (
         <div className="row">
           <NoteBlock note={folded.content} reasoning={folded.reasoning || undefined} />
         </div>
-      ) : (
-        <>
-          {folded.reasoning.trim() ? (
-            <div className="row">
-              <ReasoningBlock text={folded.reasoning} live />
-            </div>
-          ) : null}
-          {folded.content.trim() ? (
-            <div className="row">
-              <Prose text={folded.content} />
-            </div>
-          ) : null}
-        </>
-      )}
-      {tool && tool.output ? (
+      ) : // One row, as the committed message is: `.reasoning + .prose` spaces the reply under its
+      // Thinking, where two rows put a row's margin between them and the commit moved it up.
+      folded.reasoning.trim() || folded.content.trim() ? (
+        <div className="row">
+          {folded.reasoning.trim() ? <ReasoningBlock text={folded.reasoning} live /> : null}
+          {folded.content.trim() ? <Prose text={folded.content} /> : null}
+        </div>
+      ) : null}
+      {tool && tool.output && !commandBlock ? (
         // Under the command chip's indent only for bash, where the committed output lands.
         <pre className={`live-tool${tool.name === 'bash' ? ' live-tool--command' : ''}`}>
           {tool.output}

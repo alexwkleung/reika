@@ -23,7 +23,7 @@ export function StatusLine({
   const [recheck, setRecheck] = useState(0);
   // After every render and before paint, so a path that stops fitting never draws a frame wrapped
   // by flex alone; the hold then keeps it there.
-  useLayoutEffect(() => {
+  useBeforePaint(() => {
     const fits = measurePathFits(stripRef.current, groupRef.current, pathRef.current);
     if (fits === null) return;
     line.current = nextPathLine(line.current, fits, Date.now());
@@ -145,6 +145,9 @@ export function StatusLine({
     </div>
   );
 }
+
+// The layout effect where there is a page to paint; a server render (a test) has none and warns.
+const useBeforePaint = typeof document === 'undefined' ? useEffect : useLayoutEffect;
 
 // Null where nothing can be measured (no path, or a DOM without layout, as in render tests).
 function measurePathFits(

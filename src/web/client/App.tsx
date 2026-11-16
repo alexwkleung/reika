@@ -7,6 +7,7 @@ import {
   type RefObject,
 } from 'react';
 import { PROTOCOL_VERSION } from '../protocol.js';
+import { runningCommand } from './livecommand.js';
 import { Composer, type Send, type Upload } from './Composer.js';
 import { connectionNotice, type Connection } from './connection.js';
 import { Dialogs } from './Dialogs.js';
@@ -145,6 +146,7 @@ export function App({
               busy={busy}
               planShown={mode === 'agent' || mode === 'vibe'}
               clockOffset={s.clockOffset}
+              command={s.live.pending?.name === 'bash' ? runningCommand(s.messages) : null}
             />
           ) : null}
         </div>

@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { Tool, ToolContext, ToolResult } from '../types.js';
+import { commandTail } from '../ui/commandtail.js';
 import { buildCappedFooter, buildSpillFooter, spillEnabled, spillResult } from './_spill.js';
 import { detectDangerousPatterns } from './_danger.js';
 import { scanHeredocs } from './_heredoc.js';
@@ -29,10 +30,7 @@ const DEFAULT_IDLE_MS = 5 * 60_000;
 // After SIGTERM to the group, how long a holdout gets before SIGKILL.
 const KILL_GRACE_MS = 2_000;
 const MAX_PAYLOAD_BYTES = 64 * 1024;
-const OUTPUT_TAIL_BYTES = 2 * 1024;
-// Exported for the live tail (ui/Scrollback.tsx), which must never draw more rows than this chip.
-export const OUTPUT_TAIL_LINES = 10;
-// Retained for the UI chip's last-lines view. Larger than OUTPUT_TAIL_BYTES so the slice to 10
+// Retained for the UI chip's last-lines view (ui/commandtail.ts). Larger than OUTPUT_TAIL_BYTES so the slice to 10
 // lines always has enough to work with even when lines are long, and small enough to be free.
 const UI_TAIL_BYTES = 4 * 1024;
 // How much output the spill buffer retains. Big enough that an ordinary build or test run spills
@@ -679,19 +677,5 @@ function buildCommandDisplay(
   retained: string,
   omittedEarlier: boolean,
 ): { text: string; outputTail: string; outputTruncated: boolean } {
-  // Blank edges are dropped: nearly every command ends in a newline (vitest and `git log` in two),
-  // and each drew as an empty row stacked on the next block's own margin, while also taking one of
-  // the ten line slots from real output.
-  const trimmed = retained.replace(/\s+$/, '');
-  if (!trimmed) return { text: command, outputTail: '', outputTruncated: false };
-  const byteTail =
-    trimmed.length > OUTPUT_TAIL_BYTES
-      ? trimmed.slice(trimmed.length - OUTPUT_TAIL_BYTES)
-      : trimmed;
-  const lines = byteTail.split('\n');
-  const lineTail = lines.slice(-OUTPUT_TAIL_LINES);
-  const outputTruncated =
-    omittedEarlier || trimmed.length > byteTail.length || lines.length > OUTPUT_TAIL_LINES;
-  const outputTail = lineTail.join('\n').replace(/^(?:[ \t\r]*\n)+/, '');
-  return { text: command, outputTail, outputTruncated };
+  return { text: command, ...commandTail(retained, omittedEarlier) };
 }

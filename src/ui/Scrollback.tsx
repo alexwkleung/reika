@@ -18,7 +18,7 @@ import { DiffView } from './DiffView.js';
 import { changeLabel, formatDurationMs, toolLabel, toolTimer, toolVerb } from './format.js';
 import { contentWidth, hangingWrap, wrapLines } from './layout.js';
 import { foldedAssistantFields, foldedLiveFields } from './reasoningfold.js';
-import { OUTPUT_TAIL_LINES } from '../tools/bash.js';
+import { OUTPUT_TAIL_LINES } from './commandtail.js';
 import {
   elidedReadSummary,
   formatArgs,
