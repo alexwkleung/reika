@@ -1,4 +1,5 @@
 import { Box, Text } from 'ink';
+import { scrubQuestion } from './scrubdialogs.js';
 import wrapAnsi from 'wrap-ansi';
 import type { QuestionRequest } from '../types.js';
 import { contentWidth, hangingWrap, useContentWidth } from './layout.js';
@@ -281,6 +282,7 @@ export function layoutQuestion(
   selectedIndex = 0,
 ) {
   const hang = HANG;
+  request = scrubQuestion(request);
   const noting = typing && typing.forIndex !== undefined ? request.options[typing.forIndex] : null;
   const labels = request.options.map(o => {
     const tag = o.recommended ? '  (recommended)' : '';

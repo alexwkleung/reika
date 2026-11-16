@@ -10,7 +10,18 @@ import {
 import { frozenStreamMessage } from './agent/frozenstream.js';
 import { buildLaunchNotices } from './agent/launchnotices.js';
 import type { ShrinkCounts } from './agent/loop.js';
-import { modeSide, resolveModeCommand, turnMode, turnTools } from './agent/modes.js';
+import {
+  isGrindPrompt,
+  isMinimalPrompt,
+  modeSide,
+  resolveModeCommand,
+  turnMode,
+  turnPromptMode,
+  turnRefines,
+  turnTools,
+} from './agent/modes.js';
+import { createPrefixWarmer } from './agent/warm.js';
+import { isWarmableInput } from './ui/warmtrigger.js';
 import { resolveReplyCommand, unknownCommandText } from './agent/replycommands.js';
 import {
   buildShellRunsBlock,
@@ -318,9 +329,6 @@ export type InputFrontEnd = Omit<CommandFrontEnd, 'implementMode'> & {
   onStage: SubmitPromptInput['onStage'];
   // The box's attachments went with the line: built into its prompt, or queued with it.
   onImagesTaken?(): void;
-  // A line is about to run now, before its questions: a speculative warm of the prefix is stopped
-  // so the real request gets the server's slot.
-  onSending?(): void;
   // The line was taken and the box should clear. `line` goes into input history, and is absent for
   // a queued or an empty line, which is not recalled.
   onTaken(line?: string): void;
@@ -405,6 +413,10 @@ export type Controller = {
   // The completion list for the input box's text: commands, skills, MCP commands, `/model`
   // arguments and `@` files. Null before boot and when nothing matches.
   completions(text: string): SuggestionState | null;
+  // A front end saw the box become a prompt (`isWarmEdge`): with REIKA_WARM on, prefill the
+  // engine's cache with the prefix the submit will send (#81, #998). Only while idle and outside
+  // shell mode; a repeat on the same prefix (a second tab) dedupes in the warmer.
+  warm(text: string): void;
   // When this conversation began: launch, or the last `newConversation`.
   readonly startedAt: number;
   // `/new`: drops both sides and everything the session learned about the engine, and starts over
@@ -515,6 +527,7 @@ export function createController(opts: {
   const waitingConfirms: (() => void)[] = [];
   let stashed: Partial<Record<Side, Message[]>> = {};
   let session: Session | null = null;
+  const warmer = createPrefixWarmer();
   // The model a mode switch comes back to when the new mode has none of its own (#616): the
   // profile the session opened on, or 'default' once the model is unpinned.
   let ownProfile = 'default';
@@ -1356,8 +1369,9 @@ export function createController(opts: {
     front: InputFrontEnd,
     carried?: SubmitAnswers,
   ): Promise<void> => {
-    // Unconditional: commands and shell lines land here too.
-    front.onSending?.();
+    // Unconditional: commands and shell lines land here too. Frees the server slot for the real
+    // request (the engine keeps already-processed KV on disconnect, so a cut warm still pays off).
+    warmer.cancel('submit');
     // Before the box clears: the dialog sits over the input, and the prompt it is asking about
     // should still be visible underneath.
     const answers = await askSubmitAnswers(trimmed, front, carried);
@@ -1565,6 +1579,26 @@ export function createController(opts: {
     },
     get modelPinned() {
       return modelPinned;
+    },
+    warm: text => {
+      if (!session || snapshot.status !== 'idle' || snapshot.preparing) return;
+      if (snapshot.mode === 'shell' || !isWarmableInput(text)) return;
+      const m = snapshot.mode;
+      warmer.onEdge({
+        // The model history, so the warm reproduces the prefix round 0 will actually send —
+        // including any span already folded by a previous turn's compaction.
+        history: session.history,
+        bundle: session.bundle,
+        config: session.config,
+        // runTurn's own mapping, so the warm cannot build a different prefix than the submit.
+        // Vibe's first internal turn is a plan turn without the refinement line (turnRefines, #46).
+        tools: turnTools(m, session.lists),
+        promptMode: turnPromptMode(m),
+        minimalPrompt: isMinimalPrompt(m),
+        grindPrompt: isGrindPrompt(m),
+        allowRefine: turnRefines(m),
+        calibration: session.calibration ?? 1,
+      });
     },
     completions: text => {
       if (!session) return null;

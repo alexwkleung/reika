@@ -44,7 +44,6 @@ import { effectiveAutoApprove } from '../approval.js';
 import { debugEnabled } from '../debug.js';
 import { noteFrameState } from './framedrops.js';
 import { compactThreshold } from '../agent/compaction.js';
-import { createPrefixWarmer } from '../agent/warm.js';
 import { withLiveUsage } from '../agent/liveusage.js';
 import { NATIVE_IMAGE_NOTE, nextImageMarker, type ImageAttachment } from '../agent/attachments.js';
 import { submitStageLabel } from '../agent/submitinput.js';
@@ -60,14 +59,7 @@ import { useContentWidth } from './layout.js';
 import { ResumeSelect } from './ResumeSelect.js';
 import { loadSession, type SessionEntry, type SessionSides } from '../store/sessions.js';
 import { type ModelTarget } from './models.js';
-import {
-  isMinimalPrompt,
-  isGrindPrompt,
-  nextMode,
-  turnPromptMode,
-  turnRefines,
-  turnTools,
-} from '../agent/modes.js';
+import { nextMode } from '../agent/modes.js';
 import { acceptSuggestion, type SuggestionState } from './suggest.js';
 import { buildSummary, hasActivity } from './summary.js';
 import { QueuedList } from './QueuedList.js';
@@ -309,9 +301,6 @@ export function App() {
   // land its rows in the middle of the resumed scrollback, or swap it for the other side's.
   const resumingRef = useRef(false);
   const startedAtRef = useRef<number | null>(null);
-  // Speculative KV warm (#81, REIKA_WARM): fires on the first keystroke of a prompt, aborted at
-  // submit. Ref-held — the warmer is invisible plumbing and must never trigger a render.
-  const warmerRef = useRef(createPrefixWarmer());
   const exitArmedRef = useRef(false);
   exitArmedRef.current = exitArmed;
   const exitTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -752,27 +741,7 @@ export function App() {
       setSuggestionState(null);
       return;
     }
-    const s = sessionRef.current;
-    if (edge && s && controller.status === 'idle' && controller.mode !== 'shell') {
-      const m = controller.mode;
-      warmerRef.current.onEdge({
-        // The model history, so the warm reproduces the prefix round 0 will actually send —
-        // including any span already folded by a previous turn's compaction.
-        history: s.history,
-        bundle: s.bundle,
-        config: s.config,
-        // Same mapping as the controller's runTurn, through the same helpers so the two cannot
-        // drift — a warm that builds a different prefix than the submit is a guaranteed cache miss.
-        // Vibe's first internal turn is a plan turn, so it warms the plan prefix — but without the
-        // refinement line, since that plan turn is a new task (turnRefines, #46).
-        tools: turnTools(m, s.lists),
-        promptMode: turnPromptMode(m),
-        minimalPrompt: isMinimalPrompt(m),
-        grindPrompt: isGrindPrompt(m),
-        allowRefine: turnRefines(m),
-        calibration: s.calibration ?? 1,
-      });
-    }
+    if (edge) controller.warm(value);
     const next = controller.completions(value);
     setSuggestionState(next);
     setSuggestionSelected(0);
@@ -868,9 +837,6 @@ export function App() {
     onImagesTaken: () => {
       imageAttachmentsRef.current = [];
     },
-    // Frees the server slot for the real request (the engine keeps already-processed KV in its
-    // slot cache on disconnect, so an interrupted warm still pays off).
-    onSending: () => warmerRef.current.cancel('submit'),
     onTaken: () => {
       setInputValue('');
       setSuggestionState(null);

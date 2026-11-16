@@ -77,7 +77,13 @@ type MountOpts = {
 
 async function mount(opts: MountOpts = {}) {
   const sent: ClientMessage[] = [];
+  // Kept apart from `sent`: every typed prompt opens with one (#998).
+  const typing: string[] = [];
   const send = (m: ClientMessage) => {
+    if (m.type === 'typing') {
+      typing.push(m.text);
+      return Promise.resolve<SendResult>({ kind: 'ok' });
+    }
     if (m.type === 'complete') {
       return Promise.resolve<SendResult>({ kind: 'ok', reply: opts.completions?.(m.text) ?? null });
     }
@@ -136,6 +142,7 @@ async function mount(opts: MountOpts = {}) {
     });
   return {
     sent,
+    typing,
     container,
     box,
     type,
@@ -149,6 +156,16 @@ async function mount(opts: MountOpts = {}) {
 }
 
 describe('Composer', () => {
+  it('tells the server once when the box becomes a prompt (#998)', async () => {
+    const m = await mount();
+    await m.type('/mo');
+    await m.type('h');
+    await m.type('he');
+    await m.type('');
+    await m.type('x');
+    expect(m.typing).toEqual(['h', 'x']);
+  });
+
   it('Enter submits with the mode it was typed in and clears; Shift+Enter and composition do not', async () => {
     const m = await mount({ session: { mode: 'plan' } });
     await m.type('hello');

@@ -395,6 +395,7 @@ describe('parseClientMessage', () => {
     { type: 'model', name: 'kimi' },
     { type: 'complete', text: '/mo' },
     { type: 'complete', text: 'x'.repeat(MAX_COMPLETE_CHARS) },
+    { type: 'typing', text: 'h' },
     { type: 'answer', id: 'd1', kind: 'approval', answer: true },
     { type: 'answer', id: 'd1', kind: 'approval', answer: false, always: false },
     { type: 'answer', id: 'd1', kind: 'approval', answer: true, always: true },
@@ -518,6 +519,8 @@ describe('parseClientMessage', () => {
     ['model with an empty name', { type: 'model', name: '' }, 'name'],
     ['model with name null', { type: 'model', name: null }, 'name'],
     ['complete without text', { type: 'complete' }, 'text'],
+    ['typing without text', { type: 'typing' }, 'text'],
+    ['typing past the cap', { type: 'typing', text: 'x'.repeat(MAX_COMPLETE_CHARS + 1) }, 'text'],
     [
       'complete past the cap',
       { type: 'complete', text: 'x'.repeat(MAX_COMPLETE_CHARS + 1) },

@@ -28,6 +28,19 @@ import type * as Bash from './tools/bash.js';
 import type * as Identity from './ui/identity.js';
 import { setAtLaunch } from './config.js';
 import { helpText } from './agent/replycommands.js';
+
+// The warm's stop at submit is the controller's own since #998; tests read its order beside the
+// front end's hooks.
+const warmStop = vi.hoisted(() => ({ fn: vi.fn(), hook: null as null | (() => void) }));
+vi.mock('./agent/warm.js', () => ({
+  createPrefixWarmer: () => ({
+    onEdge: vi.fn(),
+    cancel: (reason: string) => {
+      warmStop.fn(reason);
+      warmStop.hook?.();
+    },
+  }),
+}));
 import {
   CONFIRM_ACCEPT,
   CONFIRM_DECLINE,
@@ -2863,6 +2876,8 @@ describe('controller.submit', () => {
   // Every hook a vi.fn that also lands in `calls`, so a test can read the order they ran in.
   const inputFront = (overrides: Partial<InputFrontEnd> = {}) => {
     const calls: string[] = [];
+    warmStop.fn.mockClear();
+    warmStop.hook = () => calls.push('sending');
     const front = {
       turn: { onTurnStart: () => calls.push('turn') },
       pastes: [],
@@ -2873,7 +2888,6 @@ describe('controller.submit', () => {
       shell: { onProgress: vi.fn() },
       onStage: vi.fn(),
       onImagesTaken: vi.fn(() => calls.push('images')),
-      onSending: vi.fn(() => calls.push('sending')),
       onTaken: vi.fn((line?: string) => calls.push(line === undefined ? 'taken' : `taken:${line}`)),
       beforeImplementQuestion: vi.fn(() => calls.push('suggestions')),
       ...overrides,
@@ -2989,7 +3003,7 @@ describe('controller.submit', () => {
       const { controller, session } = ready();
       const { front } = inputFront();
       await controller.submit('verify the change', { ...front, ask: asking('abort') });
-      expect(front.onSending).toHaveBeenCalled();
+      expect(warmStop.fn).toHaveBeenCalledWith('submit');
       expect(front.onTaken).not.toHaveBeenCalled();
       expect(session!.submit).not.toHaveBeenCalled();
     });
@@ -3250,7 +3264,7 @@ describe('controller.submit', () => {
         const { front } = inputFront();
         await controller.submit('/save', front);
         expect(front.onTaken).toHaveBeenCalledWith('/save');
-        expect(front.onSending).not.toHaveBeenCalled();
+        expect(warmStop.fn).not.toHaveBeenCalled();
         expect(controller.getSnapshot().queue).toEqual([]);
         expect(controller.messages.at(-1)).toMatchObject({
           content: expect.stringMatching(/^saved 1 messages — mid-turn/),
