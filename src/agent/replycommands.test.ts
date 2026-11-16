@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   helpText,
   resolveReplyCommand,
+  TUI_HELP_KEYS,
   unknownCommandText,
   type ReplyCommandContext,
 } from './replycommands.js';
@@ -42,6 +43,14 @@ describe('resolveReplyCommand', () => {
     expect(help.startsWith('Commands:')).toBe(true);
     const missing = COMMANDS.filter(c => !new RegExp(`/${c.name}\\b`).test(help)).map(c => c.name);
     expect(missing).toEqual([]);
+  });
+
+  it("/help ends with the front end's key rows, the TUI's by default", () => {
+    const tui = resolveReplyCommand('help', ctx())!;
+    for (const row of TUI_HELP_KEYS) expect(tui).toContain(row);
+    const own = resolveReplyCommand('help', ctx({ helpKeys: ['  esc                stop'] }))!;
+    expect(own.endsWith('  esc                stop')).toBe(true);
+    for (const row of TUI_HELP_KEYS) expect(own).not.toContain(row);
   });
 
   it('/cwd prints the working directory, or says it is unknown', () => {
