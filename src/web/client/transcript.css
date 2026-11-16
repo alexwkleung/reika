@@ -180,13 +180,12 @@
 .reasoning-md .md-hr {
   margin: 0.4em 0;
 }
-.reasoning-details[open] ~ .reasoning-tail,
 .reasoning-details[open] ~ .reasoning-tail-toggle {
   display: none;
 }
-/* Four rows, filled from the bottom; once full, the oldest row fades at the top. */
+/* REASONING_WINDOW_ROWS (blocks.tsx) rows, filled from the bottom; once full, the oldest row fades at the top. */
 .reasoning-window {
-  max-height: calc(4 * 1.6em);
+  max-height: calc(8 * 1.6em);
   overflow: hidden;
   display: flex;
   flex-direction: column;

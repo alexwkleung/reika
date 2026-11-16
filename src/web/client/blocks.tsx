@@ -17,8 +17,11 @@ export const GLYPH = {
   shell: '$',
 } as const;
 
-// Past this many lines a committed Thinking block offers its whole text behind a toggle.
-export const REASONING_TAIL_LINES = 3;
+// The window's height in rows; transcript.css's .reasoning-window holds the same number. A thought
+// with more source lines than this overflows it whatever the width, so the toggle is known before
+// the window is measured (and in a static render); one that overflows by wrapping gets it once
+// measured.
+export const REASONING_WINDOW_ROWS = 8;
 
 // Blank-line runs and edge whitespace would become empty rows inside the bar (ui/Scrollback.tsx
 // reasoningLines does the same).
@@ -26,21 +29,31 @@ export function reasoningText(text: string): string {
   return text.replace(/\n\s*\n/g, '\n').replace(/^\s*\n|\s+$/g, '');
 }
 
-// A fixed window onto the end of a thought: it grows to four rows and then holds that height,
+// A fixed window onto the end of a thought: it grows to REASONING_WINDOW_ROWS rows and then holds that height,
 // newest text at the bottom, the oldest fading out at the top once it overflows. The live block
 // and the row it commits as share it, so neither streaming nor the commit changes its height. A
 // tail of the last few lines changed height with every wrap, and the block and everything under
 // it jumped as it streamed.
-export function ReasoningWindow({ text, className = '' }: { text: string; className?: string }) {
+export function ReasoningWindow({
+  text,
+  className = '',
+  onOverflow,
+}: {
+  text: string;
+  className?: string;
+  onOverflow?: (full: boolean) => void;
+}) {
   const box = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
   // The overflow is off the top, which scrollHeight does not count, so the heights are compared.
   const [full, setFull] = useState(false);
   useLayoutEffect(() => {
     if (box.current && body.current) {
-      setFull(body.current.offsetHeight > box.current.clientHeight + 1);
+      const over = body.current.offsetHeight > box.current.clientHeight + 1;
+      setFull(over);
+      onOverflow?.(over);
     }
-  }, [text]);
+  }, [text, onOverflow]);
   return (
     <div
       ref={box}
@@ -78,7 +91,10 @@ export function ReasoningBlock({
   const shown = reasoningText(text);
   const lines = shown.split('\n');
   const label = <span className="reasoning-label">Thinking</span>;
-  const long = !live && lines.length > REASONING_TAIL_LINES;
+  // Counting source lines alone missed a thought of a few long lines that wraps past the window:
+  // its start was clipped with no way to open it.
+  const [overflows, setOverflows] = useState(false);
+  const long = !live && (lines.length > REASONING_WINDOW_ROWS || overflows);
   const details = useRef<HTMLDetailsElement>(null);
   return (
     <div className={`reasoning reasoning--${tone}${live ? ' reasoning--live' : ''}`}>
@@ -100,22 +116,23 @@ export function ReasoningBlock({
       ) : (
         <div className="reasoning-head">{label}</div>
       )}
-      {long ? (
-        // The faded preview opens the whole thought too: it is what the eye lands on. The summary
-        // above stays the keyboard's way in, so this is a pointer shortcut only.
-        <div
-          className="reasoning-tail-toggle"
-          onClick={() => {
-            if (details.current && window.getSelection?.()?.isCollapsed !== false) {
-              details.current.open = true;
-            }
-          }}
-        >
-          <ReasoningWindow text={text} className="reasoning-tail" />
-        </div>
-      ) : (
-        <ReasoningWindow text={text} className="reasoning-tail" />
-      )}
+      {/* The faded preview opens the whole thought too: it is what the eye lands on. The summary
+          above stays the keyboard's way in, so this is a pointer shortcut only. One wrapper either
+          way, so the window is not remounted when a measured overflow turns the toggle on. */}
+      <div
+        className={long ? 'reasoning-tail-toggle' : undefined}
+        onClick={
+          long
+            ? () => {
+                if (details.current && window.getSelection?.()?.isCollapsed !== false) {
+                  details.current.open = true;
+                }
+              }
+            : undefined
+        }
+      >
+        <ReasoningWindow text={text} className="reasoning-tail" onOverflow={setOverflows} />
+      </div>
     </div>
   );
 }
