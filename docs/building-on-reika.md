@@ -9,10 +9,17 @@ assumed. Reika is Apache-2.0, so lifting code is fine as long as you keep the li
 [NOTICE](../NOTICE).
 
 The short version: **individual modules lift out easily, and the agent loop doesn't.** `src/` is
-about 41k lines across 144 files, one concept per file, so most subsystems are a file or two with
-few local imports. The exception is [`src/agent/loop.ts`](../src/agent/loop.ts) (~4,300 lines), where
+about 52k lines across 213 files, one concept per file, so most subsystems are a file or two with
+few local imports. The exception is [`src/agent/loop.ts`](../src/agent/loop.ts) (~4,500 lines), where
 context management, loop breaking, the plan gates and the provider latches all meet. Fork the
 pieces, not the loop.
+
+If what you want is a different front end rather than a different harness, you don't need to fork
+anything. [`createController`](../src/controller.ts) holds everything a front end needs: the
+conversation on screen, the approval gate, the open dialogs, the busy queue and the running turn's
+live state, read through `subscribe`/`getSnapshot` and changed only through its methods. The
+terminal UI and the [web front end](web.md) are both front ends over it, and neither keeps a copy
+of that state.
 
 ## What lifts out whole
 
@@ -63,6 +70,17 @@ reimplement them than to extract them.
 - **Escalate loop breaking in stages: redirect, ledger, withdrawal, honest stop.** Withdrawal has to
   be enforced where calls are dispatched, not where tools are offered, because a model that calls
   tools in text routes around a tool that is merely missing from the list.
+- **A local web front end is a remote control for a shell, so treat it as one.** Bind
+  `127.0.0.1` only, and accept a request only when its `Host` is exactly `127.0.0.1:<port>` or
+  `localhost:<port>` and its `Origin`, when present, matches; a DNS-rebinding page arrives naming
+  its own host. Use no cookie, and no credential the browser attaches by itself: cookies on
+  127.0.0.1 are shared across ports, and a model's sandboxed command can start its own server on
+  one, which would then be handed the credential and could drive the agent from outside the
+  sandbox. The page holds a bearer token and sets the header itself, and gets it by trading a
+  single-use code carried in the link's fragment, which never reaches a request line or a
+  `Referer`. Finally, deny the server's own port inside the sandbox, since reads are open and a
+  command could otherwise read the token off the browser profile and approve its own actions. The
+  full rule list, each with a test, is in [`web/server.ts`](../src/web/server.ts).
 
 ## What is tuning, and may not transfer
 
