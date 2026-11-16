@@ -69,14 +69,14 @@ export function caretLines(
   };
 }
 
-// `1`–`9` picks that option, unless focus is in a text field (where the digit is text).
+// `1`–`9` names that option for the dialog to focus, unless focus is in a text field.
 export function digitPick(key: string, inTextField: boolean, options: number): number | null {
   if (inTextField || !/^[1-9]$/.test(key)) return null;
   const index = Number(key) - 1;
   return index < options ? index : null;
 }
 
-// A paste or drop that carries an image: refused, since the wire takes text only (#979).
+// A paste or drop that carries an image: uploaded (#979), or refused where nothing can upload.
 export function carriesImage(
   items: Iterable<{ kind?: string; type: string }> | null | undefined,
 ): boolean {

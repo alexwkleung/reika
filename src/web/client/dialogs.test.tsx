@@ -55,9 +55,11 @@ async function mount(dialog: WireDialog, opts: { reply?: SendResult; hold?: bool
     act(async () => {
       button(label).dispatchEvent(new window.Event('click', { bubbles: true }));
     });
-  const type = (value: string) =>
+  const type = (value: string, label?: string) =>
     act(async () => {
-      const input = container.querySelector('input') as HTMLInputElement;
+      const input = container.querySelector(
+        label ? `input[aria-label="${label}"]` : 'input',
+      ) as HTMLInputElement;
       setValue(input, value);
       input.dispatchEvent(new window.Event('input', { bubbles: true }));
     });
@@ -191,12 +193,38 @@ describe('approval', () => {
     await m.unmount();
   });
 
-  it('a digit picks a numbered row, but not from a text field', async () => {
+  it('a digit or y/n focuses a button and never answers; not from a text field', async () => {
+    const focused: string[] = [];
+    const proto = window.HTMLElement.prototype as { focus: () => void };
+    const original = proto.focus;
+    proto.focus = function (this: HTMLElement) {
+      focused.push(this.textContent ?? '');
+    };
+    try {
+      const m = await mount(approval);
+      focused.length = 0;
+      await m.key('3', m.container.querySelector('input')!);
+      await m.key('n', m.container.querySelector('input')!);
+      expect(focused).toEqual([]);
+      await m.key('2');
+      await m.key('3');
+      await m.key('y');
+      await m.key('n');
+      // Digits ride in the button's own <kbd>.
+      expect(focused).toEqual(['No2', 'Always this session3', 'Yes1', 'No2']);
+      expect(m.sent).toEqual([]);
+      await m.unmount();
+    } finally {
+      proto.focus = original;
+    }
+  });
+
+  it('the buttons run in the TUI order: Yes, No, Always', async () => {
     const m = await mount(approval);
-    await m.key('3', m.container.querySelector('input')!);
-    expect(m.sent).toEqual([]);
-    await m.key('1');
-    expect(m.sent).toEqual([{ type: 'answer', id: 'd1', kind: 'approval', answer: true }]);
+    const labels = [...m.container.querySelectorAll('.dialog-actions button')].map(
+      b => b.textContent,
+    );
+    expect(labels).toEqual(['Yes1', 'No2', 'Always this session3']);
     await m.unmount();
   });
 });
@@ -221,7 +249,7 @@ describe('question', () => {
     ]);
     await m.unmount();
     m = await mount(question);
-    await m.type('neither');
+    await m.type('neither', 'Something else');
     await m.click('Send answer');
     expect(m.sent).toEqual([
       { type: 'answer', id: 'd1', kind: 'question', answer: { text: 'neither' } },
@@ -230,6 +258,21 @@ describe('question', () => {
     m = await mount(question);
     await m.click('Skip question');
     expect(m.sent).toEqual([{ type: 'answer', id: 'd1', kind: 'question', answer: null }]);
+    await m.unmount();
+  });
+
+  it('a note rides the picked option, trimmed, as the TUI sends it', async () => {
+    const m = await mount(question);
+    await m.type('  but keep the old flag  ', 'Note for the option you pick');
+    await m.click('A');
+    expect(m.sent).toEqual([
+      {
+        type: 'answer',
+        id: 'd1',
+        kind: 'question',
+        answer: { text: 'A', index: 0, notes: 'but keep the old flag' },
+      },
+    ]);
     await m.unmount();
   });
 });
