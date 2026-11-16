@@ -25,7 +25,7 @@ export function sessionTitle(entry: WireSessionEntry): string {
   return entry.title?.trim() || 'untitled';
 }
 
-// What an empty list says, or what a capped one adds under its rows. Null when nothing needs saying.
+// What an empty list says. Null when it has rows.
 export function listNote(list: WireSessionList, filter: string): string | null {
   if (list.entries.length === 0) {
     if (filter.trim()) return 'No sessions match.';
@@ -34,8 +34,10 @@ export function listNote(list: WireSessionList, filter: string): string | null {
       ? 'No saved sessions for this project yet.'
       : 'Auto-save is off (REIKA_AUTOSAVE=0), so nothing is listed.';
   }
-  if (list.total > list.entries.length) {
-    return `Showing the newest ${list.entries.length} of ${list.total}. Filter to find older ones.`;
-  }
   return null;
+}
+
+// The heading's count for a capped list, "50 of 250"; null when every session is listed.
+export function listCount(list: WireSessionList): string | null {
+  return list.total > list.entries.length ? `${list.entries.length} of ${list.total}` : null;
 }
