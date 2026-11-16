@@ -259,6 +259,9 @@
   border-radius: 10px;
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.45);
 }
+.pill-popover--quiet {
+  scrollbar-width: none;
+}
 .pill-option {
   display: flex;
   align-items: center;
