@@ -12,6 +12,7 @@ import {
   messageEvent,
   modelDialog,
   MAX_COMPLETE_CHARS,
+  MAX_SUBMIT_IMAGES,
   MAX_SESSION_FILTER_CHARS,
   MAX_SUBMIT_PASTES,
   parseClientMessage,
@@ -396,6 +397,12 @@ describe('parseClientMessage', () => {
     { type: 'complete', text: '/mo' },
     { type: 'complete', text: 'x'.repeat(MAX_COMPLETE_CHARS) },
     { type: 'typing', text: 'h' },
+    {
+      type: 'submit',
+      text: 'see [Image 1]',
+      images: [{ marker: '[Image 1]', id: '0f8fad5b-d9cb-469f-a165-70867728950e' }],
+    },
+    { type: 'discard', ids: ['0f8fad5b-d9cb-469f-a165-70867728950e'] },
     { type: 'answer', id: 'd1', kind: 'approval', answer: true },
     { type: 'answer', id: 'd1', kind: 'approval', answer: false, always: false },
     { type: 'answer', id: 'd1', kind: 'approval', answer: true, always: true },
@@ -422,7 +429,7 @@ describe('parseClientMessage', () => {
   });
 
   it('drops keys it does not know, at every level', () => {
-    expect(parseClientMessage({ type: 'submit', text: 'hi', images: ['x'] })).toEqual({
+    expect(parseClientMessage({ type: 'submit', text: 'hi', attachments: ['x'] })).toEqual({
       type: 'submit',
       text: 'hi',
     });
@@ -520,6 +527,47 @@ describe('parseClientMessage', () => {
     ['model with name null', { type: 'model', name: null }, 'name'],
     ['complete without text', { type: 'complete' }, 'text'],
     ['typing without text', { type: 'typing' }, 'text'],
+    [
+      'an image marker that is not [Image N]',
+      {
+        type: 'submit',
+        text: 'x',
+        images: [
+          { marker: '[Pasted text #1 +3 lines]', id: '0f8fad5b-d9cb-469f-a165-70867728950e' },
+        ],
+      },
+      'marker',
+    ],
+    [
+      'an image id that is not an upload id',
+      { type: 'submit', text: 'x', images: [{ marker: '[Image 1]', id: '../x' }] },
+      'upload id',
+    ],
+    [
+      'one upload named twice',
+      {
+        type: 'submit',
+        text: 'x',
+        images: [
+          { marker: '[Image 1]', id: '0f8fad5b-d9cb-469f-a165-70867728950e' },
+          { marker: '[Image 2]', id: '0f8fad5b-d9cb-469f-a165-70867728950e' },
+        ],
+      },
+      'distinct',
+    ],
+    [
+      'more images than a line takes',
+      {
+        type: 'submit',
+        text: 'x',
+        images: Array.from({ length: MAX_SUBMIT_IMAGES + 1 }, (_, i) => ({
+          marker: `[Image ${i + 1}]`,
+          id: '0f8fad5b-d9cb-469f-a165-70867728950e'.slice(0, -2) + String(i).padStart(2, '0'),
+        })),
+      },
+      'at most',
+    ],
+    ['discard without ids', { type: 'discard' }, 'ids'],
     ['typing past the cap', { type: 'typing', text: 'x'.repeat(MAX_COMPLETE_CHARS + 1) }, 'text'],
     [
       'complete past the cap',

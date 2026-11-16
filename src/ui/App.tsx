@@ -38,18 +38,15 @@ import {
 } from './dialogspecs.js';
 import { Confirm } from './Confirm.js';
 import { Question, questionDialogHeight, type QuestionTyping } from './Question.js';
-import { loadConfig, resolveDefaultMode, resolveProfile } from '../config.js';
+import { loadConfig, resolveDefaultMode } from '../config.js';
 import { loadLastState, saveLastState, startMode } from '../laststate.js';
 import { effectiveAutoApprove } from '../approval.js';
 import { debugEnabled } from '../debug.js';
 import { noteFrameState } from './framedrops.js';
 import { compactThreshold } from '../agent/compaction.js';
 import { withLiveUsage } from '../agent/liveusage.js';
-import { NATIVE_IMAGE_NOTE, nextImageMarker, type ImageAttachment } from '../agent/attachments.js';
+import { nextImageMarker, type ImageAttachment } from '../agent/attachments.js';
 import { submitStageLabel } from '../agent/submitinput.js';
-import { imageReader, pasteIsNative } from '../ocr/select.js';
-import { systemOcr } from '../ocr/system.js';
-import { sniffImageMime } from '../ocr/vision.js';
 import { clipboardImageSupported, readClipboardImage } from './clipboard.js';
 import { isWarmEdge } from './warmtrigger.js';
 import { Suggestions, suggestionRows } from './Suggestions.js';
@@ -885,63 +882,29 @@ export function App() {
       notice('No image on the clipboard.', 'warn');
       return;
     }
-    // Native vision (REIKA_VISION=native on the active profile): the model can see, so nothing is
-    // read and nothing is described — the bytes ride along with the turn instead, and
-    // NATIVE_IMAGE_NOTE is what history keeps in their place. Skipped entirely when config hasn't
-    // loaded yet: falling back to the recognizer is better than a marker whose bytes were never
-    // registered.
-    // The active profile's route, not the startup one: REIKA_<NAME>_VISION is per profile.
-    const active = config && resolveProfile(config, activeProfileRef.current);
-    if (active && pasteIsNative(active)) {
-      const marker = nextImageMarker(imageAttachmentsRef.current);
-      imageAttachmentsRef.current = [
-        ...imageAttachmentsRef.current,
-        {
-          marker,
-          text: NATIVE_IMAGE_NOTE,
-          source: 'clipboard',
-          native: { bytes, mime: sniffImageMime(bytes) },
-        },
-      ];
-      setInputValue(prev => (prev === '' || prev.endsWith(' ') ? prev : prev + ' ') + marker + ' ');
-      notice(`Attached ${marker} — sent to ${active.model} as an image.`, 'info');
-      return;
-    }
-    // Named by what's actually running — a local vision model can take a minute on a full-screen
-    // capture, and "Extracting text" would read as a hang.
-    const vision = config?.visionModel;
-    setPasting(vision ? `Describing image with ${vision}` : 'Extracting text');
-    // A ctrl-v before the async config load lands still gets the platform recognizer. Resolved
-    // onto the active profile: a vision model with no base URL of its own is served by the
-    // profile the session is on now, not the one it started on.
-    const result = await (
-      config ? imageReader(resolveProfile(config, activeProfileRef.current)) : systemOcr()
-    )(bytes);
-    if (!result.ok) {
-      notice(
-        result.reason === 'unavailable'
-          ? 'Image paste needs system OCR — macOS and Windows only.'
-          : result.reason === 'no-text'
-            ? 'No text found in the pasted image.'
-            : `Couldn't read the pasted image: ${result.detail ?? 'OCR failed'}`,
-        'warn',
-      );
+    // The active profile's route (REIKA_<NAME>_VISION is per profile): native bytes, the vision
+    // model, or system OCR. The stage label names what is running.
+    const label = controller.imageReadLabel();
+    if (label) setPasting(label);
+    const read = await controller.readImage(bytes, 'clipboard image');
+    if (!read.ok) {
+      notice(read.notice, 'warn');
       return;
     }
     const marker = nextImageMarker(imageAttachmentsRef.current);
     imageAttachmentsRef.current = [
       ...imageAttachmentsRef.current,
-      { marker, text: result.text, source: 'clipboard' },
+      {
+        marker,
+        text: read.text,
+        source: 'clipboard',
+        ...(read.native ? { native: read.native } : {}),
+      },
     ];
     // Appended rather than inserted at the cursor: the Input owns cursor state and snaps to the
     // end on any external value change, so a mid-buffer insert would move the caret anyway.
     setInputValue(prev => (prev === '' || prev.endsWith(' ') ? prev : prev + ' ') + marker + ' ');
-    notice(
-      vision
-        ? `Attached ${marker} — ${result.text.length} chars described by ${vision}.`
-        : `Attached ${marker} — ${result.text.length} chars read from the clipboard image.`,
-      'info',
-    );
+    notice(`Attached ${marker} — ${read.detail}.`, 'info');
   };
 
   // A paste the Input refuses to hold verbatim: park the text and hand back the marker that
