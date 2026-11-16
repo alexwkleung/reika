@@ -319,6 +319,8 @@ export type CommandFrontEnd = {
   // Bare /model and /resume: the front end shows its own picker over what the controller lists.
   pickModel(targets: ModelTarget[]): void;
   pickSession(list: { entries: SessionEntry[]; heading: string }): void;
+  // `/help`'s key rows for this front end's keys; the TUI's when absent.
+  helpKeys?: readonly string[];
 };
 
 // What a front end hands `submit` for a typed line: the command hooks, the shell's, and the input
@@ -1131,6 +1133,7 @@ export function createController(opts: {
       startedAt,
       approvals: snapshot.approvals,
       mcpList: () => session?.mcp.list(),
+      ...(front.helpKeys ? { helpKeys: front.helpKeys } : {}),
     });
     if (reply !== null) {
       append(echo, { role: 'system', content: reply });

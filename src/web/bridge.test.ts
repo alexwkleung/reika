@@ -9,7 +9,7 @@ import { TRANSCRIPT_VERSION } from '../store/transcript.js';
 import type { Config, Message, Mode, Profile } from '../types.js';
 import { clearIdentity, setIdentity } from '../ui/identity.js';
 import { compactThreshold } from '../agent/compaction.js';
-import { createWebBridge, MAX_PENDING_UPLOADS } from './bridge.js';
+import { createWebBridge, MAX_PENDING_UPLOADS, WEB_HELP_KEYS } from './bridge.js';
 import { MAX_LISTED_SESSIONS, sessionId, type ServerEvent } from './protocol.js';
 import type * as PastedUrls from '../agent/pastedurls.js';
 
@@ -168,6 +168,19 @@ describe('committed events', () => {
     events.length = 0;
     controller.replace([note('fresh')]);
     expect(events).toEqual([{ type: 'reset', seq: expect.any(Number), messages: [note('fresh')] }]);
+  });
+
+  it("/help lists the page's keys, not the terminal's", async () => {
+    const { bridge, events } = setup();
+    bridge.handle({ type: 'submit', text: '/help' });
+    await flush();
+    const help = events.flatMap(e =>
+      e.type === 'message' && e.message.role === 'system' ? [e.message.content] : [],
+    );
+    expect(help).toHaveLength(1);
+    for (const row of WEB_HELP_KEYS) expect(help[0]).toContain(row);
+    expect(help[0]).not.toContain('ctrl-v');
+    expect(help[0]).not.toContain('cycle mode');
   });
 
   it('sends state once when it changes and not for an unrelated change', () => {

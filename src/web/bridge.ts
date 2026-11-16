@@ -134,6 +134,14 @@ function startsWithByIdentity(next: Message[], prev: Message[]): boolean {
   return next.length >= prev.length && prev.every((m, i) => next[i] === m);
 }
 
+// `/help`'s key rows for the page: the TUI's ctrl-v and shift+tab do other things in a browser.
+export const WEB_HELP_KEYS: readonly string[] = [
+  '  ⌘V/Ctrl+V, drop    attach an image; its text is read out and attached',
+  '  shift+enter        new line in the input box',
+  '  esc                stop the running turn (from an empty input box)',
+  '  mode pill          switch mode (the menu in the input box)',
+];
+
 export function createWebBridge(
   controller: Controller,
   // `now` must be the controller's clock: a live event pairs it with `pending.since`.
@@ -665,6 +673,7 @@ export function createWebBridge(
         answered: false,
       });
     },
+    helpKeys: WEB_HELP_KEYS,
     shell: {},
     onStage: next => {
       stage = next ? submitStageLabel(next) : null;
