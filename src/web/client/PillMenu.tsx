@@ -1,4 +1,12 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
 import { tip } from './Tooltip.js';
 
 // A pill in the input box that opens a menu above it: the mode and the model. A real button and
@@ -33,9 +41,13 @@ export function PillMenu({
 }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
+  const [quiet, setQuiet] = useState(true);
   const root = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const items = useRef<(HTMLButtonElement | null)[]>([]);
+  const popover = useRef<HTMLDivElement>(null);
+  // Set on open, cleared once the first focus lands: that focus must not scroll.
+  const opening = useRef(false);
   const menuId = useId();
 
   useEffect(() => {
@@ -46,8 +58,26 @@ export function PillMenu({
     document.addEventListener('pointerdown', onDown);
     return () => document.removeEventListener('pointerdown', onDown);
   }, [open]);
+  // The checked option is scrolled to before the first paint: scrolled after it, by the focus below,
+  // the menu visibly moved. macOS still flashes an overlay scrollbar for that scroll, paint or not,
+  // so the scrollbar stays hidden until the user scrolls or moves by key (`quiet`).
+  useLayoutEffect(() => {
+    const menu = popover.current;
+    const item = items.current[active];
+    if (!open || !menu || !item) return;
+    opening.current = true;
+    if (item.offsetTop + item.offsetHeight > menu.clientHeight) {
+      menu.scrollTop = item.offsetTop - (menu.clientHeight - item.offsetHeight) / 2;
+    }
+    // Only on open; arrow keys after it scroll as focus moves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
   useEffect(() => {
-    if (open) items.current[active]?.focus();
+    const item = items.current[active];
+    if (!open || !item) return;
+    item.focus({ preventScroll: true });
+    if (opening.current) opening.current = false;
+    else item.scrollIntoView?.({ block: 'nearest' });
   }, [open, active]);
   // A switch elsewhere (another tab, a turn starting) can disable the pill while its menu is open.
   useEffect(() => {
@@ -61,6 +91,7 @@ export function PillMenu({
         options.findIndex(o => o.checked),
       ),
     );
+    setQuiet(true);
     setOpen(true);
   };
   const close = () => {
@@ -72,6 +103,7 @@ export function PillMenu({
     onPick(value);
   };
   const onMenuKey = (e: KeyboardEvent) => {
+    setQuiet(false);
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       const step = e.key === 'ArrowDown' ? 1 : -1;
@@ -114,7 +146,15 @@ export function PillMenu({
         </svg>
       </button>
       {open ? (
-        <div className="pill-popover" role="menu" id={menuId} onKeyDown={onMenuKey}>
+        <div
+          ref={popover}
+          className={quiet ? 'pill-popover pill-popover--quiet' : 'pill-popover'}
+          role="menu"
+          id={menuId}
+          onKeyDown={onMenuKey}
+          onWheel={() => setQuiet(false)}
+          onTouchMove={() => setQuiet(false)}
+        >
           {options.map((o, i) => (
             <button
               key={o.value}
