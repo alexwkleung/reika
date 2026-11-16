@@ -342,6 +342,33 @@ describe('Composer', () => {
       await m.unmount();
     });
 
+    it('shows a thumbnail that opens the image, and lets its URL go with the chip', async () => {
+      const made = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:thumb-1');
+      const revoked = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+      const u = uploading();
+      const m = await mount({ upload: u.upload });
+      await m.paste({ files: [shot()] });
+      await u.answer({ kind: 'ok', upload: { id, chars: 9 } });
+      const thumb = m.button('View [Image 1]')!;
+      expect(thumb.querySelector('img')?.getAttribute('src')).toBe('blob:thumb-1');
+      await m.click(thumb);
+      const dialog = m.container.querySelector('.image-preview');
+      expect(dialog?.getAttribute('aria-label')).toBe('[Image 1] shot.png · 2 KB');
+      expect(dialog?.querySelector('img')?.getAttribute('src')).toBe('blob:thumb-1');
+      await act(async () => {
+        const e = new window.Event('keydown', { bubbles: true, cancelable: true });
+        Object.defineProperty(e, 'key', { value: 'Escape' });
+        document.dispatchEvent(e);
+      });
+      expect(m.container.querySelector('.image-preview')).toBeNull();
+      expect(revoked).not.toHaveBeenCalled();
+      await m.click(m.button('Remove [Image 1]')!);
+      expect(revoked).toHaveBeenCalledWith('blob:thumb-1');
+      made.mockRestore();
+      revoked.mockRestore();
+      await m.unmount();
+    });
+
     it('refuses a type the server does not take, and anything in shell mode', async () => {
       const u = uploading();
       const m = await mount({ upload: u.upload });

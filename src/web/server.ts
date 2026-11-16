@@ -20,8 +20,10 @@ export const HEADERS_TIMEOUT_MS = 10_000;
 export const REQUEST_TIMEOUT_MS = 30_000;
 const REFUSED_UPLOAD_GRACE_MS = 1000;
 
+// `blob:` images only: an attached image's thumbnail is drawn from the page's own copy of the file
+// (#979), never fetched. Scripts, styles and frames keep `'self'`.
 const CONTENT_SECURITY_POLICY =
-  "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
+  "default-src 'self'; img-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'";
 
 export type WebAsset = { body: string | Uint8Array; contentType: string };
 

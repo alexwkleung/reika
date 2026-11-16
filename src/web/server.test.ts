@@ -1049,7 +1049,7 @@ describe('assets', () => {
     expect(res.headers['referrer-policy']).toBe('no-referrer');
     expect(res.headers['cache-control']).toBe('no-store');
     expect(res.headers['content-security-policy']).toBe(
-      "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+      "default-src 'self'; img-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
     );
     expect((await send(server.port, { path: '/missing.js' })).status).toBe(404);
   });
