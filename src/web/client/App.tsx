@@ -40,9 +40,14 @@ function useFollowBottom(
 ): { following: boolean; jump: () => void } {
   const [following, setFollowing] = useState(true);
   const followingRef = useRef(true);
+  // Where the last scroll left the view, ours included: a scroll event compares against it to
+  // tell the reader's move up from a row arriving.
+  const lastTop = useRef(0);
   const toBottom = useCallback(() => {
     const el = scroller.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    lastTop.current = el.scrollTop;
   }, [scroller]);
   const apply = useCallback(
     (event: FollowEvent) => {
@@ -56,19 +61,31 @@ function useFollowBottom(
   useEffect(() => {
     const el = scroller.current;
     if (!el) return;
-    const onScroll = () => {
-      const next = nextFollow(followingRef.current, {
-        type: 'user-scroll',
-        metrics: {
-          scrollTop: el.scrollTop,
-          scrollHeight: el.scrollHeight,
-          clientHeight: el.clientHeight,
-        },
-      });
+    lastTop.current = el.scrollTop;
+    const settle = (next: boolean) => {
       if (next !== followingRef.current) {
         followingRef.current = next;
         setFollowing(next);
       }
+    };
+    const onScroll = () => {
+      settle(
+        nextFollow(followingRef.current, {
+          type: 'user-scroll',
+          metrics: {
+            scrollTop: el.scrollTop,
+            scrollHeight: el.scrollHeight,
+            clientHeight: el.clientHeight,
+          },
+          previousTop: lastTop.current,
+        }),
+      );
+      lastTop.current = el.scrollTop;
+    };
+    // A wheel turned up lets go before its scroll lands: a row arriving in between would otherwise
+    // be followed, putting the view back at the bottom under the reader's wheel.
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) settle(nextFollow(followingRef.current, { type: 'scroll-up-intent' }));
     };
     // A narrower window rewraps the rows, and taller controls shorten the transcript. The column is
     // watched too: some rows grow it with no new state behind them (the pending `↳ Running…` row
@@ -77,12 +94,14 @@ function useFollowBottom(
       if (followingRef.current) toBottom();
     };
     el.addEventListener('scroll', onScroll, { passive: true });
+    el.addEventListener('wheel', onWheel, { passive: true });
     const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(onResize) : null;
     observer?.observe(el);
     for (const child of el.children) observer?.observe(child);
     window.addEventListener('resize', onResize);
     return () => {
       el.removeEventListener('scroll', onScroll);
+      el.removeEventListener('wheel', onWheel);
       observer?.disconnect();
       window.removeEventListener('resize', onResize);
     };
@@ -137,7 +156,11 @@ export function App({
           </div>
         </div>
       ) : null}
-      <main ref={scroller} className="app-scroll" aria-label="Transcript">
+      <main
+        ref={scroller}
+        className={`app-scroll${following ? ' app-scroll--following' : ''}`}
+        aria-label="Transcript"
+      >
         <div className="app-column app-main">
           <Transcript messages={s.messages} idle={!busy} />
           {s.live ? (

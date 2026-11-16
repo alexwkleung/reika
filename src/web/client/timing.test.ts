@@ -29,6 +29,32 @@ describe('follow', () => {
     expect(nextFollow(true, { type: 'content-grew' })).toBe(true);
     expect(nextFollow(false, { type: 'user-scroll', metrics: at(1500) })).toBe(true);
   });
+
+  it('any move up lets go, even inside the slack; a wheel turned up lets go before it lands', () => {
+    const inSlack = 1500 - 10;
+    expect(nextFollow(true, { type: 'user-scroll', metrics: at(inSlack), previousTop: 1500 })).toBe(
+      false,
+    );
+    // Down inside the slack still follows, so coming back to the bottom picks it up again.
+    expect(
+      nextFollow(false, { type: 'user-scroll', metrics: at(inSlack), previousTop: 1400 }),
+    ).toBe(true);
+    expect(nextFollow(true, { type: 'scroll-up-intent' })).toBe(false);
+    // Let go, a scroll that did not move down does not take it back however near the bottom.
+    expect(
+      nextFollow(false, { type: 'user-scroll', metrics: at(inSlack), previousTop: inSlack }),
+    ).toBe(false);
+    expect(nextFollow(false, { type: 'user-scroll', metrics: at(1500), previousTop: 1500 })).toBe(
+      true,
+    );
+  });
+
+  it('content shrinking under the view moves it up but keeps following', () => {
+    const shrunk = { scrollTop: 1200, scrollHeight: 1700, clientHeight: 500 };
+    expect(nextFollow(true, { type: 'user-scroll', metrics: shrunk, previousTop: 1500 })).toBe(
+      true,
+    );
+  });
 });
 
 describe('pending row delay', () => {

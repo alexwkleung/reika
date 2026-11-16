@@ -160,6 +160,12 @@ textarea,
   overflow-y: auto;
   overscroll-behavior: contain;
 }
+/* While the view follows the bottom it scrolls itself on every streamed row, and an overlay
+   scrollbar flashed at each one. The thumb shows once the reader scrolls up, which stops the
+   following; the colour, not the width, so a classic scrollbar's gutter never moves the column. */
+.app-scroll--following {
+  scrollbar-color: transparent transparent;
+}
 .app-main {
   padding-top: 0.5em;
   padding-bottom: 1.5rem;
