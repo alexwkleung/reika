@@ -32,6 +32,9 @@
   border-radius: 2px;
   background: var(--reika-control-border);
   overflow: hidden;
+  /* Centred on the line box the bar sits at cap height, so the lowercase tag beside it reads low;
+     the middle of the x-height is where it looks centred against both. */
+  transform: translateY(0.09em);
 }
 .status-fill {
   display: block;
