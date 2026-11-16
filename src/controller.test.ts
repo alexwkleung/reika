@@ -366,6 +366,34 @@ describe('controller sides and stash', () => {
   });
 });
 
+describe('controller.stop', () => {
+  it('refuses every later line and turn', async () => {
+    const { controller, session } = controllerIn('agent');
+    controller.setStatus('idle');
+    controller.stop();
+    await controller.submit('hello', {
+      turn: {},
+      pastes: [],
+      images: [],
+      exit: vi.fn(),
+      pickModel: vi.fn(),
+      pickSession: vi.fn(),
+      shell: {},
+      onStage: vi.fn(),
+      onTaken: vi.fn(),
+    } as never);
+    expect(await controller.runTurn('hi', {}, {})).toEqual([]);
+    expect(session!.submit).not.toHaveBeenCalled();
+  });
+
+  it('counts conversations: /new and a resume each start one', () => {
+    const { controller } = controllerIn('agent');
+    const before = controller.conversation;
+    controller.newConversation(user('/new'));
+    expect(controller.conversation).toBe(before + 1);
+  });
+});
+
 describe('controller status and queue', () => {
   const queued = (content: string): QueuedMessage => ({ content, answers: {} });
   const open = { resuming: false };

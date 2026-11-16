@@ -155,6 +155,27 @@ describe('scrubMessage', () => {
     expect(wire).toMatchObject({ toolCalls: [{ id: 'c', name: 'write', args: { path: 'a.ts' } }] });
   });
 
+  it('scrubs every leaf of a tool’s args, whatever its keys are called', () => {
+    // An MCP server's schema is not ours: `name`, `id` and `kind` here are paths, not enums.
+    const wire = scrubMessage(
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [
+          {
+            id: 'c',
+            name: 'mcp__fs__open',
+            args: { name: `${HOME}/a.md`, id: `${HOME}/b`, nested: { kind: `${HOME}/c` } },
+          },
+        ],
+      },
+      CWD,
+    );
+    const args = (wire as { toolCalls: { args: Record<string, unknown> }[] }).toolCalls[0].args;
+    expect(JSON.stringify(args)).not.toContain(HOME);
+    expect(args.name).toBe('~/a.md');
+  });
+
   it('keeps a diff its row count', () => {
     const text = `  a\n- ${HOME}/x\n+ ${HOME}/y`;
     const wire = scrubMessage(
