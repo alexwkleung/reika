@@ -13,6 +13,10 @@ import { createWebBridge } from './bridge.js';
 import { MAX_LISTED_SESSIONS, sessionId, type ServerEvent } from './protocol.js';
 import type * as PastedUrls from '../agent/pastedurls.js';
 
+// The warmer's own dedupe and skips are warm.ts's tests; these check what reaches it (#998).
+const warmer = vi.hoisted(() => ({ onEdge: vi.fn(), cancel: vi.fn() }));
+vi.mock('../agent/warm.js', () => ({ createPrefixWarmer: () => warmer }));
+
 // A pasted-link fetch that announces itself and waits for the test to let it finish.
 const linkFetch = vi.hoisted(() => ({ gate: null as Promise<void> | null }));
 vi.mock('../agent/pastedurls.js', async importOriginal => {
@@ -1079,6 +1083,42 @@ describe('completions', () => {
       createController({ mode: 'agent', remember: vi.fn(), historyRoot: root }),
     );
     expect(unbooted.handle({ type: 'complete', text: '/mod' })).toEqual({ ok: true, reply: null });
+  });
+});
+
+describe('typing warms the cache (#998)', () => {
+  beforeEach(() => {
+    warmer.onEdge.mockClear();
+    warmer.cancel.mockClear();
+  });
+
+  it('hands the prefix to the warmer for a prompt', () => {
+    const { bridge, session } = setup('plan');
+    expect(bridge.handle({ type: 'typing', text: 'h' })).toEqual({ ok: true });
+    expect(warmer.onEdge).toHaveBeenCalledOnce();
+    expect(warmer.onEdge.mock.calls[0][0]).toMatchObject({
+      promptMode: 'plan',
+      bundle: session.bundle,
+    });
+  });
+
+  it('warms nothing for a command, a mention, shell mode or a busy session', () => {
+    const { bridge, controller } = setup();
+    bridge.handle({ type: 'typing', text: '/mo' });
+    bridge.handle({ type: 'typing', text: '@src' });
+    controller.setStatus('busy');
+    bridge.handle({ type: 'typing', text: 'h' });
+    expect(warmer.onEdge).not.toHaveBeenCalled();
+    const shell = setup('shell');
+    shell.bridge.handle({ type: 'typing', text: 'ls' });
+    expect(warmer.onEdge).not.toHaveBeenCalled();
+  });
+
+  it('a submit stops the warm before its line runs', async () => {
+    const { bridge } = setup();
+    bridge.handle({ type: 'submit', text: 'hello' });
+    await flush();
+    expect(warmer.cancel).toHaveBeenCalledWith('submit');
   });
 });
 

@@ -921,7 +921,7 @@ marked.
 
 **Speculative KV-cache warming (`REIKA_WARM=1`, default off, experimental — issue #81, `agent/warm.ts`).**
 The complement to prefix-stable mode: instead of keeping the cache _valid_, it prefills the cache
-_earlier_. On the first keystroke of a prompt (App wires it to the input's first change), a throwaway
+_earlier_. On the first keystroke of a prompt (`controller.warm`, which App calls on the input's first change and the web bridge on a tab's `typing` message, #998), a throwaway
 1-token request is fired carrying the exact prefix the eventual submit will send — system + history,
 minus the not-yet-finished user message — built by `buildRoundZeroPrefix` (the same round-0 assembler
 the real call uses, so the bytes match and a llama.cpp-style server prefills its prompt-prefix cache
@@ -1165,7 +1165,7 @@ Whoever passes these checks can run commands through the agent, so each is a rul
 - **Asset paths are checked on the raw target**: `..`, `%2e%2e`, a backslash, a NUL or a `%` left after one decode is 400 before the hook runs, because the URL parser resolves dot segments first.
 - **Streams are capped** at `MAX_STREAMS` and `MAX_STREAM_BUFFER_BYTES` per tab, so a tab that stops reading cannot grow the process.
 
-What a tab may ask for (protocol v3) has rules of its own in `bridge.ts`, each tested in `bridge.test.ts`:
+What a tab may ask for has rules of its own in `bridge.ts`, each tested in `bridge.test.ts`:
 
 - **A mode or model switch only between lines** (`switchRefusal`): idle, no line being prepared, no replay, nothing queued, no approval or confirm open, else 409. The status stays idle while a line asks its questions and fetches its links, and the line reads the mode after those waits, so `status === 'busy'` alone let another tab's switch run an agent prompt as a shell command. A submit carries the mode it was typed in and is refused when that has changed.
 - **A model switch names a listed target.** An unknown name would become an ad-hoc profile (#995), which stays a typed `/model x`.
