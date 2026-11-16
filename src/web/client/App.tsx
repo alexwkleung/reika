@@ -69,13 +69,16 @@ function useFollowBottom(
         setFollowing(next);
       }
     };
-    // A narrower window rewraps the rows, and taller controls shorten the transcript.
+    // A narrower window rewraps the rows, and taller controls shorten the transcript. The column is
+    // watched too: some rows grow it with no new state behind them (the pending `↳ Running…` row
+    // after its delay, a Thinking block opening), which the content effect below never sees.
     const onResize = () => {
       if (followingRef.current) toBottom();
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(onResize) : null;
     observer?.observe(el);
+    for (const child of el.children) observer?.observe(child);
     window.addEventListener('resize', onResize);
     return () => {
       el.removeEventListener('scroll', onScroll);
