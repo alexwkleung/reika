@@ -160,7 +160,8 @@ export function Composer({
   // Only it may come back on "Don't send": a confirm another tab's line raised is not this box's.
   // A line that finishes before its POST answers can outlive its preparation here; the cost is
   // this tab's previous line refilling an empty box, which is visible and harmless.
-  const ownLine = useRef<string | null>(null);
+  // With the chips it named: a line sent back keeps its images, which the server hands back too.
+  const ownLine = useRef<{ text: string; chips: ImageChip[] } | null>(null);
   const preparing = session?.preparing ?? false;
   useEffect(() => {
     if (!preparing) ownLine.current = null;
@@ -169,7 +170,9 @@ export function Composer({
     restoreLine.current = () => {
       const line = ownLine.current;
       ownLine.current = null;
-      if (line !== null) setText(current => (current === '' ? line : current));
+      if (line === null || box.current?.value) return;
+      setText(line.text);
+      setChips(cs => [...cs, ...line.chips.filter(c => !cs.some(k => k.marker === c.marker))]);
     };
   }
 
@@ -254,7 +257,8 @@ export function Composer({
     if (failure) return;
     const ranAlone =
       session !== null && session.status === 'idle' && !session.preparing && !session.queue.length;
-    ownLine.current = ranAlone ? value : null;
+    const sentChips = chips.filter(c => images.some(i => i.marker === c.marker));
+    ownLine.current = ranAlone ? { text: value, chips: sentChips } : null;
     // Cleared only once the server took it, and only if nothing was typed meanwhile.
     const left = box.current?.value === value ? '' : (box.current?.value ?? '');
     setText(current => (current === value ? '' : current));
