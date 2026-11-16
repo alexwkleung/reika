@@ -60,13 +60,15 @@ export function statusStrip(s: WireState, stream: StreamStatus | null): StripIte
     const ceiling = usable ?? window;
     const fill = contextFill(contextTokens, ceiling) ?? 0;
     const pct = Math.round(fill * 100);
+    // The TUI's own text, `20k/32k (85% of 23k)`, less its `ctx`: the bar beside it says that.
+    const size = `${kFormat(contextTokens)}/${kFormat(window)}`;
     items.push({
       kind: 'meter',
       fill: Math.min(1, fill),
-      text: `${pct}% of ${kFormat(ceiling)}`,
-      title:
-        formatContext(contextTokens, window, usable) ||
-        `ctx 0/${kFormat(window)}${usable ? ` (0% of ${kFormat(usable)})` : ''}`,
+      text: usable ? `${size} (${pct}% of ${kFormat(usable)})` : `${size} (${pct}%)`,
+      title: usable
+        ? `${kFormat(contextTokens)} of a ${kFormat(window)} window. History is shed at ${kFormat(usable)}, the window less room for the reply.`
+        : `${kFormat(contextTokens)} of a ${kFormat(window)} window.`,
       warn: fill >= CONTEXT_WARN_FILL,
     });
   } else if (contextTokens > 0) {

@@ -59,7 +59,7 @@ describe('statusStrip', () => {
     );
     expect(items.map(label)).toEqual([
       'auto approve',
-      '63% of 32k',
+      '20k/32k (63%)',
       '12k ↑ 830 ↓',
       '21 tok/s',
       'cache 90%',
@@ -69,7 +69,7 @@ describe('statusStrip', () => {
     expect(items[1]).toMatchObject({
       kind: 'meter',
       fill: 0.625,
-      title: 'ctx 20k/32k (63%)',
+      title: '20k of a 32k window.',
       warn: false,
     });
     expect(items[4]).toMatchObject({ title: '90% cached (18k)' });
@@ -80,16 +80,16 @@ describe('statusStrip', () => {
       strip(state({ contextWindow: 32_000, contextUsable: 23_398, ...over }))[0];
     expect(meter({ lastUsage: { promptTokens: 20_000, completionTokens: 1 } })).toMatchObject({
       kind: 'meter',
-      text: '85% of 23k',
-      title: 'ctx 20k/32k (85% of 23k)',
+      text: '20k/32k (85% of 23k)',
+      title: '20k of a 32k window. History is shed at 23k, the window less room for the reply.',
       // 63% of the raw window: the warning that never fired before history was shed.
       warn: true,
     });
-    expect(meter({})).toMatchObject({ text: '0% of 23k', title: 'ctx 0/32k (0% of 23k)' });
+    expect(meter({})).toMatchObject({ text: '0/32k (0% of 23k)' });
     // Past the limit the bar holds full; the percent says by how much.
     expect(meter({ lastUsage: { promptTokens: 30_000, completionTokens: 1 } })).toMatchObject({
       fill: 1,
-      text: '128% of 23k',
+      text: '30k/32k (128% of 23k)',
     });
   });
 
@@ -97,11 +97,11 @@ describe('statusStrip', () => {
     expect(strip(state({ contextWindow: 32_000 }))[0]).toMatchObject({
       kind: 'meter',
       fill: 0,
-      text: '0% of 32k',
+      text: '0/32k (0%)',
       warn: false,
     });
     expect(strip(state({ estimatedContext: 900, contextWindow: 1000 }))[0]).toMatchObject({
-      text: '90% of 1.0k',
+      text: '900/1.0k (90%)',
       warn: true,
     });
     expect(strip(state({ estimatedContext: 1200, contextWindow: 1000 }))[0]).toMatchObject({
@@ -169,7 +169,7 @@ describe('StatusLine', () => {
     expect(html).toContain('role="meter"');
     expect(html).toContain('aria-valuenow="50"');
     expect(html).toContain('style="width:50%"');
-    expect(html).toContain('50% of 32k');
+    expect(html).toContain('16k/32k (50%)');
     expect(html).toContain('<span class="status-path" title="/repo">/repo</span>');
     expect(renderToStaticMarkup(createElement(StatusLine, { session: null, stream: null }))).toBe(
       '',
