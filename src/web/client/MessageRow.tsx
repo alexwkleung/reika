@@ -96,7 +96,8 @@ function AssistantRow({ m }: { m: Of<'assistant'> }) {
   );
 }
 
-function CommandChip({ command }: { command: NonNullable<Of<'tool'>['command']> }) {
+// Also the running command's live block (LiveTurn), so a result commits onto the same rows.
+export function CommandChip({ command }: { command: NonNullable<Of<'tool'>['command']> }) {
   return (
     <div className="tool-block command">
       <div className="command-line">

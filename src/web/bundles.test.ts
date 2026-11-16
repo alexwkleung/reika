@@ -52,6 +52,7 @@ describe('bundle boundaries', () => {
     // entry must be Ink-, chalk- and Node-free all the way down; listed so one cannot arrive unseen.
     const SHARED = [
       'src/mcp/toolprefix.ts', // the MCP name prefix toolLabel reads
+      'src/ui/commandtail.ts', // the command chip's output tail, live and committed
       'src/ui/diffrows.ts', // diff line numbering
       'src/ui/format.ts', // toolLabel, toolVerb, toolTimer, changeLabel, prefillLabel
       'src/ui/harnessecho.ts', // reasoningfold's echo strip
