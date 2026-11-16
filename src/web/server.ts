@@ -358,12 +358,23 @@ export async function startWebServer(
       sendText(req, res, 413, 'payload too large');
       return;
     }
+    // Before the read: a refused upload must not buffer its bytes first.
+    const refused = bridge.uploadRefusal();
+    if (refused) {
+      sendJson(req, res, refused.status, { error: refused.error });
+      return;
+    }
     const body = await readBody(req, MAX_IMAGE_BYTES);
     if (body === 'too-large') {
       sendText(req, res, 413, 'payload too large');
       return;
     }
-    const result = await bridge.upload(new Uint8Array(body), mediaType);
+    const result = await bridge.upload(body, mediaType);
+    // The tab that sent it is gone and will never name the id: nobody else can.
+    if (result.ok && (res.destroyed || req.socket.destroyed)) {
+      await bridge.handle({ type: 'discard', ids: [result.reply.id] });
+      return;
+    }
     if (result.ok) sendJson(req, res, 200, { ok: true, reply: result.reply });
     else sendJson(req, res, result.status, { error: result.error });
   }

@@ -1130,6 +1130,54 @@ describe('image uploads (#979)', () => {
     ).toMatchObject({ ok: false, conflict: true });
   });
 
+  it('a line that ends without being built hands its uploads back', async () => {
+    const { controller, session, bridge } = setup();
+    reads(controller);
+    const id = idOf(await bridge.upload(png, 'image/png'));
+    const line = {
+      type: 'submit' as const,
+      text: '[Image 1]',
+      images: [{ marker: '[Image 1]', id }],
+    };
+    // A confirm answered "Don't send": the controller returns without taking the images.
+    const submit = vi.spyOn(controller, 'submit').mockResolvedValueOnce();
+    expect(bridge.handle(line)).toEqual({ ok: true });
+    // Claimed while it runs, so a second line cannot take it too.
+    expect(bridge.handle(line)).toMatchObject({ ok: false, conflict: true });
+    await flush();
+    submit.mockRestore();
+    expect(bridge.handle(line)).toEqual({ ok: true });
+    await vi.waitFor(() => expect(session.submit).toHaveBeenCalledOnce());
+  });
+
+  it('scrubs a refusal that quotes a path (#990)', async () => {
+    const { controller, bridge } = setup();
+    vi.spyOn(controller, 'readImage').mockResolvedValue({
+      ok: false,
+      notice: `Couldn't read the pasted image: ENOENT ${homedir()}/secret/x.png`,
+    });
+    const r = await bridge.upload(png, 'image/png');
+    expect(r.ok).toBe(false);
+    expect(r.ok ? '' : r.error).not.toContain(homedir());
+    expect(r.ok ? '' : r.error).toContain('~/secret/x.png');
+  });
+
+  it('a read that finishes after a new conversation is not held for it', async () => {
+    const { controller, bridge } = setup();
+    let release!: () => void;
+    vi.spyOn(controller, 'readImage').mockReturnValue(
+      new Promise(resolve => {
+        release = () => resolve({ ok: true, text: 'x', detail: '1 chars' });
+      }),
+    );
+    const pending = bridge.upload(png, 'image/png');
+    expect(bridge.uploadRefusal()).toMatchObject({ status: 429 });
+    expect(bridge.handle({ type: 'new' })).toEqual({ ok: true });
+    release();
+    expect(await pending).toMatchObject({ ok: false, status: 409 });
+    expect(bridge.uploadRefusal()).toBeNull();
+  });
+
   it('refuses bytes that are not the declared image type, and reads nothing', async () => {
     const { controller, bridge } = setup();
     const spy = reads(controller);
