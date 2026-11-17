@@ -5,10 +5,16 @@
 // would keep alive.
 export const DRAIN_TIMEOUT_MS = 5000;
 
-type DrainableStream = { write: (chunk: string, cb: (err?: Error | null) => void) => unknown };
+type DrainableStream = {
+  write: (chunk: string, cb: (err?: Error | null) => void) => unknown;
+  once?: (event: 'error', listener: (err: Error) => void) => unknown;
+};
 
 export function drainStream(stream: DrainableStream): Promise<void> {
   return new Promise(resolve => {
+    // A reader that closed early (`reika --help | head -2`) fails the write with EPIPE, emitted as
+    // an 'error' event; unhandled, it crashes the process the drain was about to exit cleanly.
+    stream.once?.('error', () => resolve());
     try {
       stream.write('', () => resolve());
     } catch {

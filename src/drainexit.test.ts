@@ -73,3 +73,28 @@ describe('exitAfterDrain', () => {
     expect(exits).toEqual([0]);
   });
 });
+
+describe('exitAfterDrain with a closed reader', () => {
+  it('exits cleanly when the reader closes the pipe early', async () => {
+    const script = [
+      `import { exitAfterDrain } from ${JSON.stringify(HELPER)};`,
+      `process.stdout.write('line\\n'.repeat(50000));`,
+      'await exitAfterDrain(0);',
+    ].join('\n');
+    const code = await new Promise<number | null>((resolve, reject) => {
+      const child = spawn(
+        process.execPath,
+        ['--import', 'tsx', '--input-type=module', '-e', script],
+        {
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      );
+      let stderr = '';
+      child.stderr.on('data', (c: Buffer) => (stderr += c));
+      child.stdout.once('data', () => child.stdout.destroy());
+      child.on('error', reject);
+      child.on('close', c => (c === 0 ? resolve(c) : reject(new Error(`exit ${c}: ${stderr}`))));
+    });
+    expect(code).toBe(0);
+  });
+});
