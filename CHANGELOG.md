@@ -15,13 +15,13 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   and no longer prints `(aborted)` under the reply as if it were text the model wrote (#1063).
 - The TUI's conversation logic (turns, the queue, approvals, commands, auto-save) moved out of
   the UI into a controller that other front ends can drive. Nothing is meant to behave
-  differently; if something does, please open an issue (#584).
-- The ↑ input history keeps the last 500 prompts of a session (#584).
+  differently; if something does, please open an issue (#1064).
+- The ↑ input history keeps the last 500 prompts of a session (#1064).
 
 ### Fixed
 
 - The PR badge in the status bar now follows `/cd` instead of staying on the directory reika was
-  started in (#584).
+  started in (#1064).
 
 - A command that takes 150–300ms no longer flashes its `↳ Running…` row for a few frames: the row
   now waits 300ms instead of 150ms, which covers most of the sandbox and diff overhead every
