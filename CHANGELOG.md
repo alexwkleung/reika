@@ -24,6 +24,10 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- A command that takes 150–300ms no longer flashes its `↳ Running…` row for a few frames: the row
+  now waits 300ms instead of 150ms, which covers most of the sandbox and diff overhead every
+  `bash` call pays. A fast command's streamed output also waits with the row instead of forcing it
+  up, so a command that prints and returns at once paints only its result (#1062).
 - `reika -p --json` piped into another program (`| jq`, a harness capturing stdout) no longer
   cuts off at 64 KiB on macOS. The process exited before the output reached the pipe; it now waits
   for it, up to five seconds (#1061).
