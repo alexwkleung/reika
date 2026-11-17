@@ -172,13 +172,16 @@ export function App() {
     forCall: boolean;
     command?: string;
   } | null>(null);
-  // Forced past the delay by an answered approval (its frame collapses the dialog into the row, #897)
-  // and by streamed output, which would otherwise draw first and drop 1–2 rows when the row arrives.
+  // Forced past the delay by an answered approval (its frame collapses the dialog into the row, #897).
   const pendingRow = usePendingRow(
     pendingTool,
     runningCall?.call ?? 0,
-    streamingTool !== '' || (dialogHold?.forCall === true && dialogHold.at === runningCall?.since),
+    dialogHold?.forCall === true && dialogHold.at === runningCall?.since,
   );
+  // Output streamed inside the delay waits with the row rather than forcing it up: a command that
+  // printed and returned at once drew row, `$ command` and output for a few frames, then its result.
+  // Held, not forced, it also never draws first and drops 1–2 rows when the row arrives.
+  const shownStreamingTool = pendingTool && !pendingRow ? '' : streamingTool;
   const heldFrameRef = useRef<DOMElement>(null);
   const heldFrameRowsRef = useRef(0);
   // The blank the hold is leaving right now, which is what the ease-out shrinks.
@@ -1158,7 +1161,7 @@ export function App() {
             messages={messages}
             streaming={status === 'busy' ? streaming : ''}
             streamingReasoning={status === 'busy' ? streamingReasoning : ''}
-            streamingTool={status === 'busy' ? streamingTool : ''}
+            streamingTool={status === 'busy' ? shownStreamingTool : ''}
             streamingNested={subagentLive}
             streamingCommand={streamingToolName === 'bash'}
             // Hidden while a dialog is up: the approval a tool asks for happens *inside* the call
