@@ -210,7 +210,7 @@ body.with-history {
   cursor: pointer;
 }
 .history-row:hover:not(:disabled) {
-  background: var(--reika-control-bg);
+  background: var(--reika-menu-active);
 }
 .history-row:focus-visible {
   outline-offset: -2px;
