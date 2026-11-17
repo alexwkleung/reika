@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { sweepDebugLogs } from './debug.js';
+import { exitAfterDrain } from './drainexit.js';
 import { sweepStaleSpills } from './tools/_spill.js';
 import { USAGE, parseHeadlessArgs } from './headless/headlessargs.js';
 import { loadWithProductionReact } from './ui/reactbuild.js';
@@ -89,7 +90,7 @@ if (headless?.version) {
 }
 if (headless?.help) {
   process.stdout.write(`${USAGE}\n`);
-  process.exit(0);
+  await exitAfterDrain(0);
 }
 
 if (headless) {
@@ -112,7 +113,7 @@ if (headless) {
     process.stderr.write(`reika: ${e.message}\n`);
     return 1;
   });
-  process.exit(code);
+  await exitAfterDrain(code);
 } else {
   const { startTui } = await loadWithProductionReact(() => import('./ui/tui.js'));
   startTui();

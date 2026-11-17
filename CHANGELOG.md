@@ -24,6 +24,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- `reika -p --json` piped into another program (`| jq`, a harness capturing stdout) no longer
+  cuts off at 64 KiB on macOS. The process exited before the output reached the pipe; it now waits
+  for it, up to five seconds (#1061).
 - The TUI now shortens home paths to `~/…`, and hides your name, handle and email under `/anon`, in
   assistant replies, Thinking, compaction notes, diffs, the plan checklist, queued prompts and the
   approval, question and confirm dialogs. An approval still shows any secret in full, since you
