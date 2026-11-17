@@ -52,6 +52,7 @@ const fullAssistant: Full<'assistant'> = {
   compactionNote: true,
   discarded: 'note',
   harnessStop: 'loop',
+  interrupted: true,
   planFinal: true,
   planChecks: { at: 3, missing: ['x'], deadUrls: [] },
   reasoningAged: true,

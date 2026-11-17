@@ -49,6 +49,7 @@ const assistant: Role<'assistant'> = {
   compactionNote: false,
   discarded: 'stream',
   harnessStop: 'loop',
+  interrupted: true,
   planFinal: true,
   planChecks: { at: LEAK.length, missing: [LEAK], deadUrls: [{ url: LEAK, error: LEAK }] },
   reasoningAged: false,

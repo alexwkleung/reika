@@ -67,6 +67,9 @@ export type Message =
       // text is the harness's own report, not an answer. A front end with no reader (headless)
       // cannot tell the two apart from the content.
       harnessStop?: 'loop' | 'length' | 'edit' | 'max-turns';
+      // Set on the message a user abort commits. The model reads `content`'s trailing `(aborted)`;
+      // a front end drops that marker and says it on the turn's closing line instead.
+      interrupted?: boolean;
       // Set only on the plan-mode force-write final message — the verbatim anchor the
       // agent-handoff distillation pins on (agent/compaction.ts distillPlanHandoff). Never
       // set in agent or chat mode.
