@@ -4237,6 +4237,7 @@ function commitAborted(
   const m: Message = {
     role: 'assistant',
     content,
+    interrupted: true,
     ...(reasoning ? { reasoning } : {}),
     durationMs: Date.now() - turnStart,
     ...(fetchedUrls.size > 0 ? { sources: [...fetchedUrls] } : {}),
