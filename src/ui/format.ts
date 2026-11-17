@@ -29,6 +29,21 @@ export function formatDurationMs(ms: number): string {
   return formatElapsed(Math.round(ms / 1000));
 }
 
+// The turn's closing line: an interrupted turn says so there, in place of the `(aborted)` marker
+// the model reads at the end of its content.
+export function turnEndLabel(durationMs: number, interrupted: boolean | undefined): string {
+  return interrupted
+    ? `Interrupted after ${formatDurationMs(durationMs)}`
+    : `Worked for ${formatDurationMs(durationMs)}`;
+}
+
+const ABORTED_MARKER_RE = /(?:\n\n)?\(aborted\)$/;
+
+// An interrupted message's prose without the model-facing marker (agent/loop.ts commitAborted).
+export function displayProse(content: string, interrupted: boolean | undefined): string {
+  return interrupted ? content.replace(ABORTED_MARKER_RE, '') : content;
+}
+
 // Below both, the label would flash past on an ordinary append round.
 const PREFILL_LABEL_MIN_TOKENS = 2048;
 const PREFILL_LABEL_MIN_MS = 2000;

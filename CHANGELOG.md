@@ -21,6 +21,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   install showed the version of whatever branch was checked out and ran whatever was last built, so
   switching branches or building elsewhere silently changed the installed `reika`. Run
   `pnpm run reinstall:global` to pick up new changes (#956).
+- A turn stopped with ctrl-c now closes with `■ Interrupted after 4s` instead of `Worked for`,
+  and no longer prints `(aborted)` under the reply as if it were text the model wrote (#1063).
 
 ### Fixed
 

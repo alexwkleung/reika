@@ -6,7 +6,7 @@ import { HIDDEN_TOOL_ARGS } from './format.js';
 // draws by the same rules as Scrollback.tsx.
 
 // A "Worked for" line sits in the log beside the messages (useScrollbackLog).
-export type LogItem = Message | { workedMs: number };
+export type LogItem = Message | { workedMs: number; interrupted?: boolean };
 
 // The display form of a tool result's summary (#567, #627).
 //

@@ -15,7 +15,14 @@ import { theme, themeChalk } from './theme.js';
 import { scrubGeneration } from './identity.js';
 import { holdPartialPath, scrubDisplay, scrubLines, scrubOutput } from './scrub.js';
 import { DiffView } from './DiffView.js';
-import { changeLabel, formatDurationMs, toolLabel, toolTimer, toolVerb } from './format.js';
+import {
+  changeLabel,
+  displayProse,
+  toolLabel,
+  toolTimer,
+  toolVerb,
+  turnEndLabel,
+} from './format.js';
 import { contentWidth, hangingWrap, wrapLines } from './layout.js';
 import { foldedAssistantFields, foldedLiveFields } from './reasoningfold.js';
 import { OUTPUT_TAIL_LINES } from './commandtail.js';
@@ -219,7 +226,9 @@ export function Scrollback({
           <LogItemView key={i} item={item} prev={scrollback[i - 1]} log={scrollback} index={i} />
         )}
       </Static>
-      {showHeldWorked && held !== null ? <WorkedRow durationMs={held} /> : null}
+      {showHeldWorked && held !== null ? (
+        <WorkedRow durationMs={held.ms} interrupted={held.interrupted} />
+      ) : null}
       {indent ? (
         // Same box MessageView gives a nested committed row: the margin plus an explicit width
         // that pays for it, so a full line wraps under Ink rather than at the terminal edge. Only
@@ -254,10 +263,12 @@ export function Scrollback({
 // its message it lands while the spinner is still up, and the spinner leaving afterwards shrinks
 // the frame and moves the input up. End-of-turn notices therefore print above it.
 
-function useScrollbackLog(messages: Message[]): { log: LogItem[]; held: number | null } {
+type HeldTurnEnd = { ms: number; interrupted?: boolean };
+
+function useScrollbackLog(messages: Message[]): { log: LogItem[]; held: HeldTurnEnd | null } {
   const seen = useRef(new WeakSet<Message>());
   const log = useRef<LogItem[]>([]);
-  const held = useRef<number | null>(null);
+  const held = useRef<HeldTurnEnd | null>(null);
   return useMemo(() => {
     const fresh = messages.filter(m => !seen.current.has(m));
     if (fresh.length === 0) return { log: log.current, held: held.current };
@@ -266,11 +277,11 @@ function useScrollbackLog(messages: Message[]): { log: LogItem[]; held: number |
       seen.current.add(m);
       const endsTurn = m.role === 'assistant' && m.durationMs !== undefined && !m.nested;
       if (held.current !== null && (m.role === 'user' || endsTurn)) {
-        next.push({ workedMs: held.current });
+        next.push({ workedMs: held.current.ms, interrupted: held.current.interrupted });
         held.current = null;
       }
       next.push(m);
-      if (endsTurn) held.current = m.durationMs!;
+      if (endsTurn) held.current = { ms: m.durationMs!, interrupted: m.interrupted };
     }
     log.current = next;
     return { log: next, held: held.current };
@@ -723,14 +734,14 @@ export function markProse(rendered: string, withMarker = true): string {
 // marginLeft on a tool result's command/output block; it pays for that out of the row's width.
 const COMMAND_MARGIN = 4;
 
-function WorkedRow({ durationMs }: { durationMs: number }) {
+function WorkedRow({ durationMs, interrupted }: { durationMs: number; interrupted?: boolean }) {
   return (
     <Box marginTop={1}>
       {/* Filled square doubles as a "turn complete" marker (the universal
           stop/done glyph) and an anchor of color on an otherwise inert line. */}
       <Text>
-        <Text color={theme.accent}>{'■ '}</Text>
-        <Text color={theme.muted}>{`Worked for ${formatDurationMs(durationMs)}`}</Text>
+        <Text color={interrupted ? theme.warning : theme.accent}>{'■ '}</Text>
+        <Text color={theme.muted}>{turnEndLabel(durationMs, interrupted)}</Text>
       </Text>
     </Box>
   );
@@ -747,7 +758,9 @@ function LogItemView({
   log: LogItem[];
   index: number;
 }) {
-  if ('workedMs' in item) return <WorkedRow durationMs={item.workedMs} />;
+  if ('workedMs' in item) {
+    return <WorkedRow durationMs={item.workedMs} interrupted={item.interrupted} />;
+  }
   return (
     <MessageView
       msg={item}
@@ -888,8 +901,12 @@ function renderMessage(
     // call; rendering that as a real line would add a blank row (with margins on
     // both sides) between the Thinking block and the tool calls, so treat it as
     // empty.
-    const prose = msg.planChecks ? folded.content.slice(0, msg.planChecks.at) : folded.content;
+    const prose = msg.planChecks
+      ? folded.content.slice(0, msg.planChecks.at)
+      : displayProse(folded.content, msg.interrupted);
     const hasContent = !!prose?.trim();
+    // An abort before any output leaves nothing above the closing line, which says it.
+    if (msg.interrupted && !folded.reasoning && !hasContent && !ctx.nested) return null;
     return (
       <Box flexDirection="column" marginTop={1}>
         {folded.reasoning ? (
@@ -946,7 +963,7 @@ function renderMessage(
         {/* A top-level turn's line is its own log entry (useScrollbackLog); only a subagent's
             stays inline, since it closes a nested block mid-turn. */}
         {msg.durationMs !== undefined && ctx.nested ? (
-          <WorkedRow durationMs={msg.durationMs} />
+          <WorkedRow durationMs={msg.durationMs} interrupted={msg.interrupted} />
         ) : null}
       </Box>
     );
