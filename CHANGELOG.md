@@ -17,15 +17,26 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 - `/new` (and New conversation in `reika web`) keeps the model you are on instead of switching back
   to the default profile. It still resets the conversation, tokens and mode, and `REIKA_MODE_MODELS`
   applies over the kept model again (#1033).
+
+## [0.12.0] - 2026-11-17
+
+### Changed
+
 - `pnpm run install:global` now installs a copy of the checkout instead of a link to it. A linked
   install showed the version of whatever branch was checked out and ran whatever was last built, so
   switching branches or building elsewhere silently changed the installed `reika`. Run
   `pnpm run reinstall:global` to pick up new changes (#956).
 - A turn stopped with ctrl-c now closes with `■ Interrupted after 4s` instead of `Worked for`,
   and no longer prints `(aborted)` under the reply as if it were text the model wrote (#1063).
+- The TUI's conversation logic (turns, the queue, approvals, commands, auto-save) moved out of
+  the UI into a controller that other front ends can drive. Nothing is meant to behave
+  differently; if something does, please open an issue (#1064).
+- The ↑ input history keeps the last 500 prompts of a session (#1064).
 
 ### Fixed
 
+- The PR badge in the status bar now follows `/cd` instead of staying on the directory reika was
+  started in (#1064).
 - A command that takes 150–300ms no longer flashes its `↳ Running…` row for a few frames: the row
   now waits 300ms instead of 150ms, which covers most of the sandbox and diff overhead every
   `bash` call pays. A fast command's streamed output also waits with the row instead of forcing it
