@@ -247,7 +247,13 @@ export function Composer({
 
   // The arrow keys move the selection past the list's visible rows.
   const selected = completion?.selected ?? null;
+  // The pointer moves the selection without scrolling (PillMenu's byPointer, the same runaway).
+  const pickedByPointer = useRef(false);
   useLayoutEffect(() => {
+    if (pickedByPointer.current) {
+      pickedByPointer.current = false;
+      return;
+    }
     if (selected === null) return;
     const row = completionList.current?.children[selected] as HTMLElement | undefined;
     row?.scrollIntoView?.({ block: 'nearest' });
@@ -332,9 +338,10 @@ export function Composer({
   };
   const abort = async (): Promise<void> => setError(sendFailure(await send({ type: 'abort' })));
 
+  // Focus stays on the pill the pick came from (PillMenu hands it back), not the box: a switch is
+  // not a request to type.
   const switchTo = async (message: ClientMessage): Promise<void> => {
     setError(sendFailure(await send(message)));
-    box.current?.focus();
   };
 
   const acceptAt = (index: number, fromEnter: boolean): void => {
@@ -578,10 +585,16 @@ export function Composer({
                   className="composer-completion"
                   // Keeps focus in the box, so the pick lands where the caret was.
                   onMouseDown={e => e.preventDefault()}
+                  // The highlight follows the pointer, as it does the arrow keys: one item is what
+                  // Enter would pick, however it was reached.
+                  onMouseEnter={() => {
+                    if (completion.selected === i) return;
+                    pickedByPointer.current = true;
+                    setCompletion(c => (c ? { ...c, selected: i } : c));
+                  }}
                   onClick={() => acceptAt(i, false)}
                 >
-                  {/* A command in the page's font, as a chat app lists its commands; a file path
-                      stays code, the literal it is. */}
+                  {/* A command a step heavier than a file, so the two kinds read apart. */}
                   <span
                     className={`composer-completion-label${label.startsWith('/') ? ' composer-completion-label--command' : ''}`}
                   >
@@ -761,7 +774,8 @@ export function Composer({
                 disabled={!canSend}
                 onClick={() => void submit(text)}
               >
-                <svg viewBox="0 0 16 16" aria-hidden="true">
+                {/* Drawn over the whole button (composer.css), the arrow in the middle 16 of its 32. */}
+                <svg viewBox="-8 -8 32 32" aria-hidden="true">
                   <path d="M8 13V3M3.5 7.5 8 3l4.5 4.5" />
                 </svg>
               </button>

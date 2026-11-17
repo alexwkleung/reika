@@ -103,19 +103,19 @@
   cursor: pointer;
   font-size: 0.875rem;
 }
+/* One highlight for every menu (this list, the pills' menus): a fill a clear step off the popover,
+   moved alike by the pointer and the arrow keys, marking what Enter picks. A dialog's choices keep
+   the accent ring instead (dialogs.css): there Enter commits a decision. */
 .composer-completion[aria-selected='true'] {
-  background: var(--reika-control-bg);
+  background: var(--reika-menu-active);
 }
-.composer-completion[aria-selected='true'] .composer-completion-label {
-  color: var(--reika-accent);
-}
+/* The page's font for both: a picker is for scanning names, and a path is code once it is in the
+   transcript. A command keeps a weight of its own so the two kinds read apart. */
 .composer-completion-label {
   flex-shrink: 0;
-  font-family: var(--reika-mono);
   color: var(--reika-text);
 }
 .composer-completion-label--command {
-  font-family: inherit;
   font-weight: 500;
 }
 .composer-completion-detail {
@@ -137,7 +137,8 @@
   cursor: text;
   transition: border-color 120ms ease;
 }
-.composer-card:focus-within {
+/* The card lights for the text only: a pill or the attach button holding focus is not typing. */
+.composer-card:has(.composer-input:focus) {
   border-color: color-mix(in srgb, var(--reika-accent) 40%, var(--reika-rule));
 }
 .composer-card-locked {
@@ -187,6 +188,10 @@
   color: color-mix(in oklab, var(--reika-accent) 80%, white);
   background: var(--chip);
   box-shadow: 0 0 0 3px var(--chip);
+}
+.composer-token--file {
+  --chip: color-mix(in oklab, var(--reika-link) 15%, var(--reika-code-bg));
+  color: color-mix(in oklab, var(--reika-link) 85%, white);
 }
 .composer-token--marker {
   --chip: color-mix(in oklab, var(--reika-text) 9%, var(--reika-code-bg));
@@ -353,7 +358,8 @@
   padding: 0 0.625rem;
   box-sizing: border-box;
   border-radius: 8px;
-  border: 1px solid var(--reika-control-border);
+  /* A step stronger than the pills' old border, which all but vanished against the card. */
+  border: 1px solid var(--reika-rule-strong);
   background: var(--reika-control-bg);
   color: var(--reika-control-fg);
   font: inherit;
@@ -361,10 +367,9 @@
   cursor: pointer;
 }
 .pill:hover:not(:disabled) {
-  border-color: var(--reika-rule-strong);
+  border-color: color-mix(in oklab, var(--reika-text) 30%, var(--reika-code-bg));
 }
 .pill:focus-visible,
-.pill-option:focus-visible,
 .composer-round:focus-visible {
   outline: 2px solid var(--reika-accent);
   outline-offset: 1px;
@@ -427,6 +432,11 @@
   border-radius: 10px;
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.45);
 }
+/* An option scrolled to the edge keeps room for its focus ring, which reaches 3px past it. */
+.pill-popover,
+.composer-completions {
+  scroll-padding-block: 0.375rem;
+}
 .pill-popover--quiet {
   scrollbar-width: none;
 }
@@ -446,9 +456,10 @@
   text-align: left;
   cursor: pointer;
 }
-.pill-option:hover,
-.pill-option:focus-visible {
-  background: var(--reika-control-bg);
+/* The pointer focuses what it enters (PillMenu), so focus alone is the highlight, by key or not. */
+.pill-option:focus {
+  outline: none;
+  background: var(--reika-menu-active);
 }
 .pill-option-label {
   white-space: nowrap;
@@ -470,18 +481,25 @@
   margin-left: auto;
   width: 2rem;
   height: 2rem;
+  padding: 0;
   border-radius: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
 }
+/* The circle's own box, not a 1rem box inside it: the button lands on a fractional x, and an icon
+   box of its own snapped to the pixel grid apart from the circle, a device pixel off centre. */
 .composer-round svg {
-  width: 1rem;
-  height: 1rem;
+  width: 100%;
+  height: 100%;
   fill: none;
   stroke: currentColor;
   stroke-width: 2;
+  /* A mitred tip reached past the path's top, so the arrow sat high in the circle; round ends
+     keep its outline as even as the path. */
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 .composer-send {
   border: 0;

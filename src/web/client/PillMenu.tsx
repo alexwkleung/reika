@@ -48,6 +48,9 @@ export function PillMenu({
   const popover = useRef<HTMLDivElement>(null);
   // Set on open, cleared once the first focus lands: that focus must not scroll.
   const opening = useRef(false);
+  // A move the pointer made: it highlights without scrolling, or an option half in view would
+  // scroll in, slide the next one under the pointer, and the menu would run on by itself.
+  const byPointer = useRef(false);
   const menuId = useId();
 
   useEffect(() => {
@@ -77,7 +80,8 @@ export function PillMenu({
     if (!open || !item) return;
     item.focus({ preventScroll: true });
     if (opening.current) opening.current = false;
-    else item.scrollIntoView?.({ block: 'nearest' });
+    else if (!byPointer.current) item.scrollIntoView?.({ block: 'nearest' });
+    byPointer.current = false;
   }, [open, active]);
   // A switch elsewhere (another tab, a turn starting) can disable the pill while its menu is open.
   useEffect(() => {
@@ -104,6 +108,7 @@ export function PillMenu({
   };
   const onMenuKey = (e: KeyboardEvent) => {
     setQuiet(false);
+    byPointer.current = false;
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       const step = e.key === 'ArrowDown' ? 1 : -1;
@@ -167,7 +172,10 @@ export function PillMenu({
               tabIndex={i === active ? 0 : -1}
               className="pill-option"
               onClick={() => pick(o.value)}
-              onMouseEnter={() => setActive(i)}
+              onMouseEnter={() => {
+                byPointer.current = true;
+                setActive(i);
+              }}
             >
               {o.dot ? (
                 <span className="pill-dot" style={{ background: o.dot }} aria-hidden="true" />

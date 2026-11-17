@@ -84,14 +84,20 @@ function useFollowBottom(
     };
     // A wheel turned up lets go before its scroll lands: a row arriving in between would otherwise
     // be followed, putting the view back at the bottom under the reader's wheel.
+    // Only where there is somewhere to go: on a transcript that fits, or one already at its top, a
+    // wheel turned up moves nothing and must not leave "Jump to latest" over a view at the bottom.
     const onWheel = (e: WheelEvent) => {
-      if (e.deltaY < 0) settle(nextFollow(followingRef.current, { type: 'scroll-up-intent' }));
+      if (e.deltaY >= 0 || el.scrollTop <= 0) return;
+      settle(nextFollow(followingRef.current, { type: 'scroll-up-intent' }));
     };
     // A narrower window rewraps the rows, and taller controls shorten the transcript. The column is
     // watched too: some rows grow it with no new state behind them (the pending `↳ Running…` row
     // after its delay, a Thinking block opening), which the content effect below never sees.
+    // Content that shrinks to fit the view leaves nothing below it, so the reader is at the bottom
+    // again whatever they scrolled before.
     const onResize = () => {
       if (followingRef.current) toBottom();
+      else if (el.scrollHeight <= el.clientHeight + 1) settle(true);
     };
     el.addEventListener('scroll', onScroll, { passive: true });
     el.addEventListener('wheel', onWheel, { passive: true });

@@ -141,15 +141,21 @@ body.with-history {
   font: inherit;
   font-size: 0.875rem;
 }
+/* The panel's one button, raised a clear step off it, and the filter sunk below it as a well: on
+   the pills' surface both nearly dissolved into the panel, and a button and a field read the same. */
 .history-new {
   display: flex;
   align-items: center;
   gap: 0.5rem;
   padding: 0 0.75rem;
   cursor: pointer;
+  background: color-mix(in oklab, var(--reika-text) 10%, var(--reika-code-bg));
+  border-color: var(--reika-rule-strong);
+  color: var(--reika-text);
 }
 .history-new:hover:not(:disabled) {
-  border-color: var(--reika-rule-strong);
+  background: color-mix(in oklab, var(--reika-text) 14%, var(--reika-code-bg));
+  border-color: color-mix(in oklab, var(--reika-text) 30%, var(--reika-code-bg));
 }
 .history-new:disabled {
   cursor: not-allowed;
@@ -157,9 +163,12 @@ body.with-history {
 }
 .history-filter {
   padding: 0 0.75rem;
+  /* Half a step under the panel: enough to read as a field, not a hole in it. */
+  background: color-mix(in oklab, var(--reika-page-bg) 50%, var(--reika-code-bg));
+  border-color: var(--reika-rule);
 }
 .history-filter::placeholder {
-  color: var(--reika-placeholder);
+  color: color-mix(in oklab, var(--reika-placeholder) 85%, var(--reika-text));
 }
 .history-filter:focus {
   outline: none;

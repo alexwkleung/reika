@@ -25,4 +25,17 @@ describe('composerTokens', () => {
     expect(composerTokens('run /review')).toEqual([{ text: 'run /review' }]);
     expect(composerTokens('[Image ')).toEqual([{ text: '[Image ' }]);
   });
+
+  it('chips an @file mention where the mention parser reads one, not an email address', () => {
+    expect(composerTokens('look at @src/a.ts and @b.md')).toEqual([
+      { text: 'look at ' },
+      { text: '@src/a.ts', token: 'file' },
+      { text: ' and ' },
+      { text: '@b.md', token: 'file' },
+    ]);
+    expect(composerTokens('@README.md')).toEqual([{ text: '@README.md', token: 'file' }]);
+    expect(composerTokens('mail octocat@example.com')).toEqual([
+      { text: 'mail octocat@example.com' },
+    ]);
+  });
 });

@@ -38,6 +38,8 @@
   --reika-rule-strong: #4a4a4a;
   --reika-control-bg: #232323;
   --reika-control-focus-bg: #2b2b2b;
+  /* A menu's highlighted item (composer.css). */
+  --reika-menu-active: color-mix(in oklab, var(--reika-text) 10%, var(--reika-code-bg));
   --reika-control-border: #333333;
   --reika-control-fg: #d0d0d0;
   --reika-placeholder: #8c8c8c;
