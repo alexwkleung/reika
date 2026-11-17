@@ -72,11 +72,6 @@ describe('pending row delay', () => {
     expect(pendingElapsedMs(since, serverTime(100_000, offset))).toBe(6000);
     expect(serverTime(5, null)).toBe(5);
   });
-
-  it('streamed output forces the row up', () => {
-    expect(pendingRowDue(0, 10, true)).toBe(true);
-    expect(pendingRowDue(0, 10)).toBe(false);
-  });
 });
 
 describe('frameBatched', () => {

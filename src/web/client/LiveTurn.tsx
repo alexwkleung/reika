@@ -241,7 +241,9 @@ export function LiveTurn({
     ? { reasoning: live.reasoning, content: live.content }
     : foldedLiveFields(live.reasoning, live.content);
   const tool = live.tool;
-  const showPending = !!pending && pendingRowDue(pending.since, now, !!tool?.output);
+  const showPending = !!pending && pendingRowDue(pending.since, now);
+  // Output streamed by a call still inside its delay belongs to the block the delay holds back.
+  const holding = !!pending && !showPending;
   const elapsed = pending ? pendingElapsedMs(pending.since, now) : 0;
   // A running command draws as its result will: the `$ command` line, then the same tail of its
   // output, so the commit changes the verb and moves nothing.
@@ -277,7 +279,7 @@ export function LiveTurn({
           {folded.content.trim() ? <Prose text={folded.content} /> : null}
         </div>
       ) : null}
-      {tool && tool.output && !commandBlock ? (
+      {tool && tool.output && !commandBlock && !holding ? (
         // Under the command chip's indent only for bash, where the committed output lands.
         <pre className={`live-tool${tool.name === 'bash' ? ' live-tool--command' : ''}`}>
           {tool.output}

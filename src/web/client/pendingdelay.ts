@@ -12,10 +12,11 @@ export function serverTime(localNow: number, clockOffset: number | null): number
   return localNow + (clockOffset ?? 0);
 }
 
-// `force`: streamed output for the call is already on screen, which outranks the delay (as in the
-// TUI), or the row would appear above output that drew first.
-export function pendingRowDue(since: number, serverNow: number, force = false): boolean {
-  return force || serverNow - since >= PENDING_ROW_DELAY_MS;
+// The call's streamed output waits with the row rather than forcing it up: a command that prints
+// and returns inside the delay otherwise drew row, chip and output for a frame or two, then swapped
+// them for its result.
+export function pendingRowDue(since: number, serverNow: number): boolean {
+  return serverNow - since >= PENDING_ROW_DELAY_MS;
 }
 
 export function pendingElapsedMs(since: number, serverNow: number): number {

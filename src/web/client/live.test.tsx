@@ -43,12 +43,16 @@ describe('LiveTurn', () => {
     expect(draw(live({ tool: { name: '', output: 'x' } }))).toContain('class="live-tool"');
   });
 
-  it('a pending call shows at once only when its output already streams', () => {
+  it('holds a new call back for the delay, its streamed output included', () => {
     const pending = { name: 'bash', since: Date.now(), call: 1 };
     expect(text(draw(live({ pending })))).not.toContain('Running…');
-    expect(text(draw(live({ pending, tool: { name: 'bash', output: 'o' } })))).toContain(
-      '↳Running…',
-    );
+    const early = text(draw(live({ pending, tool: { name: 'bash', output: 'early-out' } })));
+    expect(early).not.toContain('Running…');
+    expect(early).not.toContain('early-out');
+    const due = { ...pending, since: Date.now() - 1000 };
+    const late = text(draw(live({ pending: due, tool: { name: 'bash', output: 'late-out' } })));
+    expect(late).toContain('↳Running…');
+    expect(late).toContain('late-out');
   });
 
   it('times a call from its server start, for a tab that joined mid-call', () => {
