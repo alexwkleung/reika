@@ -1,8 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { WireState } from '../protocol.js';
 import type { StreamStatus } from './eventstream.js';
-import { nextPathLine, PATH_INLINE, pathFits, pathReturnsAt } from './pathdwell.js';
-import { CWD_MAX_CHARS, shortenMiddle, statusStrip } from './statuschips.js';
+import { statusStrip } from './statuschips.js';
 import './status.css';
 import { tip } from './Tooltip.js';
 
@@ -15,40 +13,8 @@ export function StatusLine({
   session: WireState | null;
   stream: StreamStatus | null;
 }) {
-  const stripRef = useRef<HTMLDivElement>(null);
-  const groupRef = useRef<HTMLSpanElement>(null);
-  const pathRef = useRef<HTMLSpanElement>(null);
-  const line = useRef(PATH_INLINE);
-  const [own, setOwn] = useState(false);
-  const [recheck, setRecheck] = useState(0);
-  // After every render and before paint, so a path that stops fitting never draws a frame wrapped
-  // by flex alone; the hold then keeps it there.
-  useBeforePaint(() => {
-    const fits = measurePathFits(stripRef.current, groupRef.current, pathRef.current);
-    if (fits === null) return;
-    line.current = nextPathLine(line.current, fits, Date.now());
-    setOwn(line.current.own);
-  }, [session, stream, recheck]);
-  // A held path comes back once its dwell is over, even if nothing else renders by then.
-  const returnsAt = pathReturnsAt(line.current);
-  useEffect(() => {
-    if (returnsAt === null) return;
-    const t = setTimeout(() => setRecheck(n => n + 1), Math.max(0, returnsAt - Date.now()) + 50);
-    return () => clearTimeout(t);
-  }, [returnsAt, recheck]);
-  // The window narrowing or widening changes the room without a render.
-  const mounted = session !== null;
-  useEffect(() => {
-    const strip = stripRef.current;
-    if (!strip || typeof ResizeObserver !== 'function') return;
-    const observer = new ResizeObserver(() => setRecheck(n => n + 1));
-    observer.observe(strip);
-    return () => observer.disconnect();
-  }, [mounted]);
   if (!session) return null;
   const items = statusStrip(session, stream);
-  // The folder sits outside the group: `space-between` keeps it at the right on the group's line,
-  // and once it wraps onto a line of its own it is that line's only item, so it starts at the left.
   const renderItem = (item: (typeof items)[number], i: number) => {
     switch (item.kind) {
       case 'tag':
@@ -114,16 +80,17 @@ export function StatusLine({
         );
       }
       case 'path': {
-        const shown = shortenMiddle(item.text, CWD_MAX_CHARS);
-        // The whole folder, when either the shortening or the strip's width cut it.
+        // One slot on the chips' row, never a line of its own: the parent folders give way to an
+        // ellipsis from the left as the room shrinks (the nearest ones are kept), and the folder's
+        // own name stays whole. A path that hopped
+        // lines with the chips beside it moved the strip, and the input box over it, every second.
+        const { head, tail } = splitPath(item.text);
         return (
-          <span
-            key={i}
-            ref={pathRef}
-            className={`status-path${own ? ' status-path--own' : ''}`}
-            {...(shown === item.text ? tip(item.text, { cut: '' }) : tip(item.text))}
-          >
-            {shown}
+          <span key={i} className="status-path" {...tip(item.text, { cut: '.status-path-head' })}>
+            <span className="status-path-head">
+              <span>{head}</span>
+            </span>
+            <span className="status-path-tail">{tail}</span>
           </span>
         );
       }
@@ -136,8 +103,8 @@ export function StatusLine({
           {session.error}
         </div>
       ) : null}
-      <div ref={stripRef} className="status-strip" aria-label="Status">
-        <span ref={groupRef} className="status-items">
+      <div className="status-strip" aria-label="Status">
+        <span className="status-items">
           {items.filter(item => item.kind !== 'path').map(renderItem)}
         </span>
         {items.filter(item => item.kind === 'path').map(renderItem)}
@@ -146,23 +113,9 @@ export function StatusLine({
   );
 }
 
-// The layout effect where there is a page to paint; a server render (a test) has none and warns.
-const useBeforePaint = typeof document === 'undefined' ? useEffect : useLayoutEffect;
-
-// Null where nothing can be measured (no path, or a DOM without layout, as in render tests).
-function measurePathFits(
-  strip: HTMLElement | null,
-  group: HTMLElement | null,
-  path: HTMLElement | null,
-): boolean | null {
-  if (!strip || !group || !path || typeof document.createRange !== 'function') return null;
-  const range = document.createRange();
-  range.selectNodeContents(path);
-  if (typeof range.getBoundingClientRect !== 'function') return null;
-  const pathWidth = range.getBoundingClientRect().width;
-  const stripStyle = getComputedStyle(strip);
-  const chipGap = parseFloat(getComputedStyle(group).columnGap) || 0;
-  const chips = [...group.children].map(c => c.getBoundingClientRect().width);
-  const chipsWidth = chips.reduce((sum, w) => sum + w, 0) + chipGap * Math.max(0, chips.length - 1);
-  return pathFits(strip.clientWidth, chipsWidth, pathWidth, parseFloat(stripStyle.columnGap) || 0);
+// `/a/b/proj` → `/a/b` and `/proj`: the part that may be cut, and the part that may not. The slash
+// rides the name, so a cut reads `…/b/proj`.
+export function splitPath(path: string): { head: string; tail: string } {
+  const at = path.replace(/\/+$/, '').lastIndexOf('/');
+  return at <= 0 ? { head: '', tail: path } : { head: path.slice(0, at), tail: path.slice(at) };
 }

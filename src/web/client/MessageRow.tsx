@@ -1,7 +1,7 @@
 import { memo, type ReactNode } from 'react';
 import { changeLabel, toolLabel, toolTimer } from '../../ui/format.js';
 import { foldedAssistantFields } from '../../ui/reasoningfold.js';
-import { elidedReadSummary, formatArgs, noticeLead } from '../../ui/scrollbackrules.js';
+import { elidedReadSummary, noticeLead } from '../../ui/scrollbackrules.js';
 import type { WireMessage } from '../protocol.js';
 import {
   GLYPH,
@@ -13,6 +13,7 @@ import {
   reasoningText,
 } from './blocks.js';
 import { DiffView } from './DiffView.js';
+import { callParts, summaryParts, type Part } from './toolparts.js';
 import './transcript.css';
 
 // One committed message, by Scrollback.tsx's content rules (renderMessage): what each kind shows
@@ -32,6 +33,21 @@ function UserRow({ m }: { m: Of<'user'> }) {
   );
 }
 
+// A call or a result as words, the literal they act on as code, and the detail muted.
+function Parts({ parts }: { parts: Part[] }) {
+  return parts.map((p, i) =>
+    p.code ? (
+      <code key={i} className="tool-literal">
+        {p.text}
+      </code>
+    ) : (
+      <span key={i} className={p.muted ? 'tool-detail' : undefined}>
+        {p.text}
+      </span>
+    ),
+  );
+}
+
 function ToolCalls({ calls }: { calls: NonNullable<Of<'assistant'>['toolCalls']> }) {
   return (
     <div className="calls">
@@ -41,7 +57,9 @@ function ToolCalls({ calls }: { calls: NonNullable<Of<'assistant'>['toolCalls']>
             {GLYPH.call}
           </span>
           <span className="call-name">{toolLabel(tc.name)}</span>
-          <span className="call-args">{`(${formatArgs(tc.name, tc.args)})`}</span>
+          <span className="call-args">
+            <Parts parts={callParts(tc.name, tc.args)} />
+          </span>
         </div>
       ))}
     </div>
@@ -158,7 +176,7 @@ function ToolRow({ m, groupedReads }: { m: Of<'tool'>; groupedReads: boolean }) 
           {GLYPH.toolResult}
         </span>
         <span className="tool-summary-text">
-          {elidedReadSummary(m.summary ?? '', groupedReads)}
+          <Parts parts={summaryParts(elidedReadSummary(m.summary ?? '', groupedReads))} />
         </span>
         {duration ? <span className="tool-duration">{duration}</span> : null}
       </div>

@@ -32,8 +32,6 @@ export function shortenMiddle(text: string, max: number): string {
   return `${text.slice(0, head)}…${text.slice(text.length - (keep - head))}`;
 }
 
-export const CWD_MAX_CHARS = 40;
-
 // The TUI's warning point on its gauge.
 const CONTEXT_WARN_FILL = 0.8;
 

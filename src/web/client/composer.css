@@ -114,6 +114,10 @@
   font-family: var(--reika-mono);
   color: var(--reika-text);
 }
+.composer-completion-label--command {
+  font-family: inherit;
+  font-weight: 500;
+}
 .composer-completion-detail {
   min-width: 0;
   overflow: hidden;
@@ -139,7 +143,57 @@
 .composer-card-locked {
   opacity: 0.6;
 }
+/* The box and the backdrop behind it (composertokens.ts): one text laid out twice, so every rule
+   that moves a glyph — font, size, line height, wrapping, padding — must match between them. */
+.composer-field {
+  position: relative;
+}
+.composer-backdrop {
+  position: absolute;
+  /* Reaches past the box (BACKDROP_BLEED_PX) with the same padding, so its text stays where the
+     box's is and a chip's edge at the start of a line is not cut flat. */
+  inset: -4px;
+  padding: 4px;
+  overflow: hidden;
+  pointer-events: none;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  font: inherit;
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  color: transparent;
+}
+/* With a chip in the line, the backdrop draws the text (in the chips' colours) and the box keeps
+   only its caret and its selection. */
+.composer-field--tokens .composer-backdrop {
+  color: var(--reika-text);
+}
+.composer-field--tokens .composer-input {
+  color: transparent;
+  caret-color: var(--reika-text);
+}
+.composer-field--tokens .composer-input::selection {
+  color: transparent;
+  background: color-mix(in srgb, var(--reika-accent) 35%, transparent);
+}
+/* Background and a spread shadow only: padding or a border would widen the run and move every
+   glyph after it out from under the box's caret. Opaque tints of the card's own colour, so the
+   chip is a lighter shade of the box rather than a wash over it. */
+.composer-token {
+  border-radius: 5px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  --chip: color-mix(in oklab, var(--reika-accent) 16%, var(--reika-code-bg));
+  color: color-mix(in oklab, var(--reika-accent) 80%, white);
+  background: var(--chip);
+  box-shadow: 0 0 0 3px var(--chip);
+}
+.composer-token--marker {
+  --chip: color-mix(in oklab, var(--reika-text) 9%, var(--reika-code-bg));
+  color: var(--reika-secondary);
+}
 .composer-input {
+  position: relative;
   display: block;
   width: 100%;
   min-height: 1.5rem;
@@ -155,6 +209,8 @@
   font: inherit;
   font-size: 0.9375rem;
   line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
 }
 .composer-input::placeholder {
   color: var(--reika-placeholder);

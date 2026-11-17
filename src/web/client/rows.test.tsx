@@ -57,11 +57,16 @@ describe('assistant rows', () => {
     expect(t.indexOf('Thinking')).toBeLessThan(t.indexOf('Use bold here.'));
     expect(html).toContain('<p>first</p><p>second</p>');
     expect(html).toContain('<strong>bold</strong>');
-    expect(t).toContain('⏺Read(path="src/a.ts")');
+    // The label in words and the path it acts on as code (toolparts.ts).
+    expect(html).toContain(
+      '<span class="call-name">Read</span><span class="call-args"><code class="tool-literal">src/a.ts</code></span>',
+    );
     // An edit's strings are shown by its diff, so the call row hides them.
-    expect(t).toContain('⏺Edit(path="b.ts")');
-    expect(t).toContain('⏺Ask(question="ok?")');
-    expect(t.indexOf('Edit(')).toBeLessThan(t.indexOf('Sources: https://example.com/a'));
+    expect(t).toContain('⏺Editb.ts');
+    expect(t).not.toContain('old_string');
+    // A tool with no literal of its own keeps its arguments, muted.
+    expect(html).toContain('<span class="tool-detail">question=&quot;ok?&quot;</span>');
+    expect(t.indexOf('Editb.ts')).toBeLessThan(t.indexOf('Sources: https://example.com/a'));
   });
 
   it('shows long reasoning in its window, the whole of it behind a details element', () => {

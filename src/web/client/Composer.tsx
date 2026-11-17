@@ -43,6 +43,7 @@ import { PillMenu, type PillOption } from './PillMenu.js';
 import type { SendResult, UploadResult } from './send.js';
 import './composer.css';
 import { tip } from './Tooltip.js';
+import { composerTokens } from './composertokens.js';
 
 // The input box (direction B): the text, then a row inside the box with the mode and model pills,
 // attach, and Send (Stop while a turn runs from an empty box). Enter sends, Shift+Enter or a
@@ -108,6 +109,10 @@ export function modelOptions(catalog: WireCatalog | null): PillOption[] {
   }));
 }
 
+// The room the backdrop reaches past the box on every side (composer.css), so a bubble's rounded
+// edge at the start of a line is not cut flat.
+const BACKDROP_BLEED_PX = 4;
+
 // Grows with its content up to the CSS max-height, then scrolls. The scrollbar only exists past
 // that height: a box that fits its text shows none, even for a frame where a new placeholder or
 // width has not been fitted yet.
@@ -171,6 +176,17 @@ export function Composer({
   const [recall, setRecall] = useState<Recall>(notRecalling);
   const [completion, setCompletion] = useState<{ list: Completion; selected: number } | null>(null);
   const box = useRef<HTMLTextAreaElement>(null);
+  const backdrop = useRef<HTMLDivElement>(null);
+  // The box's height, then the backdrop held to its layout: a scrollbar's width narrows the box's
+  // text, so the backdrop gives up the same width, and both scroll together.
+  const fitBox = () => {
+    const el = box.current;
+    fitHeight(el);
+    const behind = backdrop.current;
+    if (!el || !behind) return;
+    behind.style.paddingRight = `${el.offsetWidth - el.clientWidth + BACKDROP_BLEED_PX}px`;
+    behind.scrollTop = el.scrollTop;
+  };
   const completionList = useRef<HTMLUListElement>(null);
   // Where to put the caret once a programmatic change has rendered.
   const caret = useRef<number | null>(null);
@@ -200,7 +216,7 @@ export function Composer({
   }
 
   useLayoutEffect(() => {
-    fitHeight(box.current);
+    fitBox();
     const el = box.current;
     if (el && caret.current !== null && typeof el.setSelectionRange === 'function') {
       el.setSelectionRange(caret.current, caret.current);
@@ -209,8 +225,9 @@ export function Composer({
   }, [text]);
   // The placeholder changes with the turn ("Queue a message · Esc stops") and may wrap differently,
   // and a narrower window rewraps the text: both change the height the box needs.
+  const tokens = composerTokens(text);
   const placeholder = placeholderFor(mode, busy, locked, upload ? PASTE_KEY : null);
-  useLayoutEffect(() => fitHeight(box.current), [placeholder]);
+  useLayoutEffect(fitBox, [placeholder]);
   useEffect(() => {
     const el = box.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
@@ -218,7 +235,7 @@ export function Composer({
     const watch = new ResizeObserver(() => {
       if (el.clientWidth === width) return;
       width = el.clientWidth;
-      fitHeight(el);
+      fitBox();
     });
     watch.observe(el);
     return () => watch.disconnect();
@@ -563,7 +580,13 @@ export function Composer({
                   onMouseDown={e => e.preventDefault()}
                   onClick={() => acceptAt(i, false)}
                 >
-                  <span className="composer-completion-label">{label}</span>
+                  {/* A command in the page's font, as a chat app lists its commands; a file path
+                      stays code, the literal it is. */}
+                  <span
+                    className={`composer-completion-label${label.startsWith('/') ? ' composer-completion-label--command' : ''}`}
+                  >
+                    {label}
+                  </span>
                   {detail ? <span className="composer-completion-detail">{detail}</span> : null}
                 </li>
               );
@@ -574,46 +597,70 @@ export function Composer({
           className={`composer-card${locked ? ' composer-card-locked' : ''}`}
           onMouseDown={focusFromCard}
         >
-          <textarea
-            ref={box}
-            className="composer-input"
-            aria-label="Message"
-            aria-autocomplete="list"
-            aria-controls={completion ? listId : undefined}
-            aria-activedescendant={completion ? `${listId}-${completion.selected}` : undefined}
-            rows={1}
-            value={text}
-            disabled={waiting || locked}
-            placeholder={placeholder}
-            onChange={e => {
-              const value = e.target.value;
-              // Deleting a marker drops its image, as in the TUI; a failed one stays until removed.
-              const dropped = chips.filter(
-                c => c.state.kind === 'ready' && !value.includes(c.marker),
-              );
-              if (dropped.length > 0) {
-                discard(dropped);
-                letGo(dropped);
-                setChips(cs => cs.filter(c => !dropped.includes(c)));
-              }
-              if (isTypingEdge(text, e.target.value)) {
-                void send({ type: 'typing', text: e.target.value });
-              }
-              setText(e.target.value);
-              setRecall(notRecalling);
-              requestCompletion(e.target.value);
-            }}
-            onKeyDown={onKeyDown}
-            onBlur={closeCompletion}
-            onPaste={onPaste}
-            onDragOver={(e: DragEvent) => e.preventDefault()}
-            onDrop={(e: DragEvent<HTMLTextAreaElement>) => {
-              const items = e.dataTransfer?.items;
-              if (!carriesImage(items ? [...items] : null)) return;
-              e.preventDefault();
-              addImages([...(e.dataTransfer?.files ?? [])], e.currentTarget);
-            }}
-          />
+          <div
+            className={`composer-field${tokens.some(t => t.token) ? ' composer-field--tokens' : ''}`}
+          >
+            {/* The same text, laid out the same way behind the box, so a command or a marker can be a
+              chip a textarea cannot draw. While the line holds one, this draws all the text and
+              the box's own goes transparent, keeping only its caret and selection; otherwise the
+              box draws as it always has. */}
+            <div ref={backdrop} className="composer-backdrop" aria-hidden="true">
+              {tokens.map((seg, i) =>
+                seg.token ? (
+                  <mark key={i} className={`composer-token composer-token--${seg.token}`}>
+                    {seg.text}
+                  </mark>
+                ) : (
+                  <span key={i}>{seg.text}</span>
+                ),
+              )}
+              {/* A trailing newline lays out a line only when something follows it. */}
+              {'\u200b'}
+            </div>
+            <textarea
+              ref={box}
+              className="composer-input"
+              aria-label="Message"
+              aria-autocomplete="list"
+              aria-controls={completion ? listId : undefined}
+              aria-activedescendant={completion ? `${listId}-${completion.selected}` : undefined}
+              rows={1}
+              value={text}
+              disabled={waiting || locked}
+              placeholder={placeholder}
+              onChange={e => {
+                const value = e.target.value;
+                // Deleting a marker drops its image, as in the TUI; a failed one stays until removed.
+                const dropped = chips.filter(
+                  c => c.state.kind === 'ready' && !value.includes(c.marker),
+                );
+                if (dropped.length > 0) {
+                  discard(dropped);
+                  letGo(dropped);
+                  setChips(cs => cs.filter(c => !dropped.includes(c)));
+                }
+                if (isTypingEdge(text, e.target.value)) {
+                  void send({ type: 'typing', text: e.target.value });
+                }
+                setText(e.target.value);
+                setRecall(notRecalling);
+                requestCompletion(e.target.value);
+              }}
+              onKeyDown={onKeyDown}
+              onBlur={closeCompletion}
+              onPaste={onPaste}
+              onDragOver={(e: DragEvent) => e.preventDefault()}
+              onDrop={(e: DragEvent<HTMLTextAreaElement>) => {
+                const items = e.dataTransfer?.items;
+                if (!carriesImage(items ? [...items] : null)) return;
+                e.preventDefault();
+                addImages([...(e.dataTransfer?.files ?? [])], e.currentTarget);
+              }}
+              onScroll={e => {
+                if (backdrop.current) backdrop.current.scrollTop = e.currentTarget.scrollTop;
+              }}
+            />
+          </div>
           {chips.length > 0 ? (
             <ul className="composer-images" aria-label="Attached images">
               {chips.map(chip => {

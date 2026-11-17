@@ -170,9 +170,9 @@ describe('StatusLine', () => {
     expect(html).toContain('aria-valuenow="50"');
     expect(html).toContain('style="width:50%"');
     expect(html).toContain('16k/32k (50%)');
-    // Its tooltip only when cut, and no browser title anywhere in the strip.
+    // Its tooltip only when its parent folders are cut, and no browser title anywhere in the strip.
     expect(html).toContain(
-      '<span class="status-path" data-tip="/repo" data-tip-cut="">/repo</span>',
+      '<span class="status-path" data-tip="/repo" data-tip-cut=".status-path-head"><span class="status-path-head"><span></span></span><span class="status-path-tail">/repo</span></span>',
     );
     expect(html).not.toContain('title=');
     expect(html).toContain('data-tip="16k of a 32k window."');
@@ -204,5 +204,18 @@ describe('StatusLine', () => {
       '<span class="status-pr">PR <a href="https://github.com/octocat/app/pull/12" target="_blank" rel="noopener noreferrer">#12</a><span class="status-pr-state status-pr-state--draft"> draft</span></span>',
     );
     expect(html({ number: 12 })).toContain('<span class="status-pr">PR #12</span>');
+  });
+});
+
+describe('splitPath', () => {
+  it('keeps the folder’s own name, with its slash, out of the part that may be cut', async () => {
+    const { splitPath } = await import('./StatusLine.js');
+    expect(splitPath('/Users/octocat/Git/app')).toEqual({
+      head: '/Users/octocat/Git',
+      tail: '/app',
+    });
+    expect(splitPath('~/Git/app/')).toEqual({ head: '~/Git', tail: '/app/' });
+    expect(splitPath('/repo')).toEqual({ head: '', tail: '/repo' });
+    expect(splitPath('app')).toEqual({ head: '', tail: 'app' });
   });
 });

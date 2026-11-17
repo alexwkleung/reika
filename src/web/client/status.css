@@ -9,15 +9,15 @@
 }
 .status-strip {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  /* Two items: the group and the folder. On one line the folder ends at the right; alone on its
-     own line it starts at the left, where the eye goes on to read it. */
-  justify-content: space-between;
+  /* On the chips' first line when they wrap, not centred across all of them. */
+  align-items: flex-start;
   gap: 0.25rem 1.125rem;
   min-width: 0;
 }
+/* The chips take the room they need and wrap among themselves only when even a cut folder would
+   not leave them a line; the folder takes what is left. */
 .status-items {
+  flex: 0 1 auto;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -82,20 +82,30 @@
 .status-alert {
   color: var(--reika-warning);
 }
+/* The rest of the row, right-aligned. Its parent folders shrink behind an ellipsis; its own name
+   never does (StatusLine's splitPath), so it always says which project this is. */
 .status-path {
-  min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  flex: 1 1 0;
+  min-width: 5rem;
+  display: flex;
+  justify-content: flex-end;
   white-space: nowrap;
-  font-family: var(--reika-mono);
-  /* Monospace runs wide for its size, so a step under the strip's text matches it by eye. */
-  font-size: 0.84375rem;
   color: var(--reika-muted);
 }
-/* Held on its own line (pathdwell.ts): the whole line, so it starts at the left. */
-.status-path--own {
-  flex-basis: 100%;
+/* Cut from the left (rtl), so the folders nearest the project stay and the sliver a cut leaves
+   falls off the left edge rather than as a gap before the name; the path itself runs ltr inside. */
+.status-path-head {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+}
+.status-path-head > span {
+  direction: ltr;
+  unicode-bidi: isolate;
+}
+.status-path-tail {
+  flex: none;
 }
 .status-error {
   color: var(--reika-error);
