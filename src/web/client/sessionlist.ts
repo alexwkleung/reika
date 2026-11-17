@@ -37,7 +37,9 @@ export function listNote(list: WireSessionList, filter: string): string | null {
   return null;
 }
 
-// The heading's count for a capped list, "50 of 250"; null when every session is listed.
-export function listCount(list: WireSessionList): string | null {
-  return list.total > list.entries.length ? `${list.entries.length} of ${list.total}` : null;
+// A capped list names its total in the filter, the one control that reaches the sessions past it.
+export function filterPlaceholder(list: WireSessionList | null): string {
+  return list && list.total > list.entries.length
+    ? `Filter all ${list.total} sessions`
+    : 'Filter sessions';
 }

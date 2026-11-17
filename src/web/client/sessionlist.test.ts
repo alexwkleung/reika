@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { WireSessionEntry, WireSessionList } from '../protocol.js';
-import { listCount, listNote, savedAgo, sessionMeta, sessionTitle } from './sessionlist.js';
+import { filterPlaceholder, listNote, savedAgo, sessionMeta, sessionTitle } from './sessionlist.js';
 
 const now = Date.parse('2026-11-15T12:00:00Z');
 const at = (secondsAgo: number) => new Date(now - secondsAgo * 1000).toISOString();
@@ -69,9 +69,12 @@ describe('listNote', () => {
   });
 });
 
-describe('listCount', () => {
-  it('counts a capped list, and nothing when it is whole', () => {
-    expect(listCount(list({ entries: [entry()], total: 1 }))).toBeNull();
-    expect(listCount(list({ entries: [entry()], total: 250 }))).toBe('1 of 250');
+describe('filterPlaceholder', () => {
+  it('names the total of a capped list, and no count when it is whole', () => {
+    expect(filterPlaceholder(null)).toBe('Filter sessions');
+    expect(filterPlaceholder(list({ entries: [entry()], total: 1 }))).toBe('Filter sessions');
+    expect(filterPlaceholder(list({ entries: [entry()], total: 250 }))).toBe(
+      'Filter all 250 sessions',
+    );
   });
 });

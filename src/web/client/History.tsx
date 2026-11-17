@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { SessionScope, WireSessionList, WireState } from '../protocol.js';
 import { switchBlocked, type Send } from './Composer.js';
-import { listCount, listNote, sessionMeta, sessionTitle } from './sessionlist.js';
+import { filterPlaceholder, listNote, sessionMeta, sessionTitle } from './sessionlist.js';
 import './history.css';
 import { tip } from './Tooltip.js';
 
@@ -221,7 +221,6 @@ export function History({
   };
 
   const note = list ? listNote(list, query) : null;
-  const count = list ? listCount(list) : null;
   const body = (
     <aside
       ref={panel}
@@ -272,32 +271,27 @@ export function History({
           </button>
         )}
       </div>
-      <input
-        className="history-filter"
-        type="search"
-        placeholder="Filter sessions"
-        aria-label="Filter sessions by title"
-        value={filter}
-        maxLength={200}
-        onChange={e => setFilter(e.target.value)}
-      />
+      <div className="history-search">
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="7" cy="7" r="4.25" />
+          <path d="M10.25 10.25L13.5 13.5" />
+        </svg>
+        <input
+          className="history-filter"
+          type="search"
+          placeholder={filterPlaceholder(list)}
+          aria-label="Filter sessions by title"
+          value={filter}
+          maxLength={200}
+          onChange={e => setFilter(e.target.value)}
+        />
+      </div>
       {error || listError ? (
         <p className="history-error" role="alert">
           {error ?? listError}
         </p>
       ) : null}
-      <h2 className="history-heading" id="history-heading">
-        History
-        {count ? (
-          <span
-            className="history-count"
-            {...tip('The newest sessions; filter to find older ones')}
-          >
-            {` (${count})`}
-          </span>
-        ) : null}
-      </h2>
-      <ul className="history-list" aria-labelledby="history-heading" aria-busy={list === null}>
+      <ul className="history-list" aria-label="Sessions" aria-busy={list === null}>
         {list?.entries.map(entry => {
           const isCurrent = entry.current === true;
           const reason = isCurrent ? 'The session you are in' : blocked;

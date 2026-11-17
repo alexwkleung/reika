@@ -156,9 +156,8 @@ describe('History as a drawer', () => {
     await h.open();
     proto.focus = real;
     expect(focus.mock.contexts).toEqual([h.q('.history-close')]);
-    expect(h.q('.history-head .history-new')).not.toBeNull();
-    // The section label sits on the list it names.
-    expect(h.q('.history-heading')?.nextElementSibling?.className).toBe('history-list');
+    expect(h.q('.history-head .history-new')?.nextElementSibling?.className).toBe('history-close');
+    expect(h.q('.history-head')?.nextElementSibling?.className).toBe('history-search');
   });
 
   it('keeps its rows as drawn while a resume is in flight, and takes no second click', async () => {
@@ -218,14 +217,16 @@ describe('History as a drawer', () => {
     expect(h.q('.history')).toBeNull();
   });
 
-  it('counts a capped list beside its heading, and nothing when it is whole', async () => {
+  it('names the total of a capped list in the filter, and no count when it is whole', async () => {
     const capped = await mount({ list: () => listOf({ total: 250 }) });
     await capped.open();
-    expect(capped.q('.history-heading')?.textContent).toBe('History (2 of 250)');
+    expect(capped.q('.history-filter')?.getAttribute('placeholder')).toBe(
+      'Filter all 250 sessions',
+    );
     expect(capped.q('.history-note')).toBeNull();
     const whole = await mount({ list: () => listOf({ total: 2 }) });
     await whole.open();
-    expect(whole.q('.history-heading')?.textContent).toBe('History');
+    expect(whole.q('.history-filter')?.getAttribute('placeholder')).toBe('Filter sessions');
   });
 
   it('switches to the /save transcripts', async () => {
