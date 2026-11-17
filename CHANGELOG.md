@@ -3,7 +3,7 @@
 User-facing changes in each release: fixes, changed behavior or defaults, new or renamed config
 keys, commands and tools. Reika is 0.x, so a minor version may change behavior and config.
 
-## [Unreleased]
+## [0.12.0] - 2026-11-17
 
 ### Changed
 
@@ -22,7 +22,6 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 - The PR badge in the status bar now follows `/cd` instead of staying on the directory reika was
   started in (#1064).
-
 - A command that takes 150–300ms no longer flashes its `↳ Running…` row for a few frames: the row
   now waits 300ms instead of 150ms, which covers most of the sandbox and diff overhead every
   `bash` call pays. A fast command's streamed output also waits with the row instead of forcing it
