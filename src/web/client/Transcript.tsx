@@ -18,7 +18,7 @@ export const Transcript = memo(function Transcript({
     <div className="transcript">
       {log.items.map(item =>
         item.kind === 'worked' ? (
-          <WorkedRow key={item.key} durationMs={item.durationMs} />
+          <WorkedRow key={item.key} durationMs={item.durationMs} interrupted={item.interrupted} />
         ) : (
           <MessageRow
             key={item.key}
@@ -28,7 +28,9 @@ export const Transcript = memo(function Transcript({
           />
         ),
       )}
-      {idle && log.held !== null ? <WorkedRow durationMs={log.held} /> : null}
+      {idle && log.held !== null ? (
+        <WorkedRow durationMs={log.held.ms} interrupted={log.held.interrupted} />
+      ) : null}
     </div>
   );
 });

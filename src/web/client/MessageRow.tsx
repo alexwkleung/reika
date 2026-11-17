@@ -1,5 +1,5 @@
 import { memo, type ReactNode } from 'react';
-import { changeLabel, toolLabel, toolTimer } from '../../ui/format.js';
+import { changeLabel, displayProse, toolLabel, toolTimer } from '../../ui/format.js';
 import { foldedAssistantFields } from '../../ui/reasoningfold.js';
 import { elidedReadSummary, noticeLead } from '../../ui/scrollbackrules.js';
 import type { WireMessage } from '../protocol.js';
@@ -97,8 +97,12 @@ function AssistantRow({ m }: { m: Of<'assistant'> }) {
   const folded = m.planChecks
     ? { reasoning: m.reasoning, content: m.content }
     : foldedAssistantFields(m as Parameters<typeof foldedAssistantFields>[0]);
-  const prose = m.planChecks ? folded.content.slice(0, m.planChecks.at) : folded.content;
+  const prose = m.planChecks
+    ? folded.content.slice(0, m.planChecks.at)
+    : displayProse(folded.content, m.interrupted);
   const hasReasoning = !!folded.reasoning && !!reasoningText(folded.reasoning);
+  // An abort before any output leaves nothing above the closing line, which says it.
+  if (m.interrupted && !hasReasoning && !prose.trim() && !m.nested) return null;
   return (
     <div className="row row-assistant">
       {hasReasoning ? <ReasoningBlock text={folded.reasoning!} /> : null}
@@ -109,7 +113,9 @@ function AssistantRow({ m }: { m: Of<'assistant'> }) {
         <div className="sources">{`Sources: ${m.sources.join(', ')}`}</div>
       ) : null}
       {/* A top-level turn's line is the transcript's; a subagent's closes its nested block here. */}
-      {m.durationMs !== undefined && m.nested ? <WorkedRow durationMs={m.durationMs} /> : null}
+      {m.durationMs !== undefined && m.nested ? (
+        <WorkedRow durationMs={m.durationMs} interrupted={m.interrupted} />
+      ) : null}
     </div>
   );
 }

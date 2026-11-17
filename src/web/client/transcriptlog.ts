@@ -17,13 +17,13 @@ export type RowContext = {
 
 export type TranscriptItem =
   | { kind: 'message'; key: string; message: WireMessage; ctx: RowContext }
-  | { kind: 'worked'; key: string; durationMs: number };
+  | { kind: 'worked'; key: string; durationMs: number; interrupted?: boolean };
 
 export type TranscriptLog = {
   items: TranscriptItem[];
   // The last turn's line, drawn only once the session is idle: while busy the busy line holds that
   // place, as the TUI holds it out of the log until the next prompt.
-  held: number | null;
+  held: { ms: number; interrupted?: boolean } | null;
 };
 
 function endsTurn(m: WireMessage): m is Extract<WireMessage, { role: 'assistant' }> {
@@ -38,11 +38,16 @@ export function buildTranscriptLog(messages: readonly WireMessage[]): Transcript
   // A wire message is a Message less its model-only fields, which the rules never read.
   const log: LogItem[] = [];
   const items: TranscriptItem[] = [];
-  let held: number | null = null;
+  let held: TranscriptLog['held'] = null;
   messages.forEach((message, i) => {
     if (held !== null && (message.role === 'user' || endsTurn(message))) {
-      log.push({ workedMs: held });
-      items.push({ kind: 'worked', key: `w${i}`, durationMs: held });
+      log.push({ workedMs: held.ms, interrupted: held.interrupted });
+      items.push({
+        kind: 'worked',
+        key: `w${i}`,
+        durationMs: held.ms,
+        interrupted: held.interrupted,
+      });
       held = null;
     }
     const at = log.length;
@@ -67,7 +72,7 @@ export function buildTranscriptLog(messages: readonly WireMessage[]): Transcript
           groupedReads(message as Message, prev as Message | undefined, log, at),
       },
     });
-    if (endsTurn(message)) held = message.durationMs!;
+    if (endsTurn(message)) held = { ms: message.durationMs!, interrupted: message.interrupted };
   });
   return { items, held };
 }

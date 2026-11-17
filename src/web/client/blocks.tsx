@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { formatDurationMs } from '../../ui/format.js';
+import { turnEndLabel } from '../../ui/format.js';
 import type { PlanChecks } from '../../types.js';
 import { Markdown } from './Markdown.js';
 
@@ -165,13 +165,19 @@ export function NoteBlock({ note, reasoning }: { note: string; reasoning?: strin
   );
 }
 
-export function WorkedRow({ durationMs }: { durationMs: number }) {
+export function WorkedRow({
+  durationMs,
+  interrupted,
+}: {
+  durationMs: number;
+  interrupted?: boolean;
+}) {
   return (
-    <div className="row row-worked">
+    <div className={interrupted ? 'row row-worked row-interrupted' : 'row row-worked'}>
       <span className="row-worked-marker" aria-hidden="true">
         ■
       </span>
-      {`Worked for ${formatDurationMs(durationMs)}`}
+      {turnEndLabel(durationMs, interrupted)}
     </div>
   );
 }

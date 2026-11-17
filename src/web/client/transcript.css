@@ -474,6 +474,9 @@
   color: var(--reika-accent);
   margin-right: 0.5em;
 }
+.row-interrupted .row-worked-marker {
+  color: var(--reika-warning);
+}
 
 .row-unknown {
   color: var(--reika-muted);
