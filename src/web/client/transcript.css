@@ -38,8 +38,8 @@
   display: flex;
   background: var(--reika-user-bg);
   border-left: 2px solid var(--reika-accent);
-  padding: 0.4em 0.75em;
-  border-radius: 0 2px 2px 0;
+  /* As tight as the Thinking block, as the terminal's is, with a sliver of air inside the grey. */
+  padding: 0.1em 0.75em;
 }
 .row-user--nested {
   border-left-color: var(--reika-subagent);
