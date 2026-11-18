@@ -185,9 +185,6 @@ body.with-history {
      no louder than them. */
   background: none;
 }
-.history-filter:hover {
-  border-color: var(--reika-rule-strong);
-}
 .history-filter::placeholder {
   color: var(--reika-muted);
 }
