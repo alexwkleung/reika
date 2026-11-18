@@ -367,8 +367,12 @@
   font-size: 0.875rem;
   cursor: pointer;
 }
-.pill:hover:not(:disabled) {
+/* A fill as well as the border: a 1px line brightening alone was hard to see on a control this
+   small, and the fill matches the menu items the pill opens. */
+.pill:hover:not(:disabled),
+.composer-stop:hover {
   border-color: color-mix(in oklab, var(--reika-text) 30%, var(--reika-code-bg));
+  background: var(--reika-control-focus-bg);
 }
 .pill:focus-visible,
 .composer-round:focus-visible {

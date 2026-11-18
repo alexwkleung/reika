@@ -135,6 +135,7 @@
 }
 .dialog-button:hover:not(:disabled):not(:focus) {
   border-color: var(--reika-rule-strong);
+  background: var(--reika-control-focus-bg);
 }
 .dialog-button--primary {
   border-color: var(--reika-rule-strong);

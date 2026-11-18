@@ -35,6 +35,7 @@
 }
 .history-show:hover:not(:disabled) {
   border-color: var(--reika-rule-strong);
+  background: var(--reika-control-focus-bg);
 }
 .history-show:disabled {
   cursor: not-allowed;
