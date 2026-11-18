@@ -159,6 +159,9 @@ textarea,
 .app-scroll {
   flex: 1;
   min-height: 0;
+  /* Vertical only: `overflow-y: auto` alone makes x `auto` too, so one row a pixel too wide let
+     the whole transcript slide sideways. A wide block scrolls inside its own box instead. */
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
