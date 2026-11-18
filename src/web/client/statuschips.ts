@@ -94,8 +94,8 @@ export function statusStrip(s: WireState, stream: StreamStatus | null): StripIte
   if (cached != null && contextTokens > 0) {
     items.push({
       kind: 'stat',
-      text: `cache ${Math.round((cached / contextTokens) * 100)}%`,
-      title: formatCache(cached, contextTokens),
+      text: formatCache(cached, contextTokens),
+      title: 'Share of the last prompt the provider served from its cache',
     });
   }
   const shrink = formatShrink(s.shrink.sheds, s.shrink.folds);

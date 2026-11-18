@@ -62,7 +62,7 @@ describe('statusStrip', () => {
       '20k/32k (63%)',
       '12k ↑ 830 ↓',
       '21 tok/s',
-      'cache 90%',
+      '90% cached (18k)',
       '2 sheds · 1 fold',
       '/repo',
     ]);
@@ -72,7 +72,9 @@ describe('statusStrip', () => {
       title: '20k of a 32k window.',
       warn: false,
     });
-    expect(items[4]).toMatchObject({ title: '90% cached (18k)' });
+    expect(items[4]).toMatchObject({
+      title: 'Share of the last prompt the provider served from its cache',
+    });
   });
 
   it('measures against the usable limit when the server sends it, the raw window on hover', () => {
