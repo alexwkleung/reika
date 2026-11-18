@@ -137,9 +137,10 @@
   cursor: text;
   transition: border-color 120ms ease;
 }
-/* The card lights for the text only: a pill or the attach button holding focus is not typing. */
+/* The card lights for the text only: a pill or the attach button holding focus is not typing.
+   Neutral: the box is focused nearly all the time, so a tint here became the card's own colour. */
 .composer-card:has(.composer-input:focus) {
-  border-color: color-mix(in srgb, var(--reika-accent) 40%, var(--reika-rule));
+  border-color: var(--reika-rule-strong);
 }
 .composer-card-locked {
   opacity: 0.6;

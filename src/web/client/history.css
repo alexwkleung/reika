@@ -188,10 +188,10 @@ body.with-history {
 .history-filter::placeholder {
   color: var(--reika-muted);
 }
-/* Lit the way the chat input's card is: a full-accent border here outshone the main input. */
+/* Lit the way the chat input's card is. */
 .history-filter:focus {
   outline: none;
-  border-color: color-mix(in srgb, var(--reika-accent) 40%, var(--reika-rule));
+  border-color: var(--reika-rule-strong);
 }
 
 .history-error {
