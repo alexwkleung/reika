@@ -116,10 +116,12 @@ function onKey(e: KeyboardEvent, i: number): void {
   color: var(--vp-c-text-1);
 }
 
+/* The page and the track are nearly the same plum, so a bg-colored pill vanished into it: the
+   selected tab takes the orchid instead. */
 .DemoTab[aria-selected='true'] {
-  background: var(--vp-c-bg);
-  color: var(--vp-c-text-1);
-  box-shadow: 0 0 0 1px var(--vp-c-divider);
+  background: rgba(214, 140, 214, 0.2);
+  color: var(--vp-c-brand-1);
+  box-shadow: inset 0 0 0 1px rgba(214, 140, 214, 0.45);
 }
 
 .DemoTab:focus-visible {
