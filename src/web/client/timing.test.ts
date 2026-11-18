@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { connectionNotice } from './connection.js';
-import { BOTTOM_SLACK_PX, isAtBottom, nextFollow } from './follow.js';
+import { BOTTOM_SLACK_PX, isAtBottom, isScrollUpWheel, nextFollow } from './follow.js';
 import { frameBatched } from './framebatch.js';
 import {
   PENDING_ROW_DELAY_MS,
@@ -10,6 +10,15 @@ import {
 } from './pendingdelay.js';
 
 describe('follow', () => {
+  it('lets go on a wheel turned up, but not on a sideways swipe drifting up', () => {
+    expect(isScrollUpWheel({ deltaX: 0, deltaY: -40 }, 500)).toBe(true);
+    expect(isScrollUpWheel({ deltaX: 3, deltaY: -12 }, 500)).toBe(true);
+    expect(isScrollUpWheel({ deltaX: 30, deltaY: -4 }, 500)).toBe(false);
+    expect(isScrollUpWheel({ deltaX: -30, deltaY: -4 }, 500)).toBe(false);
+    expect(isScrollUpWheel({ deltaX: 0, deltaY: 40 }, 500)).toBe(false);
+    expect(isScrollUpWheel({ deltaX: 0, deltaY: -40 }, 0)).toBe(false);
+  });
+
   const at = (scrollTop: number) => ({ scrollTop, scrollHeight: 2000, clientHeight: 500 });
 
   it('counts the bottom within the slack', () => {

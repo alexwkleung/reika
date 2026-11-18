@@ -11,7 +11,7 @@ import { runningCommand } from './livecommand.js';
 import { Composer, type Send, type Upload } from './Composer.js';
 import { connectionNotice, type Connection } from './connection.js';
 import { Dialogs } from './Dialogs.js';
-import { nextFollow, type FollowEvent } from './follow.js';
+import { isScrollUpWheel, nextFollow, type FollowEvent } from './follow.js';
 import { frameBatched, type FrameScheduler } from './framebatch.js';
 import { History } from './History.js';
 import type { Holder } from './holder.js';
@@ -84,10 +84,8 @@ function useFollowBottom(
     };
     // A wheel turned up lets go before its scroll lands: a row arriving in between would otherwise
     // be followed, putting the view back at the bottom under the reader's wheel.
-    // Only where there is somewhere to go: on a transcript that fits, or one already at its top, a
-    // wheel turned up moves nothing and must not leave "Jump to latest" over a view at the bottom.
     const onWheel = (e: WheelEvent) => {
-      if (e.deltaY >= 0 || el.scrollTop <= 0) return;
+      if (!isScrollUpWheel(e, el.scrollTop)) return;
       settle(nextFollow(followingRef.current, { type: 'scroll-up-intent' }));
     };
     // A narrower window rewraps the rows, and taller controls shorten the transcript. The column is

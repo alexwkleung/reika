@@ -10,6 +10,14 @@ export function isAtBottom(m: ScrollMetrics, slack = BOTTOM_SLACK_PX): boolean {
   return m.scrollHeight - (m.scrollTop + m.clientHeight) <= slack;
 }
 
+// A wheel that means "scroll up": only where there is somewhere to go (on a transcript that fits,
+// or one at its top, it moves nothing and must not leave "Jump to latest" over the bottom), and
+// not a sideways swipe, whose small upward drift is a trackpad's, not the reader's.
+export function isScrollUpWheel(e: { deltaX: number; deltaY: number }, scrollTop: number): boolean {
+  if (e.deltaY >= 0 || scrollTop <= 0) return false;
+  return Math.abs(e.deltaY) > Math.abs(e.deltaX);
+}
+
 export type FollowEvent =
   | { type: 'user-scroll'; metrics: ScrollMetrics; previousTop?: number }
   | { type: 'scroll-up-intent' }
