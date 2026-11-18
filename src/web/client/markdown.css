@@ -58,6 +58,10 @@ h2.md-heading {
   padding: 0.6em 0.8em;
   border-radius: 4px;
   overflow-x: auto;
+  /* Thin and in the page's colours, where a mouse shows a classic bar; colour only, so an overlay
+     scrollbar stays the OS's. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--reika-rule) transparent;
   white-space: pre;
   tab-size: 4;
 }
@@ -87,6 +91,8 @@ h2.md-heading {
 }
 .md-table-scroll {
   overflow-x: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--reika-rule) transparent;
   max-width: 100%;
 }
 .md-table {

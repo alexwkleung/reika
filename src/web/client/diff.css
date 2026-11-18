@@ -5,6 +5,8 @@
   line-height: 1.45;
   overflow-x: auto;
   background: var(--reika-code-bg);
+  scrollbar-width: thin;
+  scrollbar-color: var(--reika-rule) transparent;
   border-radius: 4px;
   max-width: 100%;
 }
