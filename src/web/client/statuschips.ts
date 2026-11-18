@@ -65,7 +65,7 @@ export function statusStrip(s: WireState, stream: StreamStatus | null): StripIte
       fill: Math.min(1, fill),
       text: usable ? `${size} (${pct}% of ${kFormat(usable)})` : `${size} (${pct}%)`,
       title: usable
-        ? `${kFormat(contextTokens)} of a ${kFormat(window)} window. History is shed at ${kFormat(usable)}, the window less room for the reply.`
+        ? `${kFormat(contextTokens)} of a ${kFormat(window)} window. Older history is shed at ${kFormat(usable)} to leave room for the reply.`
         : `${kFormat(contextTokens)} of a ${kFormat(window)} window.`,
       warn: fill >= CONTEXT_WARN_FILL,
     });

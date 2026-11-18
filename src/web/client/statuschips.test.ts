@@ -81,7 +81,7 @@ describe('statusStrip', () => {
     expect(meter({ lastUsage: { promptTokens: 20_000, completionTokens: 1 } })).toMatchObject({
       kind: 'meter',
       text: '20k/32k (85% of 23k)',
-      title: '20k of a 32k window. History is shed at 23k, the window less room for the reply.',
+      title: '20k of a 32k window. Older history is shed at 23k to leave room for the reply.',
       // 63% of the raw window: the warning that never fired before history was shed.
       warn: true,
     });
