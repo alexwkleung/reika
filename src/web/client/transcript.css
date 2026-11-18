@@ -388,8 +388,6 @@
   font-family: var(--reika-mono);
   font-size: 0.88em;
   color: var(--reika-muted);
-  overflow-x: auto;
-  white-space: pre;
   tab-size: 8;
 }
 .command .command-tail {

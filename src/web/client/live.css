@@ -7,8 +7,6 @@
   font-family: var(--reika-mono);
   font-size: 0.82em;
   color: var(--reika-muted);
-  overflow-x: auto;
-  white-space: pre;
   tab-size: 8;
 }
 .live-tool--command {

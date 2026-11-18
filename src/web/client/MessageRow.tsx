@@ -13,6 +13,7 @@ import {
   reasoningText,
 } from './blocks.js';
 import { DiffView } from './DiffView.js';
+import { OutputLines } from './OutputLines.js';
 import { callParts, summaryParts, type Part } from './toolparts.js';
 import './transcript.css';
 
@@ -137,7 +138,7 @@ export function CommandChip({ command }: { command: NonNullable<Of<'tool'>['comm
           {command.outputTruncated ? (
             <div className="command-omitted">…(earlier output omitted)</div>
           ) : null}
-          <pre className="command-tail">{command.outputTail}</pre>
+          <OutputLines className="command-tail" text={command.outputTail} />
         </div>
       ) : null}
     </div>
@@ -253,7 +254,7 @@ function ShellRow({ m }: { m: Of<'shell'> }) {
         </span>
         {m.command}
       </div>
-      {output ? <pre className="command-tail">{output}</pre> : null}
+      {output ? <OutputLines className="command-tail" text={output} /> : null}
     </div>
   );
 }

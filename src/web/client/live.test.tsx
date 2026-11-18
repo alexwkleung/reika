@@ -38,9 +38,11 @@ describe('LiveTurn', () => {
 
   it('draws bash output under the command indent, other tools flush', () => {
     expect(draw(live({ tool: { name: 'bash', output: 'x' } }))).toContain(
-      'live-tool live-tool--command',
+      'live-tool live-tool--command output-lines',
     );
-    expect(draw(live({ tool: { name: '', output: 'x' } }))).toContain('class="live-tool"');
+    expect(draw(live({ tool: { name: '', output: 'x' } }))).toContain(
+      'class="live-tool output-lines',
+    );
   });
 
   it('holds a new call back for the delay, its streamed output included', () => {

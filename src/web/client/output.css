@@ -1,0 +1,11 @@
+/* Command output: wrapped, each line hanging its continuation rows under its own start. */
+.output-lines {
+  white-space: pre-wrap;
+  /* A path, URL or hash has no space to break at, and it is usually the line that is long. */
+  overflow-wrap: anywhere;
+}
+.output-line {
+  display: block;
+  padding-left: 2ch;
+  text-indent: -2ch;
+}

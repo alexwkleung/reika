@@ -17,6 +17,7 @@ import {
 import type { WireLive } from '../protocol.js';
 import { GLYPH, NoteBlock, Prose, ReasoningBlock } from './blocks.js';
 import { InlineMarkdown } from './Markdown.js';
+import { OutputLines } from './OutputLines.js';
 import {
   PENDING_ROW_DELAY_MS,
   pendingElapsedMs,
@@ -281,9 +282,10 @@ export function LiveTurn({
       ) : null}
       {tool && tool.output && !commandBlock && !holding ? (
         // Under the command chip's indent only for bash, where the committed output lands.
-        <pre className={`live-tool${tool.name === 'bash' ? ' live-tool--command' : ''}`}>
-          {tool.output}
-        </pre>
+        <OutputLines
+          className={`live-tool${tool.name === 'bash' ? ' live-tool--command' : ''}`}
+          text={tool.output}
+        />
       ) : null}
       {plan}
     </section>
