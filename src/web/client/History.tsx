@@ -312,6 +312,9 @@ export function History({
           {error ?? listError}
         </p>
       ) : null}
+      {/* Above the list, where its first row would be: an empty list fills the column, so a note
+          after it sat at the bottom, a screen away from the filter it answers. */}
+      {note ? <p className="history-note">{note}</p> : null}
       <ul className="history-list" aria-label="Sessions" aria-busy={list === null}>
         {list?.entries.map(entry => {
           const isCurrent = entry.current === true;
@@ -341,7 +344,6 @@ export function History({
           );
         })}
       </ul>
-      {note ? <p className="history-note">{note}</p> : null}
       <label className="history-scope">
         <input
           type="checkbox"

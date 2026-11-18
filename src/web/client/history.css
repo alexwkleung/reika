@@ -283,7 +283,9 @@ body.with-history {
 
 .history-note {
   margin: 0;
-  padding: 0 0.25rem;
+  /* The row's own inset, so the note starts where a session title would. */
+  padding: 0.5rem 0.625rem;
+  text-wrap: pretty;
   font-size: 0.875rem;
   color: var(--reika-muted);
 }
