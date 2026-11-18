@@ -67,11 +67,11 @@ const listOf = (over: Partial<WireSessionList> = {}): WireSessionList => ({
 });
 
 // What the page's media query and storage answer; linkedom has neither.
-const env = { wide: false, stored: new Map<string, string>() };
+const env = { wide: false, fine: false, stored: new Map<string, string>() };
 Object.assign(window, {
   matchMedia: (media: string) => ({
     media,
-    matches: env.wide,
+    matches: media.includes('pointer') ? env.fine : env.wide,
     addEventListener: () => {},
     removeEventListener: () => {},
   }),
@@ -216,6 +216,72 @@ describe('History as a drawer', () => {
     await h.click(h.q('.history-new'));
     expect(h.sent.at(-1)).toEqual({ type: 'new' });
     expect(h.q('.history')).toBeNull();
+  });
+
+  describe('the input box after New or a resume', () => {
+    // linkedom keeps no focus, so the calls are what is checked.
+    const focused = async (run: () => Promise<void>) => {
+      document.querySelector('textarea.composer-input')?.remove();
+      const box = document.createElement('textarea');
+      box.className = 'composer-input';
+      document.body.appendChild(box);
+      const proto = window.HTMLElement.prototype as { focus?: () => void };
+      const real = proto.focus;
+      const focus = vi.fn();
+      proto.focus = focus;
+      try {
+        await run();
+      } finally {
+        proto.focus = real;
+      }
+      return { box, calls: focus.mock.contexts as Element[] };
+    };
+
+    it('takes focus with a mouse, from the panel, the rail and a row', async () => {
+      env.fine = true;
+      try {
+        for (const step of ['panel', 'rail', 'row'] as const) {
+          let h!: Awaited<ReturnType<typeof mount>>;
+          const { box, calls } = await focused(async () => {
+            h = await mount();
+            if (step === 'rail') return h.click(h.q('.history-rail-new'));
+            await h.open();
+            await h.click(step === 'panel' ? h.q('.history-new') : h.rows()[1]);
+          });
+          expect(h.q('.history')).toBeNull();
+          // Last, so the drawer closing does not hand focus back to its show button.
+          expect(calls.at(-1)).toBe(box);
+          expect(calls.some(el => el.className === 'history-show')).toBe(false);
+        }
+      } finally {
+        env.fine = false;
+      }
+    });
+
+    it('stays put on a touch screen, where focus would open the keyboard', async () => {
+      let h!: Awaited<ReturnType<typeof mount>>;
+      const { box, calls } = await focused(async () => {
+        h = await mount();
+        await h.open();
+        await h.click(h.rows()[1]);
+      });
+      expect(calls).not.toContain(box);
+      expect(calls.at(-1)).toBe(h.q('.history-show'));
+    });
+
+    it('is not focused when the server refuses', async () => {
+      env.fine = true;
+      try {
+        const { box, calls } = await focused(async () => {
+          const h = await mount({ reply: () => ({ kind: 'conflict', error: 'busy' }) });
+          await h.open();
+          await h.click(h.q('.history-new'));
+        });
+        expect(calls).not.toContain(box);
+      } finally {
+        env.fine = false;
+      }
+    });
   });
 
   it('starts a new conversation from the collapsed rail without opening the panel', async () => {

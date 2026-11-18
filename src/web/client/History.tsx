@@ -49,6 +49,14 @@ function writePinned(pinned: boolean): void {
   } catch {}
 }
 
+// After a New or a resume, the next thing is typing. Not on a touch screen, where focus opens the
+// keyboard over the conversation just opened. A disabled box (a dialog open, the page locked) takes none.
+function focusComposerUnlessTouch(): boolean {
+  if (!window.matchMedia?.('(pointer: fine)').matches) return false;
+  document.querySelector<HTMLTextAreaElement>('textarea.composer-input')?.focus();
+  return true;
+}
+
 function mediaQuery(): MediaQueryList | null {
   return typeof window.matchMedia === 'function' ? window.matchMedia(PANE_QUERY) : null;
 }
@@ -161,7 +169,7 @@ export function History({
 
   // The filter goes with the panel: a list reopened under an old filter reads as sessions gone
   // missing.
-  const hide = () => {
+  const hide = (returnFocus = true) => {
     setError(null);
     setFilter('');
     setQuery('');
@@ -171,7 +179,7 @@ export function History({
     } else {
       setDrawerOpen(false);
     }
-    focusShowButton.current = true;
+    focusShowButton.current = returnFocus;
   };
   const show = () => {
     focusOnShow.current = true;
@@ -194,7 +202,8 @@ export function History({
     setPending(null);
     if (r.kind === 'ok') {
       // A pane stays where it is; the drawer gets out of the way of the conversation it opened.
-      if (!asPane) hide();
+      const typing = focusComposerUnlessTouch();
+      if (!asPane) hide(!typing);
       return;
     }
     refused(r);
@@ -215,7 +224,10 @@ export function History({
     setError(null);
     const r = await send({ type: 'new' });
     setPending(null);
-    if (r.kind === 'ok') return;
+    if (r.kind === 'ok') {
+      focusComposerUnlessTouch();
+      return;
+    }
     refused(r);
     show();
   };
@@ -274,7 +286,7 @@ export function History({
             {...tip('Hide history', { aria: false })}
             aria-expanded="true"
             aria-controls="history-panel"
-            onClick={hide}
+            onClick={() => hide()}
           >
             <PanelIcon open />
           </button>
@@ -284,7 +296,7 @@ export function History({
             type="button"
             className="history-close"
             aria-label="Close"
-            onClick={hide}
+            onClick={() => hide()}
           >
             <svg viewBox="0 0 16 16" aria-hidden="true">
               <path d="M4 4l8 8M12 4l-8 8" />
@@ -391,7 +403,7 @@ export function History({
       {asPane ? body : null}
       {shown && !asPane ? (
         <div className="history-layer">
-          <div className="history-backdrop" onClick={hide} aria-hidden="true" />
+          <div className="history-backdrop" onClick={() => hide()} aria-hidden="true" />
           {body}
         </div>
       ) : null}
