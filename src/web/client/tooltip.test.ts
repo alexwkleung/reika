@@ -35,6 +35,12 @@ describe('placeTip', () => {
     expect(placeTip({ left: 450, top: 10, bottom: 40, width: 100 }, size, viewport).top).toBe(46);
   });
 
+  it('sits beside its element when asked, clear of a stacked neighbour', () => {
+    expect(placeTip({ left: 10, top: 46, bottom: 78, width: 32 }, size, viewport, 'right')).toEqual(
+      { left: 10 + 32 + 6, top: 62 - 12 },
+    );
+  });
+
   it('stays inside the window at either side', () => {
     expect(placeTip({ left: 0, top: 400, bottom: 420, width: 20 }, size, viewport).left).toBe(8);
     expect(placeTip({ left: 990, top: 400, bottom: 420, width: 10 }, size, viewport).left).toBe(

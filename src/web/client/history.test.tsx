@@ -217,6 +217,29 @@ describe('History as a drawer', () => {
     expect(h.q('.history')).toBeNull();
   });
 
+  it('starts a new conversation from the collapsed rail without opening the panel', async () => {
+    const h = await mount();
+    await h.click(h.q('.history-rail-new'));
+    expect(h.sent).toEqual([{ type: 'new' }]);
+    expect(h.q('.history')).toBeNull();
+  });
+
+  it('turns the rail button off while a prompt runs, saying why', async () => {
+    const h = await mount({ state: { status: 'busy' } });
+    const fresh = h.q<HTMLButtonElement>('.history-rail-new')!;
+    expect(fresh.disabled).toBe(true);
+    expect(fresh.getAttribute('aria-description')).toMatch(/running prompt/);
+  });
+
+  it('opens the panel to show a refusal from the rail', async () => {
+    const h = await mount({
+      reply: m =>
+        m.type === 'new' ? { kind: 'conflict', error: 'a turn is running' } : { kind: 'ok' },
+    });
+    await h.click(h.q('.history-rail-new'));
+    expect(h.q('.history-error')?.textContent).toBe('A turn is running.');
+  });
+
   it('names the total of a capped list in the filter, and no count when it is whole', async () => {
     const capped = await mount({ list: () => listOf({ total: 250 }) });
     await capped.open();

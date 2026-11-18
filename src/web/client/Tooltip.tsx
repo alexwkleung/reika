@@ -35,12 +35,21 @@ function isCut(el: HTMLElement): boolean {
 }
 
 // Where the bubble goes: above the element, centred and held inside the window, or below it when
-// there is no room above.
+// there is no room above. `right` (an element's `--tip-side`, so a layout can choose it) is for a
+// button in a stack, where above or below lands on its neighbour.
 export function placeTip(
   anchor: { left: number; top: number; bottom: number; width: number },
   size: { width: number; height: number },
   viewport: { width: number; height: number },
+  side?: string,
 ): { left: number; top: number } {
+  if (side === 'right') {
+    const middle = (anchor.top + anchor.bottom) / 2 - size.height / 2;
+    return {
+      left: anchor.left + anchor.width + GAP,
+      top: Math.max(EDGE, Math.min(middle, viewport.height - size.height - EDGE)),
+    };
+  }
   const centred = anchor.left + anchor.width / 2 - size.width / 2;
   const left = Math.max(EDGE, Math.min(centred, viewport.width - size.width - EDGE));
   const above = anchor.top - GAP - size.height;
@@ -120,6 +129,7 @@ export function TooltipLayer() {
       r,
       { width: box.offsetWidth, height: box.offsetHeight },
       { width: window.innerWidth, height: window.innerHeight },
+      getComputedStyle(shown.el).getPropertyValue('--tip-side').trim(),
     );
     box.style.left = `${at.left}px`;
     box.style.top = `${at.top}px`;

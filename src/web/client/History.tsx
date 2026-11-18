@@ -7,8 +7,8 @@ import { tip } from './Tooltip.js';
 
 // This project's saved sessions, opened in place as `/resume` does (one session per server, never
 // a live switcher). A pane pinned beside the chat on a wide window, a drawer over it on a narrow
-// one. The pane collapses from its own header; collapsed, or narrow, a button at the page's
-// top-left shows it. The server decides what may open; this only disables what it would refuse.
+// one. The pane collapses from its own header; collapsed, or narrow, two buttons at the page's
+// top-left show it and start a new conversation. The server decides what may open; this only disables what it would refuse.
 
 const FILTER_DELAY_MS = 150;
 const AGE_TICK_MS = 60_000;
@@ -23,6 +23,14 @@ function PanelIcon({ open }: { open: boolean }) {
       <rect x="2" y="2.5" width="12" height="11" rx="2" />
       <path d="M6 2.5v11" />
       <path d={open ? 'M10.5 6.25 8.75 8l1.75 1.75' : 'M9 6.25 10.75 8 9 9.75'} />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M8 3v10M3 8h10" />
     </svg>
   );
 }
@@ -189,12 +197,27 @@ export function History({
       if (!asPane) hide();
       return;
     }
+    refused(r);
+  };
+  const refused = (r: Exclude<Awaited<ReturnType<Send>>, { kind: 'ok' }>) => {
     if (r.kind === 'conflict') {
       setError(r.error.replace(/^./, c => c.toUpperCase()) + '.');
       setReload(n => n + 1);
       return;
     }
     setError(r.kind === 'signed-out' ? 'Signed out: open a fresh link.' : r.error);
+  };
+  // From the collapsed rail: nothing to close on success, and a refusal opens the panel, the one
+  // place an error is drawn.
+  const startNew = async () => {
+    if (pending !== null) return;
+    setPending('new');
+    setError(null);
+    const r = await send({ type: 'new' });
+    setPending(null);
+    if (r.kind === 'ok') return;
+    refused(r);
+    show();
   };
 
   // The drawer is modal: Escape closes it and Tab stays inside. The pane is part of the page.
@@ -239,9 +262,7 @@ export function History({
           {...tip(blocked)}
           onClick={() => void act('new', { type: 'new' })}
         >
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <path d="M8 3v10M3 8h10" />
-          </svg>
+          <PlusIcon />
           New conversation
         </button>
         {asPane ? (
@@ -341,17 +362,30 @@ export function History({
   return (
     <>
       {asPane ? null : (
-        <button
-          ref={showButton}
-          type="button"
-          className="history-show"
-          aria-label="Show history"
-          {...tip('Show history', { aria: false })}
-          aria-expanded={shown}
-          onClick={show}
-        >
-          <PanelIcon open={false} />
-        </button>
+        <div className="history-rail">
+          <button
+            ref={showButton}
+            type="button"
+            className="history-show"
+            aria-label="Show history"
+            {...tip('Show history', { aria: false })}
+            aria-expanded={shown}
+            onClick={show}
+          >
+            <PanelIcon open={false} />
+          </button>
+          <button
+            type="button"
+            className="history-show history-rail-new"
+            aria-label="New conversation"
+            {...tip(blocked ?? 'New conversation', { aria: blocked !== null })}
+            disabled={blocked !== null}
+            aria-disabled={pending !== null || undefined}
+            onClick={() => void startNew()}
+          >
+            <PlusIcon />
+          </button>
+        </div>
       )}
       {asPane ? body : null}
       {shown && !asPane ? (

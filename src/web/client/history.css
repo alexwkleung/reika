@@ -2,11 +2,26 @@
    the panel it shows: a pane pinned
    beside the chat from 72rem (PANE_QUERY in History.tsx), a drawer over it below that. Controls
    take the pills' surface and border so the panel reads as part of the same set. */
-.history-show {
+/* The collapsed rail: show-history over new conversation, the same button twice. Side by side
+   where the page starts below them (narrow), so they take no more height than one did. */
+.history-rail {
   position: fixed;
   top: 10px;
   left: 10px;
   z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* Tooltips beside the stack: above or below, each lands on the other button. */
+  --tip-side: right;
+}
+@media (max-width: 60rem) {
+  .history-rail {
+    flex-direction: row;
+    --tip-side: initial;
+  }
+}
+.history-show {
   display: inline-grid;
   place-items: center;
   width: 2rem;
@@ -18,8 +33,12 @@
   border-radius: 8px;
   cursor: pointer;
 }
-.history-show:hover {
+.history-show:hover:not(:disabled) {
   border-color: var(--reika-rule-strong);
+}
+.history-show:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 .history-show svg,
 .history-close svg,
