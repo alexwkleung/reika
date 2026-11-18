@@ -89,4 +89,4 @@ pnpm add -g @alexwkleung/reika
 brew install alexwkleung/tap/reika
 ```
 
-然后连接模型服务器，在项目中运行 `reika`。[安装与首次使用](../getting-started.md)介绍运行要求与设置步骤。
+然后连接模型服务器，在项目中运行 `reika`，或运行 `reika web` 打开[浏览器界面](../web.md)。[安装与首次使用](../getting-started.md)介绍运行要求与设置步骤。

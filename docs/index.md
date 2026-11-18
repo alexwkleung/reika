@@ -90,5 +90,5 @@ pnpm add -g @alexwkleung/reika
 brew install alexwkleung/tap/reika
 ```
 
-Then point it at a model server and run `reika` in a project. [Install and first run](getting-started.md)
-covers requirements and setup.
+Then point it at a model server and run `reika` in a project, or `reika web` for the
+[browser view](web.md). [Install and first run](getting-started.md) covers requirements and setup.
