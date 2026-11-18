@@ -57,6 +57,13 @@ function focusComposerUnlessTouch(): boolean {
   return true;
 }
 
+// Pressing a button moves focus to it, so a focused input box blinked out until the reply handed
+// it back. With a mouse, focus stays put: the click still lands. On touch the keyboard should close.
+function keepComposerFocus(e: { preventDefault(): void }): void {
+  const typing = document.activeElement?.classList.contains('composer-input');
+  if (typing && window.matchMedia?.('(pointer: fine)').matches) e.preventDefault();
+}
+
 function mediaQuery(): MediaQueryList | null {
   return typeof window.matchMedia === 'function' ? window.matchMedia(PANE_QUERY) : null;
 }
@@ -272,6 +279,7 @@ export function History({
           disabled={blocked !== null}
           aria-disabled={pending !== null || undefined}
           {...tip(blocked)}
+          onMouseDown={keepComposerFocus}
           onClick={() => void act('new', { type: 'new' })}
         >
           <PlusIcon />
@@ -342,6 +350,7 @@ export function History({
                 // A title cut to the row's one line is still there to read. Why a row is off goes
                 // unsaid here: the current one is marked, and a running prompt is in the input box.
                 {...tip(sessionTitle(entry), { cut: '.history-title-text' })}
+                onMouseDown={keepComposerFocus}
                 onClick={() => void act(entry.id, { type: 'resume', scope, id: entry.id })}
               >
                 <span className="history-title">
@@ -394,6 +403,7 @@ export function History({
             {...tip(blocked ?? 'New conversation', { aria: blocked !== null })}
             disabled={blocked !== null}
             aria-disabled={pending !== null || undefined}
+            onMouseDown={keepComposerFocus}
             onClick={() => void startNew()}
           >
             <PlusIcon />

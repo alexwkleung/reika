@@ -269,6 +269,34 @@ describe('History as a drawer', () => {
       expect(calls.at(-1)).toBe(h.q('.history-show'));
     });
 
+    it('keeps a focused box focused through a mouse press, not on touch', async () => {
+      const box = document.createElement('textarea');
+      box.className = 'composer-input';
+      document.body.appendChild(box);
+      const was = Object.getOwnPropertyDescriptor(document, 'activeElement');
+      Object.defineProperty(document, 'activeElement', { configurable: true, get: () => box });
+      const press = (el: Element | null) => {
+        const e = new window.Event('mousedown', { bubbles: true, cancelable: true });
+        el!.dispatchEvent(e);
+        return e.defaultPrevented;
+      };
+      try {
+        const h = await mount();
+        env.fine = true;
+        expect(press(h.q('.history-rail-new'))).toBe(true);
+        await h.open();
+        expect(press(h.q('.history-new'))).toBe(true);
+        expect(press(h.rows()[1])).toBe(true);
+        env.fine = false;
+        expect(press(h.q('.history-new'))).toBe(false);
+      } finally {
+        env.fine = false;
+        if (was) Object.defineProperty(document, 'activeElement', was);
+        else delete (document as { activeElement?: unknown }).activeElement;
+        box.remove();
+      }
+    });
+
     it('is not focused when the server refuses', async () => {
       env.fine = true;
       try {
