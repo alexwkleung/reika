@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
@@ -36,6 +37,7 @@ function useFramed<T>(holder: Holder<T>, schedule: FrameScheduler): T {
 // its own element, so that is what is measured and moved.
 function useFollowBottom(
   content: unknown,
+  replaced: number,
   scroller: RefObject<HTMLElement | null>,
 ): { following: boolean; jump: () => void } {
   const [following, setFollowing] = useState(true);
@@ -113,6 +115,12 @@ function useFollowBottom(
   useEffect(() => {
     if (followingRef.current) apply({ type: 'content-grew' });
   }, [content, apply]);
+  // Another conversation opened: start at its end, as the terminal does, wherever the reader had
+  // scrolled the last one. Following again also holds the end while its rows are still drawing.
+  // Before paint, so its first frame is not drawn at the old conversation's scroll position.
+  useLayoutEffect(() => {
+    if (replaced > 0) apply({ type: 'jump' });
+  }, [replaced, apply]);
   return { following, jump: () => apply({ type: 'jump' }) };
 }
 
@@ -139,7 +147,7 @@ export function App({
   const busy = s.session?.status === 'busy';
   const mode = s.session?.mode;
   const scroller = useRef<HTMLElement>(null);
-  const { following, jump } = useFollowBottom(s, scroller);
+  const { following, jump } = useFollowBottom(s, s.replaced, scroller);
   const restoreLine = useRef<() => void>(() => {});
   return (
     <div className="app">

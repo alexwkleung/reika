@@ -211,6 +211,15 @@ describe('foldEvent: committed events', () => {
     expect(s.session).toBe(withDialog.session);
   });
 
+  it('counts a replaced conversation, but not the redraw a reconnect snapshot opens with', () => {
+    const joined = fold(base, ...snapshot(1, { messages: [user('a')] }));
+    expect(joined.replaced).toBe(0);
+    const resumed = fold(joined, { type: 'reset', seq: 2, messages: [user('b')] });
+    expect(resumed.replaced).toBe(1);
+    const reconnected = fold(resumed, ...snapshot(3, { messages: [user('b')] }));
+    expect(reconnected.replaced).toBe(1);
+  });
+
   it('state replaces the session', () => {
     const s = fold(base, {
       type: 'state',

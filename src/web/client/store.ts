@@ -32,6 +32,8 @@ export type ClientState = {
   versionMismatch: number | null;
   // The server's clock minus this tab's, measured at each live event's arrival (pendingdelay.ts).
   clockOffset: number | null;
+  // Bumped each time the conversation is replaced (a resume, `/new`): the view jumps to its end.
+  replaced: number;
 };
 
 export const initialClientState: ClientState = {
@@ -45,6 +47,7 @@ export const initialClientState: ClientState = {
   snapshotSeq: null,
   versionMismatch: null,
   clockOffset: null,
+  replaced: 0,
 };
 
 function isSnapshotEvent(state: ClientState, seq: number): boolean {
@@ -80,7 +83,12 @@ function foldCommitted(state: ClientState, event: CommittedEvent): ClientState {
       return { ...next, messages: [...state.messages, event.message] };
     case 'reset':
       // Messages only: dialogs close by their own `resolved`, and live is sent on its own.
-      return { ...next, messages: event.messages };
+      // A reconnect's snapshot redraws the same conversation, so a reader scrolled up keeps their place.
+      return {
+        ...next,
+        messages: event.messages,
+        replaced: isSnapshotEvent(state, event.seq) ? state.replaced : state.replaced + 1,
+      };
     case 'state':
       return { ...next, session: event.state };
     case 'dialog': {
