@@ -332,7 +332,6 @@ export function History({
                 <span className="history-title">
                   <span className="history-title-text">{sessionTitle(entry)}</span>
                   {entry.chat ? <span className="history-tag">chat</span> : null}
-                  {isCurrent ? <span className="history-tag">current</span> : null}
                 </span>
                 {/* No "Opening…" in its place: a resume lands in a moment, and the swap read as a
                     flicker. The disabled rows already say something is under way. */}

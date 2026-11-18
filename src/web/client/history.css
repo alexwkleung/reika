@@ -242,20 +242,15 @@ body.with-history {
 .history-row:disabled:not([aria-current]) {
   opacity: 0.55;
 }
-/* The prompt's own rule, so the session you are in is marked the way your prompts are; inset, so
-   the row keeps its rounded corners. */
+/* A tint of the prompt's colour, so the session you are in is marked the way your prompts are, and
+   reads apart from a hovered row's neutral grey. No edge bar: a row this narrow has no room for a
+   line that looks meant. */
 .history-row[aria-current] {
-  background: var(--reika-user-bg);
+  background: color-mix(in oklab, var(--reika-accent) 14%, var(--reika-user-bg));
 }
-.history-row[aria-current]::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 0.5rem;
-  bottom: 0.5rem;
-  width: 2px;
-  border-radius: 2px;
-  background: var(--reika-accent);
+/* The details' grey is under 3:1 on the tint; this is about 5:1, past what text this small needs. */
+.history-row[aria-current] .history-meta {
+  color: color-mix(in oklab, var(--reika-secondary) 70%, var(--reika-text));
 }
 .history-title {
   display: flex;

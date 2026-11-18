@@ -139,7 +139,8 @@ describe('History as a drawer', () => {
     const [current, other] = h.rows();
     expect(current.getAttribute('aria-current')).toBe('true');
     expect(current.disabled).toBe(true);
-    expect(current.textContent).toContain('current');
+    // Marked by `aria-current` and the row's styling, not a word in the title.
+    expect(current.textContent).not.toContain('current');
     expect(other.disabled).toBe(false);
     expect(other.textContent).toContain('which db');
     expect(other.textContent).toContain('chat');
