@@ -722,7 +722,7 @@ describe('history drawer', () => {
     expect(contents).not.toContain('x');
   });
 
-  it('starts a new conversation as /new does, closing an open /resume picker', async () => {
+  it('starts a new conversation with an empty transcript, closing an open /resume picker', async () => {
     await saved(project(), 'a', 'x');
     const { controller, bridge, events } = setup();
     bridge.handle({ type: 'submit', text: '/resume' });
@@ -730,7 +730,8 @@ describe('history drawer', () => {
     const [picker] = dialogs(events);
     expect(bridge.handle({ type: 'new' })).toEqual({ ok: true });
     expect(resolved(events)).toContainEqual({ id: picker.id, outcome: 'cancelled' });
-    expect(controller.messages[0]).toEqual({ role: 'user', content: '/new', meta: true });
+    expect(controller.messages).toEqual([]);
+    expect(events.filter(e => e.type === 'reset').at(-1)).toMatchObject({ messages: [] });
     expect(controller.getSnapshot().history).toEqual(['/resume']);
   });
 

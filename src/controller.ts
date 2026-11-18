@@ -430,7 +430,8 @@ export type Controller = {
   // in agent mode on the default profile with the counters, the auto-approve toggle and the model
   // pick cleared. The scrollback is seeded with the echo and a receipt, since an empty screen
   // reads as a fresh launch.
-  newConversation(echo: Message): void;
+  // No echo is a click (the web's New conversation): the cleared transcript is its receipt.
+  newConversation(echo?: Message): void;
   // Puts a saved session in this one's place and hands back the rows to show: the side that is
   // now on screen, then a receipt. The caller shows them, in slices if it wants, starting with a
   // `replace`. A session with only one side opens on that side (#875).
@@ -1652,10 +1653,12 @@ export function createController(opts: {
       sessionPath = null;
       saveHold = null;
       set({
-        messages: [
-          echo,
-          { role: 'system', content: 'New session — conversation, tokens, and mode reset.' },
-        ],
+        messages: echo
+          ? [
+              echo,
+              { role: 'system', content: 'New session — conversation, tokens, and mode reset.' },
+            ]
+          : [],
         approvals: { approved: 0, declined: 0 },
         sessionAutoApprove: null,
         ...freshMeasurements(),

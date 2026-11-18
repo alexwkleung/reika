@@ -895,12 +895,12 @@ export function createWebBridge(
         }
         case 'new': {
           // Its own message rather than a submitted `/new`, which mid-turn would be queued and
-          // wipe the conversation whenever the turn ended.
+          // wipe the conversation whenever the turn ended. No echo: nobody typed `/new`.
           const busy = switchRefusal('conversations');
           if (busy) return busy;
           supersedePicker('session');
           clearUploads();
-          controller.newConversation({ role: 'user', content: '/new', meta: true });
+          controller.newConversation();
           return { ok: true };
         }
         case 'answer':
