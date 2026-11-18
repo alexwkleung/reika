@@ -18,7 +18,6 @@ export type StripItem =
   // `fill` is null with no window known: the count is shown with no bar to fill.
   | { kind: 'meter'; fill: number | null; text: string; title: string; warn: boolean }
   | { kind: 'stat'; text: string; title: string }
-  | { kind: 'path'; text: string }
   | { kind: 'alert'; text: string }
   // The branch's PR, as the TUI's chip: `PR #12`, plus `draft` or `merged` when that changes what
   // the branch means. `url` only when it is a GitHub page link.
@@ -106,6 +105,5 @@ export function statusStrip(s: WireState, stream: StreamStatus | null): StripIte
     items.push({ kind: 'pr', number: s.pr.number, url, state: s.pr.state ?? null });
   }
   if (stream && stream !== 'open') items.push({ kind: 'alert', text: stream });
-  if (s.cwd) items.push({ kind: 'path', text: s.cwd });
   return items;
 }

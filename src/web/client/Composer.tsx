@@ -40,6 +40,7 @@ import { notRecalling, recallStep, type Recall } from './inputhistory.js';
 import { caretLines, carriesImage, composerKeyAction, IMAGES_UNSUPPORTED } from './keys.js';
 import { ImagePreview } from './ImagePreview.js';
 import { PillMenu, type PillOption } from './PillMenu.js';
+import { ProjectPath } from './ProjectPath.js';
 import type { SendResult, UploadResult } from './send.js';
 import './composer.css';
 import { tip } from './Tooltip.js';
@@ -753,6 +754,7 @@ export function Composer({
                 <path d="M13 7.5 8 12.5a3 3 0 0 1-4.2-4.2L9 3a2 2 0 0 1 2.8 2.8L6.7 11a1 1 0 0 1-1.4-1.4L10 5" />
               </svg>
             </button>
+            {session?.cwd ? <ProjectPath path={session.cwd} /> : null}
             {showStop ? (
               <button
                 type="button"

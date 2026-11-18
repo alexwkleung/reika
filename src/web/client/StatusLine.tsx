@@ -5,7 +5,7 @@ import './status.css';
 import { tip } from './Tooltip.js';
 
 // The quiet strip under the input box: approvals, the context meter, the session's numbers and the
-// folder, with a session error above it.
+// branch's PR, with a session error above it. The folder is in the input box's row (ProjectPath).
 export function StatusLine({
   session,
   stream,
@@ -79,21 +79,6 @@ export function StatusLine({
           </span>
         );
       }
-      case 'path': {
-        // One slot on the chips' row, never a line of its own: the parent folders give way to an
-        // ellipsis from the left as the room shrinks (the nearest ones are kept), and the folder's
-        // own name stays whole. A path that hopped
-        // lines with the chips beside it moved the strip, and the input box over it, every second.
-        const { head, tail } = splitPath(item.text);
-        return (
-          <span key={i} className="status-path" {...tip(item.text, { cut: '.status-path-head' })}>
-            <span className="status-path-head">
-              <span>{head}</span>
-            </span>
-            <span className="status-path-tail">{tail}</span>
-          </span>
-        );
-      }
     }
   };
   return (
@@ -104,18 +89,8 @@ export function StatusLine({
         </div>
       ) : null}
       <div className="status-strip" aria-label="Status">
-        <span className="status-items">
-          {items.filter(item => item.kind !== 'path').map(renderItem)}
-        </span>
-        {items.filter(item => item.kind === 'path').map(renderItem)}
+        <span className="status-items">{items.map(renderItem)}</span>
       </div>
     </div>
   );
-}
-
-// `/a/b/proj` → `/a/b` and `/proj`: the part that may be cut, and the part that may not. The slash
-// rides the name, so a cut reads `…/b/proj`.
-export function splitPath(path: string): { head: string; tail: string } {
-  const at = path.replace(/\/+$/, '').lastIndexOf('/');
-  return at <= 0 ? { head: '', tail: path } : { head: path.slice(0, at), tail: path.slice(at) };
 }

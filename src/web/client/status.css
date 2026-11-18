@@ -14,10 +14,9 @@
   gap: 0.25rem 1.125rem;
   min-width: 0;
 }
-/* The chips take the room they need and wrap among themselves only when even a cut folder would
-   not leave them a line; the folder takes what is left. */
+/* The chips wrap among themselves. */
 .status-items {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -81,31 +80,6 @@
 }
 .status-alert {
   color: var(--reika-warning);
-}
-/* The rest of the row, right-aligned. Its parent folders shrink behind an ellipsis; its own name
-   never does (StatusLine's splitPath), so it always says which project this is. */
-.status-path {
-  flex: 1 1 0;
-  min-width: 5rem;
-  display: flex;
-  justify-content: flex-end;
-  white-space: nowrap;
-  color: var(--reika-muted);
-}
-/* Cut from the left (rtl), so the folders nearest the project stay and the sliver a cut leaves
-   falls off the left edge rather than as a gap before the name; the path itself runs ltr inside. */
-.status-path-head {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  direction: rtl;
-}
-.status-path-head > span {
-  direction: ltr;
-  unicode-bidi: isolate;
-}
-.status-path-tail {
-  flex: none;
 }
 .status-error {
   color: var(--reika-error);

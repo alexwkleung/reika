@@ -53,9 +53,11 @@ another). Without any of those it opens a tab in your default browser and says s
   Enter waits until every image is read. Once sent, a line under your prompt says what was read
   from each image.
 - **Two pills in the input box** switch the mode and the model. They are off while a prompt runs or
-  waits, since a switch then would change what the waiting line was typed for.
+  waits, since a switch then would change what the waiting line was typed for. The project
+  folder's name sits beside Send, with its full path on hover; on a narrow screen it gives way to
+  the pills.
 - **The status line** shows the approval mode, how full the context is, the token counts, decode
-  speed, cache hits, the branch's PR and the project folder.
+  speed, cache hits and the branch's PR.
 - **Approvals and questions** open as a card above the input. A number key moves to that option
   and Enter answers, so a stray key never answers for you; on an approval, `y` and `n` move to Yes
   and No; the arrow keys step through the options, and so does the pointer. An approval takes a

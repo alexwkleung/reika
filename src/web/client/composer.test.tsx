@@ -184,6 +184,15 @@ describe('Composer', () => {
     await m.unmount();
   });
 
+  it('names the project folder before Send, the full path on hover', async () => {
+    const m = await mount({ session: { cwd: '/Users/octocat/Git/app/' } });
+    const folder = m.container.querySelector('.composer-folder')!;
+    expect(folder.textContent).toBe('app');
+    expect(folder.getAttribute('data-tip')).toBe('/Users/octocat/Git/app/');
+    expect(folder.nextElementSibling?.getAttribute('aria-label')).toBe('Send');
+    await m.unmount();
+  });
+
   it('Send sends, and is off for an empty box', async () => {
     const m = await mount();
     expect(m.button('Send')!.disabled).toBe(true);

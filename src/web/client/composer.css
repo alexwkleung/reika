@@ -534,3 +534,36 @@
   color: var(--reika-error);
   overflow-wrap: anywhere;
 }
+
+/* The project folder, right of the controls and left of Send: muted text, not a pill, since it is
+   not a control. It gives way first, down to nothing, so the pills keep their labels. */
+.composer-folder {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  margin-left: auto;
+  margin-right: 0.375rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+  color: var(--reika-muted);
+}
+.composer-folder svg {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linejoin: round;
+}
+.composer-folder-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-folder + .composer-round {
+  margin-left: 0;
+}

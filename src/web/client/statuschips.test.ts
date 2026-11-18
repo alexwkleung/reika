@@ -40,8 +40,8 @@ const texts = (s: WireState, stream: Parameters<typeof statusStrip>[1] = 'open')
   strip(s, stream).map(label);
 
 describe('statusStrip', () => {
-  it('a fresh session with no window: just the folder', () => {
-    expect(strip(state())).toEqual([{ kind: 'path', text: '/repo' }]);
+  it('a fresh session with no window: nothing', () => {
+    expect(strip(state())).toEqual([]);
   });
 
   it('a session with usage, a window, sheds and a cache hit, in order, with no mode or model', () => {
@@ -64,7 +64,6 @@ describe('statusStrip', () => {
       '21 tok/s',
       '90% cached (18k)',
       '2 sheds · 1 fold',
-      '/repo',
     ]);
     expect(items[1]).toMatchObject({
       kind: 'meter',
@@ -129,16 +128,11 @@ describe('statusStrip', () => {
     expect(texts(state({ autoApprove: 'bypass', unattended: true }))).toContain('bypass approvals');
     expect(texts(state({ autoApprove: 'bypass', unattended: true }))).not.toContain('unattended');
     expect(texts(state({ unattended: true }))).toContain('unattended');
-    expect(texts(state({ mode: 'chat', autoApprove: 'safe', unattended: true }))).toEqual([
-      '/repo',
-    ]);
+    expect(texts(state({ mode: 'chat', autoApprove: 'safe', unattended: true }))).toEqual([]);
   });
 
-  it('names the stream when it is not open, before the folder', () => {
-    expect(strip(state(), 'reconnecting')).toEqual([
-      { kind: 'alert', text: 'reconnecting' },
-      { kind: 'path', text: '/repo' },
-    ]);
+  it('names the stream when it is not open', () => {
+    expect(strip(state(), 'reconnecting')).toEqual([{ kind: 'alert', text: 'reconnecting' }]);
   });
 });
 
@@ -154,7 +148,7 @@ describe('shortenMiddle', () => {
 });
 
 describe('StatusLine', () => {
-  it('draws the tag, the meter, the folder and a session error', () => {
+  it('draws the tag, the meter and a session error, and no folder', () => {
     const html = renderToStaticMarkup(
       createElement(StatusLine, {
         session: state({
@@ -172,10 +166,8 @@ describe('StatusLine', () => {
     expect(html).toContain('aria-valuenow="50"');
     expect(html).toContain('style="width:50%"');
     expect(html).toContain('16k/32k (50%)');
-    // Its tooltip only when its parent folders are cut, and no browser title anywhere in the strip.
-    expect(html).toContain(
-      '<span class="status-path" data-tip="/repo" data-tip-cut=".status-path-head"><span class="status-path-head"><span></span></span><span class="status-path-tail">/repo</span></span>',
-    );
+    // The folder is the input box's (ProjectPath); no browser title anywhere in the strip.
+    expect(html).not.toContain('/repo');
     expect(html).not.toContain('title=');
     expect(html).toContain('data-tip="16k of a 32k window."');
     expect(html).toContain('aria-description="16k of a 32k window."');
@@ -184,7 +176,7 @@ describe('StatusLine', () => {
     );
   });
 
-  it('shows the branch PR before the folder, its state when it has one, and links only https', () => {
+  it('shows the branch PR, its state when it has one, and links only https', () => {
     const pr = (p: WireState['pr']) => strip(state({ pr: p })).find(i => i.kind === 'pr');
     expect(pr({ number: 12, url: 'https://github.com/octocat/app/pull/12' })).toEqual({
       kind: 'pr',
@@ -194,7 +186,7 @@ describe('StatusLine', () => {
     });
     expect(pr({ number: 12, state: 'merged' })).toMatchObject({ url: null, state: 'merged' });
     expect(pr({ number: 12, url: 'javascript:alert(1)' })).toMatchObject({ url: null });
-    expect(strip(state({ pr: { number: 3 } })).map(i => i.kind)).toEqual(['pr', 'path']);
+    expect(strip(state({ pr: { number: 3 } })).map(i => i.kind)).toEqual(['pr']);
   });
 
   it('links the PR number and not its label, as the TUI does', () => {
@@ -206,18 +198,5 @@ describe('StatusLine', () => {
       '<span class="status-pr">PR <a href="https://github.com/octocat/app/pull/12" target="_blank" rel="noopener noreferrer">#12</a><span class="status-pr-state status-pr-state--draft"> draft</span></span>',
     );
     expect(html({ number: 12 })).toContain('<span class="status-pr">PR #12</span>');
-  });
-});
-
-describe('splitPath', () => {
-  it('keeps the folder’s own name, with its slash, out of the part that may be cut', async () => {
-    const { splitPath } = await import('./StatusLine.js');
-    expect(splitPath('/Users/octocat/Git/app')).toEqual({
-      head: '/Users/octocat/Git',
-      tail: '/app',
-    });
-    expect(splitPath('~/Git/app/')).toEqual({ head: '~/Git', tail: '/app/' });
-    expect(splitPath('/repo')).toEqual({ head: '', tail: '/repo' });
-    expect(splitPath('app')).toEqual({ head: '', tail: 'app' });
   });
 });
