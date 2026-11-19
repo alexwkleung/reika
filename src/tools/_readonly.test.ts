@@ -187,10 +187,10 @@ describe('isProvablyReadOnly — plan mode admits the command', () => {
   describe('find: the write-and-exec flags', () => {
     it.each([
       'find . -name "*.tmp" -delete',
-      'find . -name "*.ts" -exec rm {} ;',
+      'find . -name "*.ts" -exec rm {} \\;',
       'find . -execdir rm {} +',
-      'find . -ok rm {} ;',
-      'find . -okdir rm {} ;',
+      'find . -ok rm {} \\;',
+      'find . -okdir rm {} \\;',
       'find . -fprint /tmp/pwn',
       'find . -fprintf /tmp/pwn "%p"',
       'find . -fls /tmp/pwn',
