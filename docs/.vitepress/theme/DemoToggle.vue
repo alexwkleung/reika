@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import terminalGif from '../../demo.gif';
 import terminalPoster from '../../demo-poster.png';
 import webGif from '../../demo-web.gif';
@@ -24,7 +24,6 @@ const sides = computed(() => [
   {
     id: 'terminal' as const,
     label: props.terminalLabel ?? 'Terminal',
-    gif: terminalGif,
     poster: terminalPoster,
     alt: props.terminalAlt,
     caption: props.terminalCaption,
@@ -32,12 +31,49 @@ const sides = computed(() => [
   {
     id: 'web' as const,
     label: props.webLabel ?? 'Web',
-    gif: webGif,
     poster: webPoster,
     alt: props.webAlt,
     caption: props.webCaption,
   },
 ]);
+
+// A clip restarts when its tab is picked, so it opens on the prompt rather than mid-turn. Chrome keeps
+// one animation per image URL, so a new <img> or the same src does not restart it, and a query
+// string re-downloads megabytes: each restart gets a fresh blob: URL of the cached bytes instead.
+// The web gif is not fetched until its tab is first picked, and that first load needs no blob,
+// since a gif loading for the first time starts at frame one.
+const gifs: Record<Side, string> = { terminal: terminalGif, web: webGif };
+const srcs = reactive<Record<Side, string | undefined>>({ terminal: terminalGif, web: undefined });
+const blobs: Partial<Record<Side, Blob>> = {};
+const restarts: Record<Side, number> = { terminal: 0, web: 0 };
+
+async function restart(id: Side): Promise<void> {
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  if (srcs[id] === undefined) {
+    srcs[id] = gifs[id];
+    return;
+  }
+  const n = ++restarts[id];
+  try {
+    if (!blobs[id]) {
+      const res = await fetch(gifs[id], { cache: 'force-cache' });
+      if (!res.ok) return;
+      blobs[id] = await res.blob();
+    }
+  } catch {
+    return; // the clip keeps playing where it is, as it did before restarts
+  }
+  if (n !== restarts[id] || side.value !== id) return;
+  const old = srcs[id];
+  srcs[id] = URL.createObjectURL(blobs[id]!);
+  if (old?.startsWith('blob:')) URL.revokeObjectURL(old);
+}
+
+function select(id: Side): void {
+  if (side.value === id) return;
+  side.value = id;
+  void restart(id);
+}
 
 // The tablist pattern: arrows move between tabs, and only the selected one is in the tab order.
 const tabs = ref<HTMLButtonElement[]>([]);
@@ -45,7 +81,7 @@ function onKey(e: KeyboardEvent, i: number): void {
   if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
   e.preventDefault();
   const next = (i + (e.key === 'ArrowRight' ? 1 : sides.value.length - 1)) % sides.value.length;
-  side.value = sides.value[next]!.id;
+  select(sides.value[next]!.id);
   tabs.value[next]?.focus();
 }
 </script>
@@ -64,7 +100,7 @@ function onKey(e: KeyboardEvent, i: number): void {
         :aria-selected="side === s.id"
         :aria-controls="`demo-panel-${s.id}`"
         :tabindex="side === s.id ? 0 : -1"
-        @click="side = s.id"
+        @click="select(s.id)"
         @keydown="onKey($event, i)"
       >
         {{ s.label }}
@@ -80,7 +116,7 @@ function onKey(e: KeyboardEvent, i: number): void {
     >
       <picture>
         <source media="(prefers-reduced-motion: reduce)" :srcset="s.poster" />
-        <img :src="s.gif" :alt="s.alt" width="1280" height="760" />
+        <img :src="srcs[s.id]" :alt="s.alt" width="1280" height="760" />
       </picture>
       <p class="DemoCaption">
         <sup>{{ s.caption }}</sup>
