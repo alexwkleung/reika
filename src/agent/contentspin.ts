@@ -82,9 +82,20 @@ export function fenceOpenAtTail(text: string): boolean {
   return open !== null;
 }
 
+// The openers of the in-band call dialects client.ts parses out of content. A model with no native
+// tool template streams its call's arguments here, and a write of a repetitive file is a repeat the
+// gate must not cut, so judging stops where the first call opens.
+const INBAND_CALL_OPENER = /<tool_call>|<function=/;
+
+export function textBeforeInbandCall(content: string): string {
+  const at = content.search(INBAND_CALL_OPENER);
+  return at === -1 ? content : content.slice(0, at);
+}
+
 // Judge an in-flight content stream. Cheap enough to call on the loop's debounce: the windows are
 // clamped to what the reply actually holds, so a check costs one pass over at most 64k chars.
-export function contentSpinSignal(content: string): ContentSpinReading {
+export function contentSpinSignal(raw: string): ContentSpinReading {
+  const content = textBeforeInbandCall(raw);
   const chars = content.length;
   if (chars < CONTENT_SPIN_MIN_CHARS)
     return { spinning: false, ratio: 0, window: 0, chars, fence: false };

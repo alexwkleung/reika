@@ -126,14 +126,16 @@ describe('content-channel spin cut (integration)', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  async function run(): Promise<{ history: Message[]; messages: Message[]; log: string }> {
+  async function run(
+    maxTurns = 10,
+  ): Promise<{ history: Message[]; messages: Message[]; log: string }> {
     const history: Message[] = [];
     const messages: Message[] = [];
     await runTurn({
       userInput: 'work through the problem',
       history,
       bundle: makeBundle(cwd),
-      config: makeConfig(),
+      config: { ...makeConfig(), maxTurns },
       tools: [],
       payloads: new PayloadStore(),
       promptMode: 'agent',
@@ -216,9 +218,33 @@ describe('content-channel spin cut (integration)', () => {
     // A model that loops again after the retry is stuck. Cutting twice would pay two recoveries for
     // the same fault, so the second round commits instead and the length path owns it from there.
     h.stream.push(loopingContent(), loopingContent());
-    const { messages } = await run();
+    const { history, messages, log } = await run();
     expect(vi.mocked(callModel)).toHaveBeenCalledTimes(2);
     const notices = messages.filter(m => m.role === 'system' && m.content.includes('repeating'));
-    expect(notices.length <= 1).toBe(true);
+    expect(notices.length).toBe(1);
+    // The second loop was committed, not cut.
+    expect(history.some(m => m.role === 'assistant' && (m.content ?? '').includes(LOOP_MARK))).toBe(
+      true,
+    );
+    // And the log says the bar was crossed with no budget left, not that the reply was healthy.
+    expect(log).toContain('gate=spent');
+  });
+
+  it('does not cut on the last budgeted round, where no retry can follow', async () => {
+    // A subagent's report round is its last; a cut there ended the run with no report at all.
+    h.stream.push(loopingContent());
+    const { messages } = await run(1);
+    expect(vi.mocked(callModel)).toHaveBeenCalledTimes(1);
+    expect(messages.some(m => m.role === 'system' && m.content.includes('repeating'))).toBe(false);
+  });
+
+  it('does not judge the arguments of an in-band tool call', async () => {
+    // A model with no native tool template streams a write's file body through content.
+    h.stream.push(
+      `<tool_call>{"name":"write","arguments":{"content":${JSON.stringify(loopingContent())}}}</tool_call>`,
+    );
+    const { messages } = await run();
+    expect(vi.mocked(callModel)).toHaveBeenCalledTimes(1);
+    expect(messages.some(m => m.role === 'system' && m.content.includes('repeating'))).toBe(false);
   });
 });

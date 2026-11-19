@@ -2892,7 +2892,13 @@ export async function runTurn(opts: {
     let roundContent = '';
     let contentCheckedAt = 0;
     let contentSpinCut = false;
-    const canCutContentSpin = CONTENT_SPIN && contentSpinRecoveries < MAX_CONTENT_SPIN_RECOVERIES;
+    // Never on the last budgeted round (a retry cannot happen there, and a subagent's report round
+    // would hand the parent nothing) or on a plan force-write, whose recovery is its own ladder.
+    const canCutContentSpin =
+      CONTENT_SPIN &&
+      contentSpinRecoveries < MAX_CONTENT_SPIN_RECOVERIES &&
+      i < opts.config.maxTurns - 1 &&
+      !planForceWrite;
     const onContentDelta =
       canCutContentSpin || debugEnabled()
         ? (delta: string): void => {
@@ -2904,13 +2910,14 @@ export async function runTurn(opts: {
             const reading = contentSpinSignal(roundContent);
             // Under the minimum nothing is judged, so there is nothing to grade either: the reading
             // is a zero by construction, and logging it would bury the checks that mean something.
-            if (roundContent.length < CONTENT_SPIN_MIN_CHARS) return;
+            if (reading.chars < CONTENT_SPIN_MIN_CHARS) return;
             const cut = canCutContentSpin && reading.spinning;
+            const gate = cut ? 'cut' : reading.spinning ? 'spent' : 'measure';
             if (debugEnabled()) {
               debugLog(
                 `[reika:debug] content-spin round=${i} ratio=${reading.ratio.toFixed(2)} ` +
                   `window=${reading.window} chars=${reading.chars} ` +
-                  `fence=${reading.fence ? 'yes' : 'no'} gate=${cut ? 'cut' : 'measure'}\n`,
+                  `fence=${reading.fence ? 'yes' : 'no'} gate=${gate}\n`,
               );
             }
             if (cut) {
@@ -3319,6 +3326,10 @@ export async function runTurn(opts: {
     // what actually happened (the reasoning cut makes the same distinction, #285).
     if (contentSpinCut) {
       contentSpinRecoveries++;
+      // The carried thought this round was resuming is abandoned with it; held over, the next round
+      // would be joined onto it in the trace and the continuation gate.
+      pendingContinuation = '';
+      pendingReasoning = '';
       // Frozen into scrollback rather than erased: the user watched this stream, and the tail is
       // what evidence there is of the loop. Same hook the degenerate-reasoning recovery uses.
       opts.onReasoningReset?.();

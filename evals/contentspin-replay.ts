@@ -52,7 +52,7 @@ type Block = {
   chars: number;
   // The strongest ratio any stepped prefix reached — 0 for a block never long enough to judge.
   ratio: number;
-  // Total content chars fed in, so the log line says how far into the reply the verdict landed.
+  // Whether the block reached the judged length at all.
   judged: boolean;
   // Where the live gate would have cut, if it would.
   cut: { chars: number; ratio: number; fence: boolean } | null;
