@@ -1621,7 +1621,7 @@ describe('Scrollback nested user-bubble color', () => {
   });
 
   // `▎` is a legend, not decoration: three different speakers share the glyph and are told apart
-  // by color alone. theme.ts says so in prose next to `subagent` — so it is pinned here rather
+  // by color alone. display/palette.ts says so in prose next to `subagent` — so it is pinned here rather
   // than left as a comment a later palette tweak could quietly falsify.
   it('keeps every ▎ speaker on a distinct color', () => {
     const bars = { reasoning: theme.reasoning, user: theme.accent, subagent: theme.subagent };

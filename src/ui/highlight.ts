@@ -3,38 +3,31 @@ import chalk, { type ForegroundColorName } from 'chalk';
 // full import registers every grammar at startup, ~75ms against ~19ms. A fence in a language
 // outside it renders plain, the same as one in a language highlight.js has never had.
 import hljs from 'highlight.js/lib/common';
+import { palette } from '../display/palette.js';
 
 type Paint = (text: string) => string;
 
 // A clean, dark-background syntax theme in reika's own pastel family (#93).
 // The previous values were lifted straight from One Dark, which read as "Atom
 // theme" rather than reika. These tones sit at the same soft saturation/
-// lightness band as theme.ts (orchid accent, plan teal, vibe periwinkle, shell
+// lightness band as the palette (orchid accent, plan teal, vibe periwinkle, shell
 // green, warning yellow), so code blocks feel continuous with the rest of the
 // UI — still saturated enough to stay legible over the diff's red/green line
 // backgrounds and to survive 256-color terminals.
-const ORCHID = '#d68cd6'; // keywords, control flow — echoes theme.accent
-const PERIWINKLE = '#b4aee0'; // functions, sections — echoes theme.modeVibe
-const TEAL = '#8fd0c8'; // built-ins, regexp, escapes — echoes theme.modePlan
-const GREEN = '#9fd49f'; // strings — echoes theme.modeShell
-const APRICOT = '#e0b48f'; // numbers, literals, constants
-const YELLOW = '#e5d49a'; // types, class names — echoes theme.warning
-const ROSE = '#db9499'; // variables, tag names
-const GRAY = '#7f848e'; // comments, meta
+// Each tone carries the named color a 16-color terminal gets instead: there every tone but GRAY
+// downsamples to white, which is no highlighting at all. Paired rather than keyed by hex, since two
+// palette slots may come to share one.
+type Tone = { hex: string; ansi16: ForegroundColorName };
+const ORCHID: Tone = { hex: palette.accent, ansi16: 'magentaBright' }; // keywords, control flow
+const PERIWINKLE: Tone = { hex: palette.modeVibe, ansi16: 'blueBright' }; // functions, sections
+const TEAL: Tone = { hex: palette.modePlan, ansi16: 'cyan' }; // built-ins, regexp, escapes
+const GREEN: Tone = { hex: palette.modeShell, ansi16: 'green' }; // strings
+const APRICOT: Tone = { hex: palette.subagent, ansi16: 'yellow' }; // numbers, literals, constants
+const YELLOW: Tone = { hex: palette.warning, ansi16: 'yellowBright' }; // types, class names
+const ROSE: Tone = { hex: '#db9499', ansi16: 'redBright' }; // variables, tag names
+const GRAY: Tone = { hex: '#7f848e', ansi16: 'gray' }; // comments, meta
 
-// On a 16-color terminal every tone above but GRAY downsamples to white, which is no highlighting
-// at all; each gets the named color nearest its role instead.
-const ANSI16: Record<string, ForegroundColorName> = {
-  [ORCHID]: 'magentaBright',
-  [PERIWINKLE]: 'blueBright',
-  [TEAL]: 'cyan',
-  [GREEN]: 'green',
-  [APRICOT]: 'yellow',
-  [YELLOW]: 'yellowBright',
-  [ROSE]: 'redBright',
-  [GRAY]: 'gray',
-};
-const tone = (hex: string) => (chalk.level === 1 ? chalk[ANSI16[hex]] : chalk.hex(hex));
+const tone = (t: Tone) => (chalk.level === 1 ? chalk[t.ansi16] : chalk.hex(t.hex));
 
 // Keyed by highlight.js 11 scope, dotted for sub-scopes (`title.function`). A scope with no entry
 // falls back to its parent (`title.class.inherited` → `title.class` → `title`), and one with none
