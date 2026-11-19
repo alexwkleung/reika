@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { Tool, ToolContext, ToolResult } from '../types.js';
-import { commandTail } from '../ui/commandtail.js';
+import { commandTail } from '../display/commandtail.js';
 import { buildCappedFooter, buildSpillFooter, spillEnabled, spillResult } from './_spill.js';
 import { detectDangerousPatterns } from './_danger.js';
 import { scanHeredocs } from './_heredoc.js';
@@ -30,7 +30,7 @@ const DEFAULT_IDLE_MS = 5 * 60_000;
 // After SIGTERM to the group, how long a holdout gets before SIGKILL.
 const KILL_GRACE_MS = 2_000;
 const MAX_PAYLOAD_BYTES = 64 * 1024;
-// Retained for the UI chip's last-lines view (ui/commandtail.ts). Larger than OUTPUT_TAIL_BYTES so the slice to 10
+// Retained for the UI chip's last-lines view (display/commandtail.ts). Larger than OUTPUT_TAIL_BYTES so the slice to 10
 // lines always has enough to work with even when lines are long, and small enough to be free.
 const UI_TAIL_BYTES = 4 * 1024;
 // How much output the spill buffer retains. Big enough that an ordinary build or test run spills

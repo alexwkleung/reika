@@ -1,5 +1,5 @@
 import type { Message } from '../../types.js';
-import { groupedReads, hasBlockUnderSummary, type LogItem } from '../../ui/scrollbackrules.js';
+import { groupedReads, hasBlockUnderSummary, type LogItem } from '../../display/scrollbackrules.js';
 import type { WireMessage } from '../protocol.js';
 
 // What the transcript draws, in order: every message plus the "Worked for" line a top-level turn

@@ -5,7 +5,7 @@ import {
   formatShrink,
   formatTokensPerSecond,
   kFormat,
-} from '../../ui/format.js';
+} from '../../display/format.js';
 import type { WireState } from '../protocol.js';
 import type { StreamStatus } from './eventstream.js';
 

@@ -6,8 +6,8 @@ import { highlightCode } from './highlight.js';
 import { drawnWidth, sanitizeTerminalText } from './termtext.js';
 import { sliceStyled, wrapLines, wrapStyledRows } from './layout.js';
 import stripAnsi from 'strip-ansi';
-import { assignLineNumbers, parseDiffBlocks, type RenderRow } from './diffrows.js';
-import { detectLanguage, intraLineParts } from './intraline.js';
+import { assignLineNumbers, parseDiffBlocks, type RenderRow } from '../display/diffrows.js';
+import { detectLanguage, intraLineParts } from '../display/intraline.js';
 
 export { assignLineNumbers, intraLineParts, parseDiffBlocks };
 

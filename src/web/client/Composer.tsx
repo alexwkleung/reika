@@ -15,7 +15,7 @@ import {
   type WireCatalog,
   type WireState,
 } from '../protocol.js';
-import { isLargePaste, type PastedText } from '../../ui/pastes.js';
+import { isLargePaste, type PastedText } from '../../display/pastes.js';
 import { isTypingEdge } from './typingedge.js';
 import type { Mode } from '../../types.js';
 import {

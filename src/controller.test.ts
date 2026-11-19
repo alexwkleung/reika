@@ -48,7 +48,7 @@ import {
   TOGGLE_OFF,
   TOGGLE_ON,
 } from './ui/dialogspecs.js';
-import { rememberPaste } from './ui/pastes.js';
+import { rememberPaste } from './display/pastes.js';
 import type { LastState } from './laststate.js';
 import ignore, { type Ignore } from 'ignore';
 import type { McpCallFn, McpCommand } from './mcp/tools.js';

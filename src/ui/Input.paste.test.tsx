@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import { Box } from 'ink';
 import { render } from 'ink-testing-library';
 import { Input, clampToViewport } from './Input.js';
-import { rememberPaste, type PastedText } from './pastes.js';
+import { rememberPaste, type PastedText } from '../display/pastes.js';
 
 // Longer than the paste coalescing window, so a write lands as its own paste unless the test
 // deliberately writes back-to-back inside one tick.

@@ -4,7 +4,7 @@ import { theme } from './theme.js';
 import { renderInlineMarkdown } from './markdown.js';
 import { scrubDisplay } from './scrub.js';
 import type { PlanStep } from '../agent/plantrack.js';
-import { planWindow } from './planwindow.js';
+import { planWindow } from '../display/planwindow.js';
 
 // Live checklist for a plan being implemented (#71). State comes from the loop's deterministic
 // tracker (agent/plantrack.ts) via onPlanProgress — steps check off when the harness observes a

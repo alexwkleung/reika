@@ -91,7 +91,7 @@ import { execStream } from './tools/bash.js';
 import { isOffline } from './tools/_net.js';
 import { clearIdentity, enableAnon, isAnon } from './ui/identity.js';
 import { isSaveCommand } from './ui/commands.js';
-import { expandPastes, type PastedText } from './ui/pastes.js';
+import { expandPastes, type PastedText } from './display/pastes.js';
 import { buildModelTargets, type ModelTarget } from './ui/models.js';
 import { computeSuggestions, type SuggestionState } from './ui/suggest.js';
 import {

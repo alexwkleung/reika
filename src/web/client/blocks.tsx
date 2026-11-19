@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { turnEndLabel } from '../../ui/format.js';
+import { turnEndLabel } from '../../display/format.js';
 import type { PlanChecks } from '../../types.js';
 import { Markdown } from './Markdown.js';
 

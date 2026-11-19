@@ -11,8 +11,8 @@ import {
   SHIMMER_STEP,
   TICK_MS,
   ticksPerWord,
-} from './workingwords.js';
-import { shimmerBase, shimmerRamp } from './shimmer.js';
+} from '../display/workingwords.js';
+import { shimmerBase, shimmerRamp } from '../display/shimmer.js';
 
 // Lighter braille "dots" spinner — its dot-mass sits nearer the text's x-height,
 // so it reads as vertically aligned with the label (the fuller circular braille

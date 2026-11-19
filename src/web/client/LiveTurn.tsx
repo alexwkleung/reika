@@ -1,10 +1,10 @@
-import { commandTail } from '../../ui/commandtail.js';
+import { commandTail } from '../../display/commandtail.js';
 import { CommandChip } from './MessageRow.js';
 import { useEffect, useRef, useState } from 'react';
-import { prefillLabel, toolTimer, toolVerb } from '../../ui/format.js';
-import { planWindow } from '../../ui/planwindow.js';
-import { foldedLiveFields } from '../../ui/reasoningfold.js';
-import { shimmerBase, shimmerRamp } from '../../ui/shimmer.js';
+import { prefillLabel, toolTimer, toolVerb } from '../../display/format.js';
+import { planWindow } from '../../display/planwindow.js';
+import { foldedLiveFields } from '../../display/reasoningfold.js';
+import { shimmerBase, shimmerRamp } from '../../display/shimmer.js';
 import {
   BRAILLE_SPINNER,
   nextWordIndex,
@@ -13,7 +13,7 @@ import {
   TICK_MS,
   ticksPerWord,
   WORKING_WORDS,
-} from '../../ui/workingwords.js';
+} from '../../display/workingwords.js';
 import type { WireLive } from '../protocol.js';
 import { GLYPH, NoteBlock, Prose, ReasoningBlock } from './blocks.js';
 import { InlineMarkdown } from './Markdown.js';
@@ -92,7 +92,7 @@ export function BusyLine({
   );
 }
 
-// The TUI's glow as a gradient: its colours (ui/shimmer.ts, the same resting and peak lightness
+// The TUI's glow as a gradient: its colours (display/shimmer.ts, the same resting and peak lightness
 // for every state) and its band, the ramp's five stops one character apart, on the dim base. The
 // gradient is three labels wide (live.css slides it across), so one character is 1/(3·chars) of it,
 // and the band is centred on its middle.
@@ -152,7 +152,7 @@ function PlanStepRow({ s, next }: { s: PlanStep; next: boolean }) {
   );
 }
 
-// Folded by the TUI's rule (ui/planwindow.ts) unless the user asks for every step; a page has room
+// Folded by the TUI's rule (display/planwindow.ts) unless the user asks for every step; a page has room
 // to show them, so the fold is a default here rather than a ceiling.
 export function PlanList({ steps }: { steps: PlanStep[] }) {
   const [all, setAll] = useState(false);

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
+import { PENDING_ROW_DELAY_MS } from '../display/pendingrow.js';
 
-// Held back so a call that returns inside it paints no row: one replaced two frames later is a flicker (#951).
-export const PENDING_ROW_DELAY_MS = 300;
+export { PENDING_ROW_DELAY_MS };
 
 // Keyed on the call, not the tool name, so a same-name call batched with the last one's result starts its own delay.
 export function usePendingRow(tool: string, call: number, force = false): string {

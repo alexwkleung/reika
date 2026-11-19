@@ -1,7 +1,7 @@
 import { parseHTML } from 'linkedom';
 import { describe, expect, it, vi } from 'vitest';
 import type { ClientMessage, WireCatalog, WireCompletion, WireState } from '../protocol.js';
-import { PASTE_LINE_THRESHOLD as n } from '../../ui/pastes.js';
+import { PASTE_LINE_THRESHOLD as n } from '../../display/pastes.js';
 import type { SendResult, UploadResult } from './send.js';
 
 const { window, document } = parseHTML('<!doctype html><html><body></body></html>');

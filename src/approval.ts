@@ -1,5 +1,5 @@
 import type { ApprovalRequest, AutoApproveMode, Config, ToolContext } from './types.js';
-import { toolLabel } from './ui/format.js';
+import { toolLabel } from './display/format.js';
 
 // Whether an approval request runs without asking. The one rule both front-ends share (#52):
 // `safe` approves anything the danger scan didn't flag, `off` approves nothing, and `bypass`

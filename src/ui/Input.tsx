@@ -3,7 +3,7 @@ import { Box, Text, useInput, useStdin, useStdout } from 'ink';
 import wrapAnsi from 'wrap-ansi';
 import { glyphs } from './glyphs.js';
 import { theme } from './theme.js';
-import { isLargePaste } from './pastes.js';
+import { isLargePaste } from '../display/pastes.js';
 import { isFocusKeypress, useTerminalFocus } from './focus.js';
 import type { Mode } from '../types.js';
 

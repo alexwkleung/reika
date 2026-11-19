@@ -1,6 +1,6 @@
 import type { LiveTurn } from '../controller.js';
 import type { Message } from '../types.js';
-import { HIDDEN_TOOL_ARGS } from '../ui/format.js';
+import { HIDDEN_TOOL_ARGS } from '../display/format.js';
 import { isAnon, scrubIdentity } from '../ui/identity.js';
 import { scrubPaths } from '../ui/paths.js';
 import { displayCwd, scrubDisplay, scrubOutput } from '../ui/scrub.js';

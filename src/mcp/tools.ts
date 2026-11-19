@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Tool, ToolContext, ToolParameters, ToolResult } from '../types.js';
 import { declineSummary } from '../approval.js';
-import { kFormat } from '../ui/format.js';
+import { kFormat } from '../display/format.js';
 import { buildCappedFooter, buildSpillFooter, spillResult } from '../tools/_spill.js';
 import type { McpCallResult, McpContentBlock, McpToolDef } from './client.js';
 import { MCP_TOOL_PREFIX } from './config.js';

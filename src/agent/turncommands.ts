@@ -1,4 +1,4 @@
-import { expandPastes, type PastedText } from '../ui/pastes.js';
+import { expandPastes, type PastedText } from '../display/pastes.js';
 import type { Skill } from '../skills/skills.js';
 import type { Mode } from '../types.js';
 
