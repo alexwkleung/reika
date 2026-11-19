@@ -77,7 +77,7 @@ docs:
 
 <DemoToggle
   terminal-alt="Reika fixing a retry helper and its test with a local model"
-  terminal-caption="A real local run of Qwen3.6 35B A3B (Unsloth UD-IQ2_M) via llama.cpp, sped up 3×. The model's first test fails and it fixes it from the error."
+  terminal-caption="A real local run of Qwen3.6 35B A3B (Unsloth UD-IQ2_M) via llama.cpp, sped up 3×. The model fixes its own indentation, adds a test for the delays, and the tests pass on the first run."
   web-alt="The same task in reika web: Reika fixing a retry helper and its test with a local model"
   web-caption="A real local run of Qwen3.6 35B A3B (Unsloth UD-IQ2_M) via llama.cpp, sped up 3×. The model makes the change, writes five tests for the delays, and they pass on the first run."
 />
