@@ -60,3 +60,29 @@ describe('nativeImageReminder', () => {
     expect(nativeImageReminder([])).toBe('');
   });
 });
+
+describe('readNativeAttachments keeps an honest receipt (#979)', () => {
+  it('rewrites an upload receipt that said the bytes went as they are', async () => {
+    const bytes = new Uint8Array([1]);
+    const { attachments } = await readNativeAttachments(
+      [
+        {
+          marker: '[Image 1]',
+          text: 'note',
+          source: 'upload',
+          native: { bytes, mime: 'image/png' },
+          receipt: '[Image 1] — sent to vl as an image.',
+        },
+        {
+          marker: '[Image 2]',
+          text: 'note',
+          source: 'clipboard',
+          native: { bytes, mime: 'image/png' },
+        },
+      ],
+      async () => ({ ok: true, text: 'hello' }),
+    );
+    expect(attachments[0].receipt).toBe('[Image 1] — 5 chars read from the image.');
+    expect(attachments[1].receipt).toBeUndefined();
+  });
+});

@@ -135,7 +135,7 @@ describe('grind tool list', () => {
 describe('grind mode routing', () => {
   it('runs as an agent turn with its own tool list and prompt flag', async () => {
     const { turnPromptMode, turnTools, isGrindPrompt, isMinimalPrompt } =
-      await import('../ui/commands.js');
+      await import('./modes.js');
     expect(turnPromptMode('grind')).toBe('agent');
     expect(isGrindPrompt('grind')).toBe(true);
     expect(isGrindPrompt('agent')).toBe(false);

@@ -1,6 +1,8 @@
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfigWithTheme } from 'vitepress';
+import { buildAtomFeed, withBlogSection } from './feed';
 import { brokenLinks, githubLinks, githubSlugify, untranslatedSource } from './links';
 import { SITE_URL, languageAlternates, pageDescriptions, siteNameHead, socialHead } from './seo';
 import type { TranslationTheme } from './theme/translations';
@@ -70,6 +72,7 @@ export default defineConfigWithTheme<TranslationTheme>({
             items: [
               { text: '安装（英文）', link: '/zh/getting-started' },
               { text: '使用（英文）', link: '/zh/usage' },
+              { text: '网页界面（英文）', link: '/zh/web' },
               { text: '配置（英文）', link: '/zh/configuration' },
               { text: '工具（英文）', link: '/zh/tools' },
               { text: '指令与技能（英文）', link: '/zh/skills' },
@@ -109,6 +112,10 @@ export default defineConfigWithTheme<TranslationTheme>({
     ['link', { rel: 'icon', type: 'image/svg+xml', href: '/favicon.svg' }],
     ['link', { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' }],
     ['meta', { name: 'theme-color', content: '#17151a' }],
+    [
+      'link',
+      { rel: 'alternate', type: 'application/atom+xml', title: 'Reika blog', href: '/feed.xml' },
+    ],
   ],
   transformPageData(pageData) {
     const description = pageDescriptions[englishPath(pageData.relativePath)];
@@ -167,6 +174,7 @@ export default defineConfigWithTheme<TranslationTheme>({
         items: [
           { text: 'Install', link: '/getting-started' },
           { text: 'Usage', link: '/usage' },
+          { text: 'Web front end', link: '/web' },
           { text: 'Configuration', link: '/configuration' },
           { text: 'Tools', link: '/tools' },
           { text: 'Instructions and skills', link: '/skills' },
@@ -190,7 +198,7 @@ export default defineConfigWithTheme<TranslationTheme>({
       copyright: 'Copyright 2026 Alex Leung',
     },
   },
-  buildEnd(siteConfig) {
+  async buildEnd(siteConfig) {
     if (brokenLinks.size > 0) {
       throw new Error(`Broken links:\n  ${[...brokenLinks].join('\n  ')}`);
     }
@@ -219,5 +227,11 @@ export default defineConfigWithTheme<TranslationTheme>({
         `Pages missing from pageDescriptions in seo.ts:\n  ${undescribed.join('\n  ')}`,
       );
     }
+    // Imported here: the content loader needs the resolved site config, which exists only once
+    // the build is running. Drafts are already dropped by the loader in a build.
+    const { default: postsLoader } = await import('../blog/posts.data');
+    const posts = await postsLoader.load();
+    writeFileSync(join(siteConfig.outDir, 'feed.xml'), buildAtomFeed(posts));
+    writeFileSync(join(siteConfig.outDir, 'llms.txt'), withBlogSection(llms, posts));
   },
 });

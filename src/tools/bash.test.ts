@@ -14,9 +14,11 @@ import {
   TailWindow,
 } from './bash.js';
 import { detectDangerousPatterns } from './_danger.js';
+import { createServer, type Server } from 'node:http';
 import {
   NO_GITDIR,
   profileLoadFailure,
+  protectLoopbackPort,
   sandboxExecAvailable,
   sandboxPlan,
   sandboxProfile,
@@ -519,7 +521,9 @@ const sandboxWorks = sandboxExecAvailable();
 // The composition half of #163: which commands run sandboxed is decided by the danger scan and the
 // presence of an approval gate, so the cells are pinned on the pure decision — deterministic on every
 // platform — and one darwin-only run pins that the decision reaches a real process.
-describe('bashTool — sandbox composition', () => {
+// These spawn real `sandbox-exec` and `git` processes, several per test: about a second each run
+// alone, four to five times that when every file runs in parallel, which is the 5s default (#964).
+describe('bashTool — sandbox composition', { timeout: 20_000 }, () => {
   const approve = async (): Promise<boolean> => true;
 
   it('sandboxes a clean command, auto-approved (safe) or with no gate at all (bypass)', () => {
@@ -940,6 +944,37 @@ describe('bashTool — sandbox composition', () => {
       expect(r.exitCode).toBe(0);
       expect(r.payload).toContain('got pong');
     } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+// `reika web`'s port is closed to a sandboxed command (#1014 review): it could read the page's token
+// off the browser profile and answer its own approval. Every other loopback port stays open.
+describe('bash — a protected loopback port', () => {
+  it.skipIf(!sandboxWorks)('refuses the protected port and reaches another', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
+    const listen = () =>
+      new Promise<Server>(resolve => {
+        const s = createServer((_q, r) => r.end('pong')).listen(0, '127.0.0.1', () => resolve(s));
+      });
+    const guarded = await listen();
+    const open = await listen();
+    const port = (s: Server) => (s.address() as { port: number }).port;
+    const release = protectLoopbackPort(port(guarded));
+    try {
+      const get = (p: number) =>
+        `require("http").get({host:"127.0.0.1",port:${p}},r=>{r.resume();r.on("end",()=>console.log("${p} OPEN"))}).on("error",e=>console.log("${p}",e.code))`;
+      const r = await bashTool.run(
+        { command: `node -e '${get(port(guarded))}'; node -e '${get(port(open))}'` },
+        { cwd: dir },
+      );
+      expect(r.payload).toContain(`${port(guarded)} EPERM`);
+      expect(r.payload).toContain(`${port(open)} OPEN`);
+    } finally {
+      release();
+      guarded.close();
+      open.close();
       await rm(dir, { recursive: true, force: true });
     }
   });

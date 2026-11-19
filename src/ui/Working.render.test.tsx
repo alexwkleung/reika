@@ -2,14 +2,9 @@ import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'ink-testing-library';
 import chalk from 'chalk';
-import {
-  Working,
-  WORKING_WORDS,
-  nextSweep,
-  nextWordIndex,
-  shimmerRamp,
-  ticksPerWord,
-} from './Working.js';
+import { Working } from './Working.js';
+import { shimmerRamp } from '../display/shimmer.js';
+import { WORKING_WORDS, nextSweep, nextWordIndex, ticksPerWord } from '../display/workingwords.js';
 
 const plain = (s: string | undefined) => (s ?? '').replace(/\x1b\[[0-9;]*m/g, '');
 

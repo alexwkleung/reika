@@ -4,8 +4,14 @@ import { join } from 'node:path';
 import type { Message, Mode, ToolCall, Usage } from '../types.js';
 import { compactThreshold } from '../agent/compaction.js';
 import { scrubDisplay } from '../ui/scrub.js';
-import { changeLabel, contextFill, formatDurationMs, formatShrink, kFormat } from '../ui/format.js';
-import { foldedAssistantFields } from '../ui/reasoningfold.js';
+import {
+  changeLabel,
+  contextFill,
+  formatDurationMs,
+  formatShrink,
+  kFormat,
+} from '../display/format.js';
+import { foldedAssistantFields } from '../display/reasoningfold.js';
 
 // Bump when the on-disk shape changes incompatibly. The meta record carries this so a future
 // persistent-sessions loader (which will append message records the same way) can migrate old
@@ -61,7 +67,7 @@ export type TranscriptUsage = {
   sheds?: number;
   folds?: number;
   shrinkEvents?: TranscriptShrinkEvent[];
-  // The last call's cached prompt tokens — the numerator behind the status line's `cache N%`.
+  // The last call's cached prompt tokens — the numerator behind the status line's `N% cached`.
   lastCachedTokens?: number;
 };
 
@@ -368,7 +374,7 @@ function renderMessageTxt(msg: Message): string | null {
       return labelled(msg.mode ? `You [${msg.mode}]` : 'You', msg.display ?? msg.content);
     case 'assistant': {
       // Display-only fold for a reasoning block the endpoint cut at a tag the model wrote in prose
-      // (ui/reasoningfold.ts): the tail belongs under "Thinking", not under "Reika".
+      // (display/reasoningfold.ts): the tail belongs under "Thinking", not under "Reika".
       const folded = foldedAssistantFields(msg);
       const parts: string[] = [];
       if (folded.reasoning?.trim()) parts.push(labelled('Thinking', folded.reasoning.trim()));
@@ -454,7 +460,7 @@ function redactMessage(msg: Message, cwd: string): Message {
       };
     case 'assistant': {
       // Folded before redacting so the JSONL and the .txt agree with each other and with
-      // scrollback (ui/reasoningfold.ts). Folding only on this path keeps /save --raw the
+      // scrollback (display/reasoningfold.ts). Folding only on this path keeps /save --raw the
       // verbatim copy its contract promises.
       const folded = foldedAssistantFields(msg);
       return {

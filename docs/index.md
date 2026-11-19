@@ -75,9 +75,12 @@ docs:
     link: /support
 ---
 
-![Reika fixing a retry helper and its test with a local model](./demo.gif)
-
-<sup>A real local run of Qwen3.6 35B A3B (Unsloth UD-IQ2_M) via llama.cpp, sped up 3×. The model's first test fails and it fixes it from the error.</sup>
+<DemoToggle
+  terminal-alt="Reika fixing a retry helper and its test with a local model"
+  terminal-caption="A real local run of Qwen3.6 35B A3B (Unsloth UD-IQ2_M) via llama.cpp, sped up 3×. The model fixes its own indentation, adds a test for the delays, and the tests pass on the first run."
+  web-alt="The same task in reika web: Reika fixing a retry helper and its test with a local model"
+  web-caption="A real local run of Qwen3.6 35B A3B (Unsloth UD-IQ2_M) via llama.cpp, sped up 3×. The model makes the change, writes five tests for the delays, and they pass on the first run."
+/>
 
 ## Install
 
@@ -87,5 +90,5 @@ pnpm add -g @alexwkleung/reika
 brew install alexwkleung/tap/reika
 ```
 
-Then point it at a model server and run `reika` in a project. [Install and first run](getting-started.md)
-covers requirements and setup.
+Then point it at a model server and run `reika` in a project, or `reika web` for the
+[browser view](web.md). [Install and first run](getting-started.md) covers requirements and setup.

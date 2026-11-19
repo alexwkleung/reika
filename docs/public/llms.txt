@@ -8,6 +8,7 @@ Install with `npm i -g @alexwkleung/reika`, `pnpm add -g @alexwkleung/reika` or 
 
 - [Install and first run](https://raw.githubusercontent.com/alexwkleung/reika/main/docs/getting-started.md): requirements, the three install routes, serving a model and pointing Reika at it
 - [Usage](https://raw.githubusercontent.com/alexwkleung/reika/main/docs/usage.md): modes, headless mode, slash commands and session transcripts
+- [Web front end](https://raw.githubusercontent.com/alexwkleung/reika/main/docs/web.md): `reika web` and `--window`, the page, history, limits and how the local server is locked down
 - [Configuration](https://raw.githubusercontent.com/alexwkleung/reika/main/docs/configuration.md): every `REIKA_*` key, profiles, approvals and the sandbox
 - [Tools](https://raw.githubusercontent.com/alexwkleung/reika/main/docs/tools.md): the tools the agent can call and when each one registers
 - [Instructions and skills](https://raw.githubusercontent.com/alexwkleung/reika/main/docs/skills.md): AGENTS.md loading, skills as slash commands, and plain-English skill routing

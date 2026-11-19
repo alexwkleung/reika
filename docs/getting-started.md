@@ -109,5 +109,7 @@ pnpm run install:global       # builds and installs the `reika` binary
 pnpm run uninstall:global     # removes it again
 ```
 
+The install is a copy of the checkout as it stood when you ran it, so switching branches or rebuilding afterwards does not change the installed `reika`; run `pnpm run reinstall:global` to pick up new changes.
+
 To run it without installing anything, `cp .env.example .env`, edit it, and use `pnpm run dev`.
 [Contributing](../CONTRIBUTING.md) has the rest of the contributor setup.

@@ -1,6 +1,6 @@
 import type { Message, Usage } from '../types.js';
 import { scrubPaths } from './paths.js';
-import { formatElapsed } from './format.js';
+import { formatElapsed } from '../display/format.js';
 
 export type Approvals = {
   approved: number;

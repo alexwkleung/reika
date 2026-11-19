@@ -51,6 +51,19 @@ export const SANDBOX_PROFILE_ERROR_CODE = 65;
 export const SANDBOX_EXEC_ERROR_PREFIX = 'sandbox-exec:';
 
 /** Seatbelt profile for one cwd. Pure string in, string out — the unit under test. */
+// Loopback ports a sandboxed command may not connect to: `reika web`'s own server. A command can
+// read the page's token off the browser profile on disk (reads are open), and with it could answer
+// its own approval; the port is the one place to stop that (#1014 review). Registered while the
+// server listens, last in every profile so it outranks the loopback allow.
+const protectedPorts = new Set<number>();
+
+export function protectLoopbackPort(port: number): () => void {
+  protectedPorts.add(port);
+  return () => {
+    protectedPorts.delete(port);
+  };
+}
+
 export function sandboxProfile(opts: { network: boolean }): string {
   const lines = [
     '(version 1)',
@@ -142,6 +155,10 @@ export function sandboxProfile(opts: { network: boolean }): string {
       '(allow network-bind (local unix))',
       '(allow network-inbound (local unix))',
     );
+  }
+  // After everything, and with the network kept too: last match wins.
+  for (const port of [...protectedPorts].sort((a, b) => a - b)) {
+    lines.push(`(deny network-outbound (remote ip "localhost:${port}"))`);
   }
   return lines.join('\n');
 }

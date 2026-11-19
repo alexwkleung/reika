@@ -1,0 +1,61 @@
+.image-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem 1rem;
+  background: color-mix(in srgb, #000 72%, transparent);
+  cursor: zoom-out;
+}
+.image-preview-figure {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  max-width: 100%;
+  max-height: 100%;
+  margin: 0;
+  cursor: default;
+}
+.image-preview-img {
+  display: block;
+  max-width: min(100%, 1400px);
+  max-height: calc(100vh - 8rem);
+  object-fit: contain;
+  border: 1px solid var(--reika-rule);
+  border-radius: 8px;
+  background: var(--reika-code-bg);
+}
+.image-preview-caption {
+  font-size: 0.8125rem;
+  color: var(--reika-secondary);
+  user-select: text;
+}
+.image-preview-close {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 1px solid var(--reika-control-border);
+  border-radius: 8px;
+  background: var(--reika-control-bg);
+  cursor: pointer;
+}
+.image-preview-close svg {
+  width: 0.875rem;
+  height: 0.875rem;
+  fill: none;
+  stroke: var(--reika-control-fg);
+  stroke-width: 1.6;
+}
+.image-preview-close:focus-visible {
+  outline: 2px solid var(--reika-accent);
+  outline-offset: 1px;
+}

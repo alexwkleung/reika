@@ -28,3 +28,18 @@ describe('scrubPaths', () => {
     expect(scrubPaths('no paths here', cwd)).toBe('no paths here');
   });
 });
+
+describe('the display root (#1015)', () => {
+  it('shortens against the session cwd and bumps the scrub generation', async () => {
+    const { setDisplayRoot } = await import('./paths.js');
+    const { scrubGeneration } = await import('./identity.js');
+    const before = scrubGeneration();
+    setDisplayRoot('/repo/next');
+    try {
+      expect(scrubPaths('/repo/next/src/a.ts')).toBe('src/a.ts');
+      expect(scrubGeneration()).toBeGreaterThan(before);
+    } finally {
+      setDisplayRoot(process.cwd());
+    }
+  });
+});

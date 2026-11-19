@@ -1,8 +1,8 @@
 import React from 'react';
+import { scrubOutput } from './scrub.js';
 import { Box, Text } from 'ink';
 import { theme } from './theme.js';
-import type { QueuedMessage } from './queue.js';
-import { queuedPreview } from './queue.js';
+import { queuedPreview, type QueuedMessage } from '../agent/busyqueue.js';
 
 /** Ephemeral list of messages waiting for the current turn to finish.
  *  Sits directly above the input where the eye already is; disappears the
@@ -19,7 +19,7 @@ export function QueuedList({ queue }: { queue: QueuedMessage[] }) {
         <Box key={i} width="100%">
           <Text wrap="wrap">
             <Text color={theme.queued}>{i === 0 ? 'next › ' : 'then › '}</Text>
-            <Text>{queuedPreview(msg)}</Text>
+            <Text>{scrubOutput(queuedPreview(msg))}</Text>
           </Text>
         </Box>
       ))}

@@ -182,6 +182,11 @@ exit status, and the end of its output. That is up to 4KB a run on a large conte
 command line alone. Output that is cut is saved to a temp file the model can read. `/new` drops runs
 not yet sent.
 
+## Web front end
+
+`reika web` serves the same session to a browser tab on this machine, and `reika web --window` opens
+it in an app window. Experimental; see [Web front end](web.md).
+
 ## Headless mode
 
 `reika -p "<prompt>"` runs one turn with no TUI and prints the reply to stdout — for scripts, other

@@ -144,7 +144,7 @@ describe('minimal tool list', () => {
 
 describe('minimal mode routing', () => {
   it('runs as an agent turn everywhere below the prompt', async () => {
-    const { turnPromptMode, turnTools, isMinimalPrompt } = await import('../ui/commands.js');
+    const { turnPromptMode, turnTools, isMinimalPrompt } = await import('./modes.js');
     // The load-bearing decision: NOT a fourth PromptMode. Every `promptMode === 'agent'` branch in
     // the loop — plan-handoff distill, plan progress, the two done-gates — must still apply.
     expect(turnPromptMode('minimal')).toBe('agent');

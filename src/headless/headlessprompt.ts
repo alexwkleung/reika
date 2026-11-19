@@ -2,7 +2,7 @@ import { openSync, createReadStream, createWriteStream } from 'node:fs';
 import { createInterface, type Interface } from 'node:readline';
 import type { Readable, Writable } from 'node:stream';
 import { APPROVAL_FEEDBACK_INDEX, APPROVAL_OPTIONS, type ConfirmSpec } from '../ui/dialogspecs.js';
-import { toolLabel } from '../ui/format.js';
+import { toolLabel } from '../display/format.js';
 import type { ApprovalAnswer, ApprovalRequest, QuestionAnswer, QuestionRequest } from '../types.js';
 import { stripTerminalControls } from '../ui/termtext.js';
 

@@ -13,12 +13,29 @@ import {
 import { glyphs } from './glyphs.js';
 import { theme, themeChalk } from './theme.js';
 import { scrubGeneration } from './identity.js';
-import { scrubDisplay, scrubOutput } from './scrub.js';
+import { holdPartialPath, scrubDisplay, scrubLines, scrubOutput } from './scrub.js';
 import { DiffView } from './DiffView.js';
-import { changeLabel, formatDurationMs, toolLabel, toolTimer, toolVerb } from './format.js';
+import {
+  changeLabel,
+  displayProse,
+  toolLabel,
+  toolTimer,
+  toolVerb,
+  turnEndLabel,
+} from '../display/format.js';
 import { contentWidth, hangingWrap, wrapLines } from './layout.js';
-import { foldedAssistantFields, foldedLiveFields } from './reasoningfold.js';
-import { OUTPUT_TAIL_LINES } from '../tools/bash.js';
+import { foldedAssistantFields, foldedLiveFields } from '../display/reasoningfold.js';
+import { OUTPUT_TAIL_LINES } from '../display/commandtail.js';
+import {
+  elidedReadSummary,
+  formatArgs,
+  groupedReads,
+  hasBlockUnderSummary,
+  noticeLead,
+  type LogItem,
+} from '../display/scrollbackrules.js';
+
+export { elidedReadSummary, noticeLead };
 
 export function Scrollback({
   messages,
@@ -79,14 +96,19 @@ export function Scrollback({
   const indent = streamingNested ? NESTED_INDENT : 0;
   const toolOffset = streamingCommand ? COMMAND_MARGIN : 0;
   const region = liveRegionRows(chromeRows);
-  // Same display-only fold as the committed message (ui/reasoningfold.ts), so a thought the
+  // Same display-only fold as the committed message (display/reasoningfold.ts), so a thought the
   // endpoint cut at a tag the model wrote in its own prose stays in its block while it streams
   // instead of landing in the content area and jumping up to the Thinking block on commit.
   // Skipped for the compaction note, whose content is a harness aside rather than model reasoning
   // and whose block is sized for that aside's shape.
-  const folded = streamingNote
+  const unfolded = streamingNote
     ? { reasoning: streamingReasoning, content: streaming }
     : foldedLiveFields(streamingReasoning, streaming);
+  // Committed rows are scrubbed whole; a live tail may stop halfway through a path.
+  const folded = {
+    reasoning: holdPartialPath(unfolded.reasoning),
+    content: holdPartialPath(unfolded.content),
+  };
   // Each block's fixed rows: its marginTop, plus the reasoning block's "Thinking" label. The block
   // builders are the memoized ones: a render where this block's text (or width, or the terminal's
   // columns) is unchanged reuses the rows it built last time instead of re-parsing the same text.
@@ -106,7 +128,11 @@ export function Scrollback({
     blocks.push({ kind: 'content', live, fixed: streamingNote ? 3 : 1 });
   }
   if (streamingTool) {
-    const live = liveToolRows(streamingTool, liveContentWidth(indent + toolOffset), region);
+    const live = liveToolRows(
+      holdPartialPath(streamingTool),
+      liveContentWidth(indent + toolOffset),
+      region,
+    );
     blocks.push({ kind: 'tool', live, fixed: 1 });
   }
   const { log: scrollback, held } = useScrollbackLog(messages);
@@ -200,7 +226,9 @@ export function Scrollback({
           <LogItemView key={i} item={item} prev={scrollback[i - 1]} log={scrollback} index={i} />
         )}
       </Static>
-      {showHeldWorked && held !== null ? <WorkedRow durationMs={held} /> : null}
+      {showHeldWorked && held !== null ? (
+        <WorkedRow durationMs={held.ms} interrupted={held.interrupted} />
+      ) : null}
       {indent ? (
         // Same box MessageView gives a nested committed row: the margin plus an explicit width
         // that pays for it, so a full line wraps under Ink rather than at the terminal edge. Only
@@ -234,12 +262,13 @@ export function Scrollback({
 // prompt or a command echo) and drawn live at idle instead, in the spinner's rows: committed with
 // its message it lands while the spinner is still up, and the spinner leaving afterwards shrinks
 // the frame and moves the input up. End-of-turn notices therefore print above it.
-type LogItem = Message | { workedMs: number };
 
-function useScrollbackLog(messages: Message[]): { log: LogItem[]; held: number | null } {
+type HeldTurnEnd = { ms: number; interrupted?: boolean };
+
+function useScrollbackLog(messages: Message[]): { log: LogItem[]; held: HeldTurnEnd | null } {
   const seen = useRef(new WeakSet<Message>());
   const log = useRef<LogItem[]>([]);
-  const held = useRef<number | null>(null);
+  const held = useRef<HeldTurnEnd | null>(null);
   return useMemo(() => {
     const fresh = messages.filter(m => !seen.current.has(m));
     if (fresh.length === 0) return { log: log.current, held: held.current };
@@ -248,11 +277,11 @@ function useScrollbackLog(messages: Message[]): { log: LogItem[]; held: number |
       seen.current.add(m);
       const endsTurn = m.role === 'assistant' && m.durationMs !== undefined && !m.nested;
       if (held.current !== null && (m.role === 'user' || endsTurn)) {
-        next.push({ workedMs: held.current });
+        next.push({ workedMs: held.current.ms, interrupted: held.current.interrupted });
         held.current = null;
       }
       next.push(m);
-      if (endsTurn) held.current = m.durationMs!;
+      if (endsTurn) held.current = { ms: m.durationMs!, interrupted: m.interrupted };
     }
     log.current = next;
     return { log: next, held: held.current };
@@ -350,7 +379,7 @@ function streamingContentRows(text: string, width: number, bound: number): LiveR
   const pre = markdownTail(text, bound * 4);
   // A pre-trimmed tail starts mid-message, so its first row gets the indent, not the marker.
   const prose = markProse(
-    renderMarkdown(hideDanglingMarkers(pre.text), width - CALL_MARKER_MEASURED),
+    renderMarkdown(scrubDisplay(hideDanglingMarkers(pre.text)), width - CALL_MARKER_MEASURED),
     !pre.truncated,
   );
   return { rows: displayRows(prose, width), cut: pre.truncated };
@@ -365,7 +394,7 @@ function streamingNoteRows(text: string, width: number, bound: number): LiveRows
 
 function noteBodyRows(text: string, width: number): string[] {
   const inner = width - NOTE_BAR.length;
-  return displayRows(renderMarkdown(text, inner), inner);
+  return displayRows(renderMarkdown(scrubDisplay(text), inner), inner);
 }
 
 // The live tail of a running command. The App accumulates the run's whole output, and scrubbing
@@ -427,40 +456,6 @@ export function lastCall<A extends readonly unknown[], T>(
     cache = { args, ambient: around, value: compute(...args) };
     return cache.value;
   };
-}
-
-// The display form of a tool result's summary (#567, #627).
-//
-// A read result drops its leading verb when it is alone: the `⏺︎ Read(path=…)` call directly above
-// carries it, and the path follows immediately, so the row reads cleanly without it. Stacked under
-// a sibling call that argument fails — every row is `  ↳ <path> …`, the marker names none of them —
-// so the verb comes back.
-//
-// Restoring it means *un-dropping* it, not inventing a separator: a success summary in this
-// codebase is `Verb rest` (`Listed 12 entries in src`, `Found 3 matches for /x/`, `Fetched <url>
-// (…)`, `Wrote src/a.ts (+3)`), and the colon-bearing shapes are failure lines (`Edit failed:`,
-// `List failed:`) or `Ran:` (tools/bash.ts). A read's summary opens with the path itself, so there
-// is nothing to disambiguate, and a display colon would make read the only success verb carrying a
-// separator the wire format didn't.
-//
-// `Ran:` is the one success verb with a separator, and it is NOT a style choice to copy or undo:
-// its colon is in the wire summary, where `plantrack.ts` (ranSuccessfully) parses `Ran: ` back out
-// of history to re-derive plan progress for results written before `exitCode` existed. Bash is also
-// the one payload that is arbitrary shell text, so the colon is what keeps `Ran: npm test` from
-// reading as a command named `Ran`. Neither applies here — this row's separator would be invented
-// at render time and parsed by nothing.
-//
-// Two of the read tool's shapes keep their verb even when lone, because for those the verb IS the
-// label rather than a repetition of the call above: `Read failed: …` (an edit-style failure line)
-// and `Read a.ts: offset 99 past end of file (10 lines)` (which already carries its own separator).
-// Stripping either leaves `failed: …` / `a.ts: offset …`, a row that lost its only label. Matched
-// on the summary's own `Verb …: detail` form, not on the mere presence of a colon, so a path that
-// simply contains one (`Read a:b.ts lines 1-2 of 3`) still elides.
-export function elidedReadSummary(summary: string, grouped: boolean): string {
-  if (grouped || !summary.startsWith('Read ')) return summary;
-  return /^\s+[^:]*:\s|^\s+failed:/.test(summary.slice('Read'.length))
-    ? summary
-    : summary.replace(/^Read /, '');
 }
 
 // The inputs a live block reads that are not arguments.
@@ -660,7 +655,7 @@ function PlanChecksBlock({ checks, width }: { checks: PlanChecks; width: number 
       hint: 'Likely wrong or invented. The agent is told not to rely on them.',
     });
   }
-  const rows = (text: string) => displayRows(renderMarkdown(text, inner), inner);
+  const rows = (text: string) => displayRows(renderMarkdown(scrubDisplay(text), inner), inner);
   return (
     <Box flexDirection="column" marginTop={1} marginLeft={CALL_MARKER_WIDTH}>
       <NoteBarRow color={theme.warning}>
@@ -739,14 +734,14 @@ export function markProse(rendered: string, withMarker = true): string {
 // marginLeft on a tool result's command/output block; it pays for that out of the row's width.
 const COMMAND_MARGIN = 4;
 
-function WorkedRow({ durationMs }: { durationMs: number }) {
+function WorkedRow({ durationMs, interrupted }: { durationMs: number; interrupted?: boolean }) {
   return (
     <Box marginTop={1}>
       {/* Filled square doubles as a "turn complete" marker (the universal
           stop/done glyph) and an anchor of color on an otherwise inert line. */}
       <Text>
-        <Text color={theme.accent}>{'■ '}</Text>
-        <Text color={theme.muted}>{`Worked for ${formatDurationMs(durationMs)}`}</Text>
+        <Text color={interrupted ? theme.warning : theme.accent}>{'■ '}</Text>
+        <Text color={theme.muted}>{turnEndLabel(durationMs, interrupted)}</Text>
       </Text>
     </Box>
   );
@@ -763,7 +758,9 @@ function LogItemView({
   log: LogItem[];
   index: number;
 }) {
-  if ('workedMs' in item) return <WorkedRow durationMs={item.workedMs} />;
+  if ('workedMs' in item) {
+    return <WorkedRow durationMs={item.workedMs} interrupted={item.interrupted} />;
+  }
   return (
     <MessageView
       msg={item}
@@ -772,62 +769,6 @@ function LogItemView({
       index={index}
     />
   );
-}
-
-// Whether a read result is one of several under the same call round (#627). Its verb was dropped
-// from the row on the argument that the call directly above carries it (#567) — an argument that
-// holds only while that call is alone. With siblings, every result row is `  ↳ path …` and the
-// marker names none of them, so the label goes back on the rows that lost it.
-//
-// Both arms read only what is knowable the moment the row prints. `<Static>` freezes a row as it
-// lands, and a round's results commit one at a time (the loop runs its calls sequentially), so a
-// rule that waits for the rows BELOW this one labels the first row of every stack wrong on screen
-// and frozen — the very stack #627 is about. The row above is already frozen when this one prints,
-// and the round's call list committed with the `⏺︎` call rows before any result ran, so those two
-// decide. Cost: a read whose sibling call never commits (held for a subagent #346, withdrawn by
-// the ladder) gets a label with no stack under it — a rare, stable over-label instead of a wrong
-// frozen frame.
-//
-// The row arm keeps the gap `afterToolBlock` gives summary-only rows: a read whose neighbour
-// carries a diff or a command chip is separated by a blank row, so it is not scanned as part of
-// that block and keeps the bare path. The round arm is gap-proof by design: a round's results
-// print in call order, so [read, bash, read] separates the two read rows with the command's block —
-// the label is round-scoped ("this round read more than one file"), so no interleaving of other
-// calls can strip it from a read row in a multi-read round.
-function groupedReads(
-  msg: Message,
-  prev: Message | undefined,
-  log: LogItem[],
-  index: number,
-): boolean {
-  if (msg.role !== 'tool' || !/^Read /.test(msg.summary)) return false;
-  const nested = 'nested' in msg && !!msg.nested;
-  // Same nesting level, not merely "not nested": a subagent's reads stack at the nested indent and
-  // group with each other, never with a top-level row across the block boundary.
-  const sibling = (m?: Message): boolean =>
-    m?.role === 'tool' && !hasBlockUnderSummary(m) && !!m.nested === nested;
-  return sibling(prev) || multiReadRound(msg, log, index, nested);
-}
-
-// Whether this row's round reads more than one file (#627) — the call list decides, counting every
-// `read` in the round rather than looking for one after this row's call: interleaved siblings
-// ([read, bash, read]) put a block between two of the read rows, and both rows deserve the label.
-// The walk to the round's assistant message skips what a call can leave behind (its own result
-// rows, the harness notices that trail a chip) and stops at the first same-level assistant, which
-// owns these results — `callId` confirms it before the count is trusted.
-function multiReadRound(msg: Message, log: LogItem[], index: number, nested: boolean): boolean {
-  if (msg.role !== 'tool') return false;
-  for (let j = index - 1; j >= 0; j--) {
-    const m = log[j];
-    if ('workedMs' in m) continue;
-    if (m.role === 'user') return false;
-    if (m.role !== 'assistant') continue;
-    if (!!m.nested !== nested) return false;
-    const calls = m.toolCalls ?? [];
-    if (!calls.some(c => c.id === msg.callId)) return false;
-    return calls.filter(c => c.name === 'read').length >= 2;
-  }
-  return false;
 }
 
 function MessageView({
@@ -880,23 +821,6 @@ function MessageView({
       {inner}
     </Box>
   );
-}
-
-// A lead longer than this is a sentence, not a label, and tinting it is the blob again.
-const NOTICE_LEAD_MAX = 40;
-
-// The text before a notice's first ` — ` or `: ` on its first row, colon included. Empty when
-// there is none, or it is too long, or the first row wrapped before reaching it.
-export function noticeLead(wrapped: string): string {
-  const firstRow = wrapped.split('\n')[0];
-  const m = /^(.+?)(?: — |: )/.exec(firstRow);
-  if (!m) return '';
-  const lead = m[0].endsWith(': ') ? m[1] + ':' : m[1];
-  return lead.length <= NOTICE_LEAD_MAX ? lead : '';
-}
-
-function hasBlockUnderSummary(msg: Message): boolean {
-  return msg.role === 'tool' && !!(msg.diff || msg.command || msg.changes);
 }
 
 // The in-flight row takes the committed row's spacing, or the gap MessageView gives the result
@@ -968,7 +892,7 @@ function renderMessage(
   }
   if (msg.role === 'assistant') {
     // Display-only fold for a reasoning block the endpoint cut at a tag the model wrote in its own
-    // prose (ui/reasoningfold.ts). Skipped for a plan-checks message: that offset indexes into
+    // prose (display/reasoningfold.ts). Skipped for a plan-checks message: that offset indexes into
     // `content`, and the fold would move the bytes it counts.
     const folded = msg.planChecks
       ? { reasoning: msg.reasoning, content: msg.content }
@@ -977,8 +901,12 @@ function renderMessage(
     // call; rendering that as a real line would add a blank row (with margins on
     // both sides) between the Thinking block and the tool calls, so treat it as
     // empty.
-    const prose = msg.planChecks ? folded.content.slice(0, msg.planChecks.at) : folded.content;
+    const prose = msg.planChecks
+      ? folded.content.slice(0, msg.planChecks.at)
+      : displayProse(folded.content, msg.interrupted);
     const hasContent = !!prose?.trim();
+    // An abort before any output leaves nothing above the closing line, which says it.
+    if (msg.interrupted && !folded.reasoning && !hasContent && !ctx.nested) return null;
     return (
       <Box flexDirection="column" marginTop={1}>
         {folded.reasoning ? (
@@ -987,7 +915,9 @@ function renderMessage(
         {hasContent ? (
           <Box marginTop={folded.reasoning ? 1 : 0}>
             <Text>
-              {markProse(renderMarkdown(prose, contentWidth(indent) - CALL_MARKER_MEASURED))}
+              {markProse(
+                renderMarkdown(scrubDisplay(prose), contentWidth(indent) - CALL_MARKER_MEASURED),
+              )}
             </Text>
           </Box>
         ) : null}
@@ -1010,7 +940,7 @@ function renderMessage(
                 <Text color={theme.tool}>{`${CALL_MARKER}${toolLabel(tc.name)}`}</Text>
                 <Text color={theme.secondary}>
                   {hangingWrap(
-                    `(${formatArgs(tc.name, tc.args)})`,
+                    `(${formatArgs(tc.name, tc.args, scrubDisplay)})`,
                     contentWidth(indent),
                     CALL_MARKER_WIDTH,
                     // The name sits between the marker and the args, so the first row has less
@@ -1033,7 +963,7 @@ function renderMessage(
         {/* A top-level turn's line is its own log entry (useScrollbackLog); only a subagent's
             stays inline, since it closes a nested block mid-turn. */}
         {msg.durationMs !== undefined && ctx.nested ? (
-          <WorkedRow durationMs={msg.durationMs} />
+          <WorkedRow durationMs={msg.durationMs} interrupted={msg.interrupted} />
         ) : null}
       </Box>
     );
@@ -1070,8 +1000,8 @@ function renderMessage(
         {msg.diff ? (
           <Box flexDirection="column" marginTop={1} marginLeft={4}>
             <DiffView
-              diff={msg.diff.text}
-              path={msg.diff.path}
+              diff={scrubLines(msg.diff.text)}
+              path={scrubDisplay(msg.diff.path)}
               maxWidth={diffViewWidth(indent)}
               startLine={msg.diff.startLine}
             />
@@ -1124,8 +1054,8 @@ function renderMessage(
                 {f.hunks.map((h, hi) => (
                   <Box key={hi} flexDirection="column" marginTop={hi > 0 ? 1 : 0}>
                     <DiffView
-                      diff={h.text}
-                      path={f.path}
+                      diff={scrubLines(h.text)}
+                      path={scrubDisplay(f.path)}
                       maxWidth={diffViewWidth(indent)}
                       startLine={h.startLine}
                       oldStartLine={h.oldStartLine}
@@ -1211,7 +1141,7 @@ function reasoningLines(
   const contentW = Math.max(1, avail - 2); // '▎ ' gutter (2).
   // Models often emit leading/trailing newlines and blank-line runs; those would
   // become empty bar rows, so collapse blank lines and trim the ends first.
-  const cleaned = renderReasoningMarkdown(text, contentW)
+  const cleaned = renderReasoningMarkdown(scrubDisplay(text), contentW)
     .replace(/\n\s*\n/g, '\n')
     .replace(/^\s*\n|\s+$/g, '');
   return displayRows(cleaned, contentW);
@@ -1312,30 +1242,6 @@ function wrapText(text: string, width: number): string[] {
     rows.forEach((row, i) => out.push(i === 0 ? row : row.replace(/^ +/, '')));
   }
   return out;
-}
-
-// Args whose values are already shown in full elsewhere (the diff view) and only
-// bloat the header — drop them so e.g. an edit reads "⏺︎ Edit(path=…)" instead of
-// "⏺︎ Edit(path=…, old_string=…, new_string=…)". Path stays; it's the one bit the
-// diff header doesn't make obvious at a glance.
-const HIDDEN_ARGS: Record<string, ReadonlySet<string>> = {
-  edit: new Set(['old_string', 'new_string']),
-  write: new Set(['content']),
-};
-
-function formatArgs(name: string, args: Record<string, unknown>): string {
-  const hidden = HIDDEN_ARGS[name];
-  return Object.entries(args)
-    .filter(([k]) => !hidden?.has(k))
-    .map(([k, v]) => `${k}=${truncate(scrubDisplay(JSON.stringify(v)), 120)}`)
-    .join(', ');
-}
-
-// Title-case the tool name's first letter for a tidier, conventional look
-// (Read, List, Bash …).
-
-function truncate(s: string, max: number): string {
-  return s.length > max ? s.slice(0, max - 1) + '…' : s;
 }
 
 // Available width for diff content inside a tool-result. Subtracts App's

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { sweepDebugLogs } from './debug.js';
+import { exitAfterDrain } from './drainexit.js';
 import { sweepStaleSpills } from './tools/_spill.js';
 import { USAGE, parseHeadlessArgs } from './headless/headlessargs.js';
 import { loadWithProductionReact } from './ui/reactbuild.js';
@@ -17,6 +18,59 @@ process.title = 'reika';
 void sweepStaleSpills();
 // Debug-log retention (#761), the same shape: per-session logs past their age or size budget.
 void sweepDebugLogs();
+
+// `reika web` (#584) is checked first, since its argv would read as a stray positional to the
+// headless parser. Lazily imported like the others, and Ink-free.
+let web = null;
+if (process.argv[2] === 'web') {
+  try {
+    const { parseWebArgs } = await import('./web/command.js');
+    web = parseWebArgs(process.argv.slice(2));
+  } catch (e) {
+    process.stderr.write(`reika: ${(e as Error).message}\n`);
+    process.exit(2);
+  }
+}
+if (web) {
+  const { runWeb, terminalLink, WEB_USAGE } = await import('./web/command.js');
+  if (web.help) {
+    process.stdout.write(`${WEB_USAGE}\n`);
+    process.exit(0);
+  }
+  const { loadConfig } = await import('./config.js');
+  const { loadLastState, saveLastState } = await import('./laststate.js');
+  const run = await runWeb(web, {
+    stdout: text => void process.stdout.write(text),
+    stderr: text => void process.stderr.write(text),
+    cwd: process.cwd(),
+    loadConfig,
+    loadLastState,
+    saveLastState,
+  }).catch((e: Error) => {
+    process.stderr.write(`reika: ${e.message}\n`);
+    return 1;
+  });
+  if (typeof run === 'number') process.exit(run);
+  // Unlike the TUI (#224), nothing here owns ctrl-c, and default signal death skips the exit hooks
+  // that end MCP servers and a running bash group, so the orderly shutdown runs first.
+  let signalled = false;
+  const onSignal = (code: number) => () => {
+    if (signalled) process.exit(code);
+    signalled = true;
+    void run.shutdown(code);
+  };
+  // Enter prints a fresh link: the first one works once, and a second tab needs its own.
+  if (process.stdin.isTTY) {
+    process.stdin.on('data', () => {
+      process.stdout.write(`\n  ${terminalLink(run.newLink())}\n\n`);
+    });
+    // Not a reason to stay alive once the server has shut down.
+    process.stdin.unref();
+  }
+  process.on('SIGINT', onSignal(130));
+  process.on('SIGTERM', onSignal(143));
+  process.exit(await run.done);
+}
 
 // Both front-ends are imported lazily: the headless path (#52) never loads Ink, and the TUI
 // never loads the headless runner.
@@ -36,7 +90,7 @@ if (headless?.version) {
 }
 if (headless?.help) {
   process.stdout.write(`${USAGE}\n`);
-  process.exit(0);
+  await exitAfterDrain(0);
 }
 
 if (headless) {
@@ -59,7 +113,7 @@ if (headless) {
     process.stderr.write(`reika: ${e.message}\n`);
     return 1;
   });
-  process.exit(code);
+  await exitAfterDrain(code);
 } else {
   const { startTui } = await loadWithProductionReact(() => import('./ui/tui.js'));
   startTui();

@@ -1,5 +1,15 @@
-import { MCP_TOOL_PREFIX, type McpServerConfig } from '../mcp/config.js';
+// Imported by the browser client too (src/web/client), so its runtime imports must stay Node-free.
+import type { McpServerConfig } from '../mcp/config.js';
+import { MCP_TOOL_PREFIX } from '../mcp/toolprefix.js';
 import type { PromptProgress } from '../types.js';
+
+// Args whose values are already shown in full elsewhere (the diff view) and only bloat the header,
+// so an edit reads "Edit(path=…)". Path stays; it's the one bit the diff header doesn't make
+// obvious at a glance. The web bridge drops them before they reach a tab.
+export const HIDDEN_TOOL_ARGS: Record<string, ReadonlySet<string>> = {
+  edit: new Set(['old_string', 'new_string']),
+  write: new Set(['content']),
+};
 
 // Single source of truth for duration formatting so the status bar, "Worked for" scrollback
 // lines, transcript exports, and /summary all render times identically (issue #74). Fields are
@@ -17,6 +27,21 @@ export function formatElapsed(seconds: number): string {
 // Convenience for call sites holding milliseconds.
 export function formatDurationMs(ms: number): string {
   return formatElapsed(Math.round(ms / 1000));
+}
+
+// The turn's closing line: an interrupted turn says so there, in place of the `(aborted)` marker
+// the model reads at the end of its content.
+export function turnEndLabel(durationMs: number, interrupted: boolean | undefined): string {
+  return interrupted
+    ? `Interrupted after ${formatDurationMs(durationMs)}`
+    : `Worked for ${formatDurationMs(durationMs)}`;
+}
+
+const ABORTED_MARKER_RE = /(?:\n\n)?\(aborted\)$/;
+
+// An interrupted message's prose without the model-facing marker (agent/loop.ts commitAborted).
+export function displayProse(content: string, interrupted: boolean | undefined): string {
+  return interrupted ? content.replace(ABORTED_MARKER_RE, '') : content;
 }
 
 // Below both, the label would flash past on an ordinary append round.
@@ -204,4 +229,34 @@ export function changeLabel(f: {
     default:
       return `(+${f.added} -${f.removed})`;
   }
+}
+
+// `ctx 16k/24k (100% of 16k)` when the window and its usable ceiling are known — the ratio is
+// the raw window (what REIKA_CONTEXT_WINDOW was set to, worth a sanity check at a glance) and the
+// percent is of the usable ceiling, which is the number that says how close the next shed is.
+// `ctx 45k/128k (35%)` when only the window is known, `ctx 45k` when only the size is, empty
+// string when there's nothing to show yet.
+export function formatContext(
+  contextTokens?: number | null,
+  contextWindow?: number,
+  contextUsable?: number,
+): string {
+  if (contextTokens == null || contextTokens <= 0) return '';
+  if (!contextWindow) return `ctx ${kFormat(contextTokens)}`;
+  const size = `${kFormat(contextTokens)}/${kFormat(contextWindow)}`;
+  const fill = contextFill(contextTokens, contextUsable ?? contextWindow);
+  const pct = Math.round(fill! * 100);
+  return contextUsable
+    ? `ctx ${size} (${pct}% of ${kFormat(contextUsable)})`
+    : `ctx ${size} (${pct}%)`;
+}
+
+// `89% cached (40k)` — the share of the last prompt the provider served from cache, and how
+// many tokens that was (#360). Empty when unavailable. A cold call is `0% cached` with no count:
+// `(0)` would only repeat the percent. The count stays when it's nonzero but rounds to 0% —
+// `0% cached (200)` is the one place it says something the percent can't.
+export function formatCache(cachedTokens?: number, contextTokens?: number | null): string {
+  if (cachedTokens == null || !contextTokens) return '';
+  const pct = Math.round((cachedTokens / contextTokens) * 100);
+  return cachedTokens > 0 ? `${pct}% cached (${kFormat(cachedTokens)})` : `${pct}% cached`;
 }

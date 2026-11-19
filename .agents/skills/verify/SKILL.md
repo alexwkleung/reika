@@ -1,9 +1,13 @@
 ---
 name: verify
-description: Build/launch/drive recipe for verifying reika (Ink TUI) changes end-to-end against a mock OpenAI-compatible SSE server.
+description: Build/launch/drive recipe for verifying reika changes end-to-end against a mock OpenAI-compatible SSE server — the Ink TUI over a pty, and the `reika web` page in headless Chrome.
 ---
 
 # Verifying reika end-to-end
+
+The TUI and the web page are driven differently; the web page is at the end
+([Driving the web page](#driving-the-web-page)). A change under `src/web/client/` never
+reaches the TUI, so drive the page for it instead.
 
 reika is an Ink TUI — it needs a real pty. `script(1)` fails with "Raw mode is not
 supported"; use `expect`. No build step needed for verification: run straight from source
@@ -93,3 +97,46 @@ chip): run with `REIKA_AUTO_APPROVE=bypass` so no approval modal blocks the turn
 mock answer the `toolcall` case with a `tool_calls` delta plus `finish_reason: 'tool_calls'`,
 and pick a command whose output is self-evident in the frame (`seq 1 20000` — the last line
 is the assertion). Expect the mock log to show three requests: `warm`, `toolcall`, `final`.
+
+## Driving the web page
+
+`src/web/client/`'s render tests run in jsdom, which has no layout: they check what is drawn,
+never where it lands (a status chip that reads off-centre passed every test). Drive the real
+page in headless Chrome for anything visual or end-to-end. Two files beside this one do it:
+`mock-server.mjs` (the mock above as a script: one `bash` call, then a reply ending
+`DRIVE_OK`) and `drive-web.mjs` (CDP over Node's global `WebSocket`, no dependency).
+
+```sh
+R=/path/to/reika; V=$R/.agents/skills/verify; S=<scratch>
+pnpm --dir $R run build:web            # the server serves dist/web/; from source it needs this
+node $V/mock-server.mjs 8799 $S/req.jsonl &
+cd <small temp project> && REIKA_MODEL=test REIKA_BASE_URL=http://127.0.0.1:8799/v1 \
+  REIKA_API_KEY=x REIKA_CONTEXT_WINDOW=32000 REIKA_AUTO_APPROVE=off REIKA_AUTOSAVE=0 \
+  REIKA_DEBUG=1 REIKA_DEBUG_FILE=$S/debug.log \
+  $R/node_modules/.bin/tsx --tsconfig $R/tsconfig.json $R/src/cli.tsx web </dev/null > $S/web.out 2>&1 &
+LINK=$(grep -o 'http://127[^ ]*#code=[^ ]*' $S/web.out)   # poll until it appears
+node $V/drive-web.mjs "$LINK" $S/shots ["prompt"]          # exits 1 with the page's text
+```
+
+It signs in, sends the prompt, clicks Yes on an approval if one opens, waits for `DRIVE_OK`
+and screenshots `1-signed-in`, `2-approval` (only under `off`), `3-reply-desktop` and
+`4-reply-phone` (390px, with a `WARN` line on horizontal scroll). Read the screenshots; the
+script only proves the flow ran. Extend it with `evaluate`/`waitFor` for the flow under test.
+
+- **The link works once, for 10 minutes.** Enter prints a new one only when stdin is a TTY
+  (`cli.tsx`), so backgrounded, restart `reika web` for a fresh link. A spent link still draws
+  the page and the input box, with a banner; the driver waits for `.status-strip`, which
+  appears only once a session arrived, and fails on the banner.
+- **Set `REIKA_CONTEXT_WINDOW`**, or the status strip has no meter. `REIKA_AUTO_APPROVE`
+  picks the strip's tag (`safe` → `auto approve`) and whether the approval dialog opens
+  (`off`).
+- **The page is dark-only** (`color-scheme: dark`); emulating a light scheme changes nothing.
+- **`max_tokens: 1` requests are not only the warm probe**: on a fresh endpoint the note-slot
+  probe (`provider/noteslot.ts`) sends four, carrying `tool` messages, before the first turn.
+  `mock-server.mjs` checks `max_tokens` first, so they read as `warm`. The verdict is cached
+  for a week, so later runs skip them.
+- A CSS-only question can skip the server: copy the rules into a static `.html` and
+  `chrome --headless --screenshot=out.png --window-size=… file://…`. Use `zoom` on `body` to
+  see a pixel-level offset; `getBoundingClientRect` shows boxes, not where glyphs sit.
+- ctrl-c (SIGINT) to `reika web` shuts it down cleanly; kill the mock separately.
+- Don't re-test the server's Host/Origin/token rules here; `server.test.ts` covers them.

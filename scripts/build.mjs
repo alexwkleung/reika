@@ -4,6 +4,7 @@
 import { chmodSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { build } from 'esbuild';
+import { buildWeb } from './build-web.mjs';
 
 rmSync('dist', { recursive: true, force: true });
 
@@ -44,9 +45,13 @@ const result = await build({
 
 chmodSync('dist/cli.js', 0o755);
 
+// The browser client goes in dist/web/, out of the flat Node layout above.
+const webMetafile = await buildWeb();
+const metafiles = [result.metafile, webMetafile];
+
 // The bundle carries its dependencies' code, so their license texts ship beside it.
 const packageDirs = new Set();
-for (const path of Object.keys(result.metafile.inputs)) {
+for (const path of metafiles.flatMap(m => Object.keys(m.inputs))) {
   const at = path.lastIndexOf('node_modules/');
   if (at === -1) continue;
   const name = path.slice(at + 13).match(/^(?:@[^/]+\/)?[^/]+/)[0];
@@ -69,13 +74,13 @@ writeFileSync(
 
 if (process.argv.includes('--report')) {
   const sizes = new Map();
-  for (const [path, input] of Object.entries(result.metafile.inputs)) {
+  for (const [path, input] of metafiles.flatMap(m => Object.entries(m.inputs))) {
     const m = path.match(/node_modules\/(?:\.pnpm\/[^/]+\/node_modules\/)?((?:@[^/]+\/)?[^/]+)/);
     const key = m ? m[1] : 'reika';
     sizes.set(key, (sizes.get(key) ?? 0) + input.bytes);
   }
   for (const [name, bytes] of [...sizes].sort((a, b) => b[1] - a[1]).slice(0, 25))
     console.log(`${(bytes / 1024).toFixed(0).padStart(7)} KB  ${name}`);
-  for (const [path, out] of Object.entries(result.metafile.outputs))
+  for (const [path, out] of metafiles.flatMap(m => Object.entries(m.outputs)))
     console.log(`${(out.bytes / 1024).toFixed(0).padStart(7)} KB  ${path}`);
 }

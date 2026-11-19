@@ -25,16 +25,17 @@ import { PrefixTrace } from './agent/prefixtrace.js';
 import type { NativeImage } from './agent/attachments.js';
 import { GenReserve, withGenReserve } from './agent/genreserve.js';
 import { detectIdentity, setIdentity } from './ui/identity.js';
-import { kFormat } from './ui/format.js';
+import { setDisplayRoot } from './ui/paths.js';
+import { kFormat } from './display/format.js';
+import { planWritten } from './ui/commands.js';
 import {
-  buildImplementPrompt,
   isMinimalPrompt,
   isGrindPrompt,
-  planWritten,
   turnPromptMode,
   turnRefines,
   turnTools,
-} from './ui/commands.js';
+} from './agent/modes.js';
+import { buildImplementPrompt } from './agent/turncommands.js';
 import type {
   Config,
   ContextBundle,
@@ -191,9 +192,9 @@ export type Session = {
   switchSide(side: Side): void;
   // Replaces both sides' model history with a resumed conversation.
   loadHistory(active: Message[], other: Message[]): void;
-  // Drops the conversation and everything measured about it. `relearn` also forgets what was learned
-  // about the engine and returns to the default profile — /new, where the next model may differ.
-  reset(opts?: { relearn?: boolean }): void;
+  // Drops the conversation and everything measured about it. What was learned about the engine stays:
+  // the model is the same one, and a switch after this goes through `setProfile`.
+  reset(): void;
 };
 
 export async function createSession(opts: SessionOptions): Promise<Session> {
@@ -232,6 +233,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       repoMapBudgetFor(resolveProfile(cfg, profile).contextWindow, cfg.repoMapBudget),
     );
   let bundle = fitRepoMap(booted);
+  setDisplayRoot(bundle.cwd);
   // Profiles whose probe reached no server (llama-server still loading): asked again at the next
   // submit on that profile, awaited so the window governs that turn rather than the one after.
   const retryWindow = new Set<string>();
@@ -455,7 +457,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     });
   };
 
-  const reset = (resetOpts: { relearn?: boolean } = {}): void => {
+  const reset = (): void => {
     history = [];
     stashed = {};
     transcript = [];
@@ -466,18 +468,6 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
     shrink = { sheds: 0, folds: 0 };
     // The engine holds none of the dropped bytes, so the trace compares against nothing.
     prefixTrace = new PrefixTrace();
-    if (!resetOpts.relearn) return;
-    calibration = undefined;
-    // The default profile may be a different model on different hardware — a rate learned under
-    // the old one would misprice every round until it re-learns.
-    prefillRate = undefined;
-    decodeRate = undefined;
-    genReserve = new GenReserve();
-    if (profile !== 'default') {
-      profile = 'default';
-      changed();
-      logEndpoint();
-    }
   };
 
   return {
@@ -536,6 +526,7 @@ export async function createSession(opts: SessionOptions): Promise<Session> {
       const next = update(bundle);
       if (next === bundle) return;
       bundle = next;
+      setDisplayRoot(bundle.cwd);
       changed();
     },
     switchSide: next => {

@@ -8,6 +8,7 @@ import {
   sandboxFooter,
   sandboxParams,
   sandboxProfile,
+  protectLoopbackPort,
   isBroadWorkdir,
   broadWorkdirNotice,
   networkAllowedFor,
@@ -149,6 +150,18 @@ describe('sandboxProfile', () => {
     // The whole write half, the `.git` denies included: they are what a `git fetch` (a command
     // that keeps the network) must not be able to walk around, so they are not part of the drop.
     expect(net.split('\n')).toEqual(profile.split('\n').filter(l => !l.includes('network')));
+  });
+
+  it('denies a protected loopback port last, with or without the network, until released', () => {
+    const release = protectLoopbackPort(48123);
+    try {
+      for (const p of [sandboxProfile({ network: false }), sandboxProfile({ network: true })]) {
+        expect(p.split('\n').at(-1)).toBe('(deny network-outbound (remote ip "localhost:48123"))');
+      }
+    } finally {
+      release();
+    }
+    expect(sandboxProfile({ network: false })).not.toContain('48123');
   });
 
   // Reads are deliberately open (#163 phase 5 is not built): `(allow default)` is what keeps grep,

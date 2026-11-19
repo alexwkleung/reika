@@ -101,7 +101,7 @@ describe('end-of-plan handoff hint (#614)', () => {
     const content = (last as { content: string }).content;
     expect(content).toContain('/implement');
     // Every mode the /implement picker offers, since switching to one is the other route out —
-    // keep in step with IMPLEMENT_MODES (ui/commands.ts).
+    // keep in step with IMPLEMENT_MODES (agent/turncommands.ts).
     for (const mode of ['/agent', '/minimal', '/grind']) expect(content).toContain(mode);
   });
 

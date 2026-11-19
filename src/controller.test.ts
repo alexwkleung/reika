@@ -1,0 +1,3314 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import {
+  createController,
+  emptyLive,
+  MAX_HISTORY_ENTRIES,
+  type CommandFrontEnd,
+  type InputFrontEnd,
+  type LiveChange,
+  type LiveTurn,
+} from './controller.js';
+import {
+  listSessions,
+  loadSession,
+  newSessionPath,
+  projectHistoryDir,
+  writeSession,
+} from './store/sessions.js';
+import { TRANSCRIPT_VERSION, type TranscriptMeta } from './store/transcript.js';
+import type * as Transcript from './store/transcript.js';
+import type { QueuedMessage } from './agent/busyqueue.js';
+import type { ImageAttachment } from './agent/attachments.js';
+import type * as PastedUrls from './agent/pastedurls.js';
+import { IMPLEMENT_MODES } from './agent/turncommands.js';
+import type * as Bash from './tools/bash.js';
+import type * as Identity from './ui/identity.js';
+import { setAtLaunch } from './config.js';
+import { helpText } from './agent/replycommands.js';
+
+// The warm's stop at submit is the controller's own since #998; tests read its order beside the
+// front end's hooks.
+const warmStop = vi.hoisted(() => ({ fn: vi.fn(), hook: null as null | (() => void) }));
+vi.mock('./agent/warm.js', () => ({
+  createPrefixWarmer: () => ({
+    onEdge: vi.fn(),
+    cancel: (reason: string) => {
+      warmStop.fn(reason);
+      warmStop.hook?.();
+    },
+  }),
+}));
+import {
+  CONFIRM_ACCEPT,
+  CONFIRM_DECLINE,
+  TOGGLE_CANCEL,
+  TOGGLE_OFF,
+  TOGGLE_ON,
+} from './ui/dialogspecs.js';
+import { rememberPaste } from './display/pastes.js';
+import type { LastState } from './laststate.js';
+import ignore, { type Ignore } from 'ignore';
+import type { McpCallFn, McpCommand } from './mcp/tools.js';
+import type { createSession, Session, SessionOptions, SubmitOptions } from './session.js';
+import type { Skill } from './skills/skills.js';
+import type { Config, Message, Mode, Profile } from './types.js';
+
+// A spawn that throws, which a real command cannot be made to do on demand.
+const shellFailure = vi.hoisted(() => ({ next: null as Error | null }));
+vi.mock('./tools/bash.js', async importOriginal => {
+  const real = await importOriginal<typeof Bash>();
+  return {
+    ...real,
+    execStream: (...args: Parameters<typeof real.execStream>) => {
+      const failure = shellFailure.next;
+      shellFailure.next = null;
+      return failure ? Promise.reject(failure) : real.execStream(...args);
+    },
+  };
+});
+
+// Every save builds its header once, which is how a test counts the save decisions a tick made.
+const builtMeta = vi.hoisted(() => ({ calls: [] as { midTurn: boolean; msgs: unknown[] }[] }));
+vi.mock('./store/transcript.js', async importOriginal => {
+  const real = await importOriginal<typeof Transcript>();
+  return {
+    ...real,
+    buildTranscriptMeta: (o: Parameters<typeof real.buildTranscriptMeta>[0]) => {
+      builtMeta.calls.push({ midTurn: o.midTurn, msgs: o.msgs });
+      return real.buildTranscriptMeta(o);
+    },
+  };
+});
+
+// Detection runs git in the session's cwd; the controller only has to pass on what it found.
+vi.mock('./ui/identity.js', async importOriginal => {
+  const real = await importOriginal<typeof Identity>();
+  return {
+    ...real,
+    enableAnon: async () => {
+      const found = { names: ['Mona Lisa'], emails: ['octocat@example.com'], slugs: [] };
+      real.setIdentity(found as unknown as Parameters<typeof real.setIdentity>[0]);
+      return found;
+    },
+  };
+});
+
+// A confirmed pasted link would be fetched; the test only needs to see that it was asked to.
+const pasteFetches = vi.hoisted(() => ({ incidental: [] as (boolean | undefined)[] }));
+vi.mock('./agent/pastedurls.js', async importOriginal => {
+  const real = await importOriginal<typeof PastedUrls>();
+  return {
+    ...real,
+    expandPastedUrls: (...args: Parameters<typeof real.expandPastedUrls>) => {
+      pasteFetches.incidental.push(args[1].incidental);
+      return args[1].incidental === true
+        ? Promise.resolve({ blocks: ['<url href="stub">the page</url>'], notices: [], fetched: [] })
+        : real.expandPastedUrls(...args);
+    },
+  };
+});
+
+const user = (content: string): Message => ({ role: 'user', content });
+const note = (content: string): Message => ({ role: 'system', content });
+
+type Policy = Partial<Config>;
+
+const profileOf = (model: string): Profile => ({
+  model,
+  baseURL: 'http://127.0.0.1:1/v1',
+  apiKey: 'test',
+});
+
+// The parts of a session the controller reads: its config and active profile, the turn it runs,
+// the MCP call, and the calls that change it. `setProfile` reports one probe notice, as the real
+// one does for a new window.
+function fakeSession(config: Policy) {
+  const cfg = {
+    autoApprove: 'off',
+    models: ['local'],
+    profiles: { default: profileOf('local') },
+    ...config,
+  } as Config;
+  // A turn as the real session runs one: bracketed, with the user's bubble first. A test swaps it
+  // to drive the turn by hand.
+  let turn = async (text: string, opts: SubmitOptions): Promise<Message[]> => {
+    opts.onTurnStart?.();
+    const bubble: Message = { role: 'user', content: opts.display ?? text };
+    opts.events?.onMessage?.(bubble);
+    opts.onTurnEnd?.();
+    return [bubble];
+  };
+  const session = {
+    profile: 'default',
+    bundle: { cwd: '/repo/app', skills: [], fileIndex: [], ignore: ignore() } as {
+      cwd: string;
+      repoMapBudget?: number;
+      skills?: Skill[];
+      fileIndex?: string[];
+      ignore?: Ignore;
+    },
+    config: cfg,
+    shrink: { sheds: 0, folds: 0 },
+    getSnapshot: () => ({ config: cfg }),
+    set turn(next: typeof turn) {
+      turn = next;
+    },
+    submit: vi.fn((text: string, opts: SubmitOptions) => turn(text, opts)),
+    mcp: {
+      call: vi.fn<McpCallFn>(),
+      commands: [] as McpCommand[],
+      list: vi.fn(() => 'MCP: 1 server'),
+    },
+    updateBundle: vi.fn((update: (b: { cwd: string }) => { cwd: string }) => {
+      session.bundle = update(session.bundle);
+    }),
+    switchSide: vi.fn(),
+    loadHistory: vi.fn(),
+    reset: vi.fn(),
+    addProfile: vi.fn((name: string, profile: Profile) => {
+      cfg.profiles[name] = profile;
+    }),
+    setProfile: vi.fn(async (name: string): Promise<Message[]> => {
+      session.profile = name;
+      return [{ role: 'system', content: `window probed for ${name}` }];
+    }),
+  };
+  return session;
+}
+
+const metaFor = (agentSide: Message[], cwd: string, midTurn: boolean): TranscriptMeta => ({
+  version: TRANSCRIPT_VERSION,
+  savedAt: new Date().toISOString(),
+  model: 'local',
+  baseURL: 'http://127.0.0.1:1/v1',
+  cwd,
+  messageCount: agentSide.length,
+  mode: 'agent',
+  ...(midTurn ? { midTurn: true as const } : {}),
+});
+
+// The header line of a saved file.
+const headerOf = async (path: string): Promise<TranscriptMeta> =>
+  JSON.parse((await readFile(path, 'utf8')).split('\n')[0]) as TranscriptMeta;
+
+// `off` unless a test says otherwise, so every approval request opens its dialog. A null policy
+// is a controller whose session has not booted.
+function controllerIn(
+  mode: Mode,
+  policy: Policy | null = {},
+  own = 'default',
+  historyRoot?: string,
+) {
+  const remember = vi.fn<(state: LastState) => void>();
+  const controller = createController({ mode, remember, historyRoot });
+  const session = policy ? fakeSession(policy) : null;
+  if (session) controller.attachSession(session as unknown as Session, own);
+  return {
+    controller,
+    session,
+    switchSide: session?.switchSide ?? vi.fn(),
+    remember,
+  };
+}
+
+describe('createController', () => {
+  it('starts with an empty scrollback in the given mode', () => {
+    const { controller } = controllerIn('plan');
+    expect(controller.getSnapshot()).toEqual({
+      messages: [],
+      mode: 'plan',
+      status: 'loading',
+      queue: [],
+      replaying: false,
+      history: [],
+      preparing: false,
+      approval: null,
+      question: null,
+      confirm: null,
+      approvals: { approved: 0, declined: 0 },
+      sessionAutoApprove: null,
+      sessionUnattended: null,
+      error: null,
+      usage: { promptTokens: 0, completionTokens: 0 },
+      lastUsage: null,
+      estimatedContext: null,
+      shrink: { sheds: 0, folds: 0 },
+      decodeRate: undefined,
+      pr: null,
+    });
+    expect(controller.messages).toEqual([]);
+    expect(controller.mode).toBe('plan');
+  });
+
+  it('hands back the same snapshot until something changes', () => {
+    const { controller } = controllerIn('agent');
+    const before = controller.getSnapshot();
+    controller.append();
+    controller.setMode('agent');
+    expect(controller.getSnapshot()).toBe(before);
+    controller.append(user('hi'));
+    expect(controller.getSnapshot()).not.toBe(before);
+  });
+
+  it('tells subscribers about each change, and stops when they unsubscribe', () => {
+    const { controller } = controllerIn('agent');
+    const listener = vi.fn();
+    const unsubscribe = controller.subscribe(listener);
+    controller.append(user('a'));
+    controller.setMode('plan');
+    controller.replace([]);
+    expect(listener).toHaveBeenCalledTimes(3);
+    controller.append();
+    controller.setMode('plan');
+    expect(listener).toHaveBeenCalledTimes(3);
+    unsubscribe();
+    controller.append(user('b'));
+    expect(listener).toHaveBeenCalledTimes(3);
+  });
+
+  it('appends in order and keeps each message object as given', () => {
+    const { controller } = controllerIn('agent');
+    const [a, b, c] = [user('a'), note('b'), user('c')];
+    controller.append(a);
+    controller.append(b, c);
+    expect(controller.messages).toEqual([a, b, c]);
+    expect(controller.messages[1]).toBe(b);
+  });
+
+  it('replaces the scrollback on screen', () => {
+    const { controller } = controllerIn('agent');
+    controller.append(user('old'));
+    const fresh = [note('New session')];
+    controller.replace(fresh);
+    expect(controller.messages).toBe(fresh);
+  });
+});
+
+describe('controller.transition', () => {
+  it('changes mode within a side without touching the scrollback or the session', () => {
+    const { controller, switchSide } = controllerIn('agent');
+    controller.append(user('task'));
+    const before = controller.messages;
+    controller.transition('plan');
+    expect(controller.mode).toBe('plan');
+    expect(controller.messages).toBe(before);
+    expect(switchSide).not.toHaveBeenCalled();
+  });
+
+  it('appends the trailing lines on a switch within a side', () => {
+    const { controller } = controllerIn('agent');
+    const task = user('task');
+    const banner = note('Plan mode');
+    controller.append(task);
+    controller.transition('plan', [banner]);
+    expect(controller.messages).toEqual([task, banner]);
+  });
+
+  it('puts the agent side away on the way into chat, and brings it back on the way out', () => {
+    const { controller, switchSide } = controllerIn('agent');
+    const task = user('agent task');
+    controller.append(task);
+
+    const chatBanner = note('Chat mode');
+    controller.transition('chat', [chatBanner]);
+    expect(controller.mode).toBe('chat');
+    expect(controller.messages).toEqual([chatBanner]);
+    expect(switchSide).toHaveBeenLastCalledWith('chat');
+
+    const question = user('what is a monad');
+    controller.append(question);
+    const agentBanner = note('Agent mode');
+    controller.transition('agent', [agentBanner]);
+    expect(controller.messages).toEqual([task, agentBanner]);
+    expect(switchSide).toHaveBeenLastCalledWith('agent');
+
+    controller.transition('chat');
+    expect(controller.messages).toEqual([chatBanner, question]);
+  });
+
+  it('treats every mode but chat as the agent side', () => {
+    const { controller, switchSide } = controllerIn('shell');
+    controller.append(user('ls'));
+    for (const mode of ['minimal', 'vibe', 'grind', 'plan', 'agent'] as const) {
+      controller.transition(mode);
+    }
+    expect(controller.messages).toHaveLength(1);
+    expect(switchSide).not.toHaveBeenCalled();
+  });
+});
+
+describe('controller sides and stash', () => {
+  it('reports both sides whichever one is on screen', () => {
+    const { controller } = controllerIn('agent');
+    const task = user('agent task');
+    controller.append(task);
+    expect(controller.sides()).toEqual({ agent: [task], chat: [] });
+
+    controller.transition('chat');
+    const question = user('chat question');
+    controller.append(question);
+    expect(controller.sides()).toEqual({ agent: [task], chat: [question] });
+  });
+
+  it('setMode moves the mode alone: nothing is put away and the session is not told', () => {
+    const { controller, switchSide } = controllerIn('agent');
+    controller.append(user('still here'));
+    controller.setMode('chat');
+    expect(controller.mode).toBe('chat');
+    expect(controller.messages).toHaveLength(1);
+    expect(switchSide).not.toHaveBeenCalled();
+  });
+});
+
+describe('controller.stop', () => {
+  it('refuses every later line and turn', async () => {
+    const { controller, session } = controllerIn('agent');
+    controller.setStatus('idle');
+    controller.stop();
+    await controller.submit('hello', {
+      turn: {},
+      pastes: [],
+      images: [],
+      exit: vi.fn(),
+      pickModel: vi.fn(),
+      pickSession: vi.fn(),
+      shell: {},
+      onStage: vi.fn(),
+      onTaken: vi.fn(),
+    } as never);
+    expect(await controller.runTurn('hi', {}, {})).toEqual([]);
+    expect(session!.submit).not.toHaveBeenCalled();
+  });
+
+  it('counts conversations: /new and a resume each start one', () => {
+    const { controller } = controllerIn('agent');
+    const before = controller.conversation;
+    controller.newConversation(user('/new'));
+    expect(controller.conversation).toBe(before + 1);
+  });
+});
+
+describe('controller status and queue', () => {
+  const queued = (content: string): QueuedMessage => ({ content, answers: {} });
+  const open = { resuming: false };
+
+  it('reports the status and notifies only when it changes', () => {
+    const { controller } = controllerIn('agent');
+    const listener = vi.fn();
+    controller.subscribe(listener);
+    controller.setStatus('idle');
+    controller.setStatus('idle');
+    expect(controller.status).toBe('idle');
+    expect(controller.getSnapshot().status).toBe('idle');
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds a prompt and prints its receipt in one change', () => {
+    const { controller } = controllerIn('agent');
+    const listener = vi.fn();
+    controller.subscribe(listener);
+    const first = queued('fix the tests');
+    controller.enqueue(first);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(controller.getSnapshot().queue).toEqual([first]);
+    expect(controller.messages).toEqual([
+      { role: 'system', content: '[Queued] fix the tests', tone: 'info' },
+    ]);
+  });
+
+  it('hands nothing back while a turn runs, the session boots, a dialog is up or a resume loads', () => {
+    const { controller } = controllerIn('agent');
+    controller.enqueue(queued('later'));
+    expect(controller.takeQueued(open)).toBeNull();
+    controller.setStatus('busy');
+    expect(controller.takeQueued(open)).toBeNull();
+    controller.setStatus('idle');
+    expect(controller.takeQueued({ resuming: true })).toBeNull();
+    expect(controller.getSnapshot().queue).toHaveLength(1);
+  });
+
+  it('holds the queue under an approval or a confirm, and releases it once answered', () => {
+    const { controller } = controllerIn('agent');
+    controller.enqueue(queued('later'));
+    controller.setStatus('idle');
+
+    void controller.requestApproval({ tool: 'bash', subject: 'npm test', preview: 'npm test' });
+    expect(controller.takeQueued(open)).toBeNull();
+    controller.answerApproval(true);
+
+    void controller.openConfirm({
+      title: 'Skill',
+      subtitle: '/issue',
+      details: [],
+      options: ['Send as typed', 'Apply'],
+    });
+    expect(controller.takeQueued(open)).toBeNull();
+    controller.answerConfirm('abort');
+
+    expect(controller.takeQueued(open)).toMatchObject({ content: 'later' });
+  });
+
+  it('hands back the oldest prompt, then nothing more until that replay is done (#958)', () => {
+    const { controller } = controllerIn('agent');
+    const [a, b] = [queued('a'), queued('b')];
+    controller.enqueue(a);
+    controller.enqueue(b);
+    controller.setStatus('idle');
+
+    expect(controller.takeQueued(open)).toBe(a);
+    expect(controller.getSnapshot()).toMatchObject({ queue: [b], replaying: true });
+    expect(controller.takeQueued(open)).toBeNull();
+
+    controller.replayDone();
+    expect(controller.getSnapshot().replaying).toBe(false);
+    expect(controller.takeQueued(open)).toBe(b);
+    expect(controller.getSnapshot().queue).toEqual([]);
+  });
+
+  it('has nothing to hand back from an empty queue, and does not start a replay', () => {
+    const { controller } = controllerIn('agent');
+    controller.setStatus('idle');
+    const before = controller.getSnapshot();
+    expect(controller.takeQueued(open)).toBeNull();
+    controller.replayDone();
+    expect(controller.getSnapshot()).toBe(before);
+  });
+});
+
+describe('controller dialogs', () => {
+  const request = { tool: 'bash', subject: 'npm test', preview: 'npm test' };
+  const question = { question: 'Which one?', options: [{ label: 'A' }, { label: 'B' }] };
+  const spec = {
+    title: 'Skill',
+    subtitle: '/issue',
+    details: [],
+    options: ['Send as typed', 'Apply /issue'],
+  };
+
+  it('shows an approval until it is answered, and resolves with the answer', async () => {
+    const { controller } = controllerIn('agent');
+    const answer = controller.requestApproval(request);
+    expect(controller.approval).toBe(request);
+    expect(controller.getSnapshot().approval).toBe(request);
+    controller.answerApproval({ feedback: 'not that file' });
+    expect(controller.approval).toBeNull();
+    await expect(answer).resolves.toEqual({ feedback: 'not that file' });
+  });
+
+  it('resolves a question with its answer, or with null when it is dropped', async () => {
+    const { controller } = controllerIn('agent');
+    const first = controller.openQuestion(question);
+    expect(controller.question).toBe(question);
+    controller.answerQuestion({ text: 'B', index: 1 });
+    await expect(first).resolves.toEqual({ text: 'B', index: 1 });
+
+    const second = controller.openQuestion(question);
+    controller.answerQuestion(null);
+    expect(controller.question).toBeNull();
+    await expect(second).resolves.toBeNull();
+  });
+
+  it('resolves a confirm with the chosen row, or abort', async () => {
+    const { controller } = controllerIn('agent');
+    const first = controller.openConfirm(spec);
+    expect(controller.confirm).toBe(spec);
+    controller.answerConfirm(1);
+    await expect(first).resolves.toBe(1);
+
+    const second = controller.openConfirm(spec);
+    controller.answerConfirm('abort');
+    await expect(second).resolves.toBe('abort');
+    expect(controller.confirm).toBeNull();
+  });
+
+  it('shows a confirm asked while another is open once the first is answered (#993)', async () => {
+    const { controller } = controllerIn('agent');
+    const other = { ...spec, title: 'Other' };
+    const first = controller.openConfirm(spec);
+    const second = controller.openConfirm(other);
+    expect(controller.confirm).toBe(spec);
+    controller.answerConfirm(0);
+    await expect(first).resolves.toBe(0);
+    expect(controller.confirm).toBe(other);
+    controller.answerConfirm(1);
+    await expect(second).resolves.toBe(1);
+    expect(controller.confirm).toBeNull();
+  });
+
+  it('closes the dialog before the answer reaches whoever asked', async () => {
+    const { controller } = controllerIn('agent');
+    let openWhenResolved: unknown = 'unset';
+    const asked = controller.requestApproval(request).then(() => {
+      openWhenResolved = controller.approval;
+    });
+    controller.answerApproval(true);
+    await asked;
+    expect(openWhenResolved).toBeNull();
+  });
+
+  it('ignores an answer when nothing is open', () => {
+    const { controller } = controllerIn('agent');
+    const listener = vi.fn();
+    controller.subscribe(listener);
+    controller.answerApproval(true);
+    controller.answerQuestion(null);
+    controller.answerConfirm(0);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('keeps the three kinds apart: answering one leaves the others open', () => {
+    const { controller } = controllerIn('agent');
+    void controller.requestApproval(request);
+    void controller.openQuestion(question);
+    void controller.openConfirm(spec);
+    controller.answerQuestion(null);
+    expect(controller.approval).toBe(request);
+    expect(controller.confirm).toBe(spec);
+  });
+});
+
+describe('controller approval gate', () => {
+  const ordinary = { tool: 'edit', subject: 'src/a.ts', preview: '+ line' };
+  const flagged = {
+    tool: 'bash',
+    subject: 'rm -rf build',
+    preview: 'rm -rf build',
+    warnings: ['Deletes files'],
+  };
+
+  it('asks about everything when auto-approve is off', async () => {
+    const { controller } = controllerIn('agent', { autoApprove: 'off' });
+    expect(controller.autoApprove).toBe('off');
+    const answer = controller.requestApproval(ordinary);
+    expect(controller.approval).toBe(ordinary);
+    controller.answerApproval(true);
+    await expect(answer).resolves.toBe(true);
+    expect(controller.getSnapshot().approvals).toEqual({ approved: 1, declined: 0 });
+  });
+
+  it('runs an ordinary action unasked under safe, and still asks about a flagged one', async () => {
+    const { controller } = controllerIn('agent', { autoApprove: 'safe' });
+    await expect(controller.requestApproval(ordinary)).resolves.toBe(true);
+    expect(controller.approval).toBeNull();
+    expect(controller.getSnapshot().approvals).toEqual({ approved: 1, declined: 0 });
+
+    void controller.requestApproval(flagged);
+    expect(controller.approval).toBe(flagged);
+  });
+
+  it('counts a decline, with or without a reason', () => {
+    const { controller } = controllerIn('agent');
+    void controller.requestApproval(ordinary);
+    controller.answerApproval(false);
+    void controller.requestApproval(ordinary);
+    controller.answerApproval({ feedback: 'wrong file' });
+    expect(controller.getSnapshot().approvals).toEqual({ approved: 0, declined: 2 });
+  });
+
+  it('"Always (this session)" approves this one and stops asking about ordinary ones', async () => {
+    const { controller } = controllerIn('agent', { autoApprove: 'off' });
+    const first = controller.requestApproval(ordinary);
+    controller.answerApproval(true, { always: true });
+    await expect(first).resolves.toBe(true);
+    expect(controller.getSnapshot().sessionAutoApprove).toBe(true);
+    expect(controller.autoApprove).toBe('safe');
+
+    await expect(controller.requestApproval(ordinary)).resolves.toBe(true);
+    expect(controller.approval).toBeNull();
+    expect(controller.getSnapshot().approvals).toEqual({ approved: 2, declined: 0 });
+
+    void controller.requestApproval(flagged);
+    expect(controller.approval).toBe(flagged);
+  });
+
+  it('lets the session toggle turn a default safe off, but not an env-forced one', () => {
+    const byDefault = controllerIn('agent', { autoApprove: 'safe' }).controller;
+    byDefault.setToggle('approvals', false);
+    expect(byDefault.autoApprove).toBe('off');
+
+    const forced = controllerIn('agent', {
+      autoApprove: 'safe',
+      autoApproveExplicit: true,
+    }).controller;
+    forced.setToggle('approvals', false);
+    expect(forced.autoApprove).toBe('safe');
+  });
+
+  it('asks about everything before the session has a config', () => {
+    const { controller } = controllerIn('agent', null);
+    expect(controller.autoApprove).toBe('off');
+    expect(controller.unattended).toBe(false);
+  });
+
+  it('declines what would have asked when unattended, and keeps the list for the roll-up', async () => {
+    const { controller } = controllerIn('agent', { autoApprove: 'safe', unattended: true });
+    expect(controller.unattended).toBe(true);
+    await expect(controller.requestApproval(ordinary)).resolves.toBe(true);
+    await expect(controller.requestApproval(flagged)).resolves.toBe(false);
+    expect(controller.approval).toBeNull();
+    expect(controller.getSnapshot().approvals).toEqual({ approved: 1, declined: 1 });
+    expect(controller.takeUnattendedDeclines()).toEqual([flagged]);
+    expect(controller.takeUnattendedDeclines()).toEqual([]);
+  });
+
+  it('lets /unattended override the launch state in either direction', () => {
+    const launchedOn = controllerIn('agent', { autoApprove: 'off', unattended: true }).controller;
+    launchedOn.setToggle('unattended', false);
+    expect(launchedOn.unattended).toBe(false);
+    void launchedOn.requestApproval(ordinary);
+    expect(launchedOn.approval).toBe(ordinary);
+
+    const launchedOff = controllerIn('agent', { autoApprove: 'off' }).controller;
+    launchedOff.setToggle('unattended', true);
+    expect(launchedOff.unattended).toBe(true);
+  });
+});
+
+describe('controller modes and the saved state', () => {
+  it('remembers a work mode the user switched to, by either route', () => {
+    const { controller, remember } = controllerIn('agent');
+    controller.transition('plan');
+    controller.setMode('grind');
+    expect(remember.mock.calls).toEqual([[{ mode: 'plan' }], [{ mode: 'grind' }]]);
+  });
+
+  it('leaves the last work mode saved across chat and shell, which no session opens in', () => {
+    const { controller, remember } = controllerIn('plan');
+    controller.transition('chat');
+    controller.transition('shell');
+    expect(remember).not.toHaveBeenCalled();
+  });
+
+  it('saves nothing for the mode it starts in, or for a switch to the mode it is in', () => {
+    const { controller, remember } = controllerIn('plan');
+    controller.setMode('plan');
+    controller.transition('plan');
+    expect(remember).not.toHaveBeenCalled();
+  });
+});
+
+describe('controller model switching', () => {
+  const profiles = {
+    default: profileOf('local'),
+    kimi: profileOf('kimi-k3'),
+    go: profileOf('deepseek'),
+  };
+
+  it('has no targets and ignores a pick before the session has booted', () => {
+    const { controller, remember } = controllerIn('agent', null);
+    expect(controller.session).toBeNull();
+    expect(controller.modelTargets()).toEqual([]);
+    controller.pickModel('kimi');
+    expect(controller.messages).toEqual([]);
+    expect(remember).not.toHaveBeenCalled();
+  });
+
+  it('switches to a picked profile, says so under the echo, and remembers it', async () => {
+    const { controller, session, remember } = controllerIn('agent', { profiles });
+    const echo: Message = { role: 'user', content: '/model kimi', meta: true };
+    controller.pickModel(' Kimi ', echo);
+    expect(session?.setProfile).toHaveBeenCalledWith('kimi');
+    expect(controller.messages).toEqual([
+      echo,
+      { role: 'system', content: "Switched to profile 'kimi' (kimi-k3)" },
+    ]);
+    expect(remember).toHaveBeenCalledWith({ profile: 'kimi' });
+    await Promise.resolve();
+    expect(controller.messages.at(-1)).toEqual({
+      role: 'system',
+      content: 'window probed for kimi',
+    });
+  });
+
+  it("maps one of the config's models to the profile that serves it", () => {
+    const { controller, session } = controllerIn('agent', { profiles, models: ['local'] });
+    controller.pickModel('LOCAL');
+    expect(session?.setProfile).toHaveBeenCalledWith('default');
+    expect(controller.messages).toEqual([
+      { role: 'system', content: "Switched to profile 'default' (local)" },
+    ]);
+  });
+
+  it("tries a name the config lacks on the active profile's server, as typed", () => {
+    const { controller, session } = controllerIn('agent', { profiles });
+    controller.pickModel('Qwen3-Next');
+    expect(session?.addProfile).toHaveBeenCalledWith('qwen3-next', {
+      ...profileOf('Qwen3-Next'),
+      contextWindow: undefined,
+      adhoc: true,
+    });
+    expect(session?.setProfile).toHaveBeenCalledWith('qwen3-next');
+    expect(controller.messages[0]).toEqual({
+      role: 'system',
+      content:
+        "Switched to model 'Qwen3-Next' — not in your config; using it anyway on http://127.0.0.1:1/v1",
+    });
+  });
+
+  it("brings a mode's own model with the mode, and comes back to the session's on the way out", () => {
+    const { controller, session, remember } = controllerIn(
+      'agent',
+      { profiles, modeProfiles: { plan: 'kimi' } },
+      'go',
+    );
+    controller.transition('plan', [note('Plan mode')]);
+    expect(session?.profile).toBe('kimi');
+    expect(controller.messages).toEqual([
+      note('Plan mode'),
+      note("Switched to profile 'kimi' (kimi-k3)"),
+    ]);
+
+    controller.transition('agent');
+    expect(session?.profile).toBe('go');
+    // A mode's model is re-derived every launch, so only the mode is remembered.
+    expect(remember.mock.calls).toEqual([[{ mode: 'plan' }], [{ mode: 'agent' }]]);
+  });
+
+  it('leaves the model alone in shell, and where the mode already runs on it', () => {
+    const { controller, session } = controllerIn('agent', { profiles });
+    controller.transition('shell');
+    controller.transition('grind');
+    expect(session?.setProfile).not.toHaveBeenCalled();
+  });
+
+  it('keeps a picked model through mode switches until it is unpinned', () => {
+    const { controller, session } = controllerIn('agent', {
+      profiles,
+      modeProfiles: { plan: 'kimi' },
+    });
+    controller.pickModel('go');
+    controller.transition('plan');
+    expect(session?.profile).toBe('go');
+  });
+
+  it('lists the picker targets with the active one marked', () => {
+    const { controller } = controllerIn('agent', { profiles });
+    controller.pickModel('kimi');
+    const active = controller.modelTargets().filter(t => t.active);
+    expect(active.map(t => t.name)).toEqual(['kimi']);
+  });
+});
+
+describe('controller.newConversation', () => {
+  const profiles = {
+    default: profileOf('local'),
+    kimi: profileOf('kimi-k3'),
+    go: profileOf('deepseek'),
+  };
+  const echo: Message = { role: 'user', content: '/new', meta: true };
+  const receipt = note('New session — conversation, tokens, and mode reset.');
+
+  it('seeds the scrollback with the echo and a receipt, and drops both sides', () => {
+    const { controller } = controllerIn('agent');
+    controller.append(user('agent task'));
+    controller.transition('chat');
+    controller.append(user('chat question'));
+
+    controller.newConversation(echo);
+    expect(controller.messages).toEqual([echo, receipt]);
+    expect(controller.mode).toBe('agent');
+    expect(controller.sides()).toEqual({ agent: [echo, receipt], chat: [] });
+  });
+
+  it('resets the session and puts it on the agent side', () => {
+    const { controller, session } = controllerIn('chat');
+    controller.newConversation(echo);
+    expect(session?.reset).toHaveBeenCalled();
+    expect(session?.switchSide).toHaveBeenLastCalledWith('agent');
+  });
+
+  it('clears the counters and the auto-approve toggle, and leaves unattended as it was', () => {
+    const { controller } = controllerIn('agent');
+    void controller.requestApproval({ tool: 'edit', subject: 'a.ts', preview: '+ x' });
+    controller.answerApproval(true, { always: true });
+    controller.setToggle('unattended', true);
+
+    controller.newConversation(echo);
+    expect(controller.getSnapshot()).toMatchObject({
+      approvals: { approved: 0, declined: 0 },
+      sessionAutoApprove: null,
+      sessionUnattended: true,
+    });
+  });
+
+  it('moves the start time forward', async () => {
+    const { controller } = controllerIn('agent');
+    const before = controller.startedAt;
+    await new Promise(resolve => setTimeout(resolve, 5));
+    controller.newConversation(echo);
+    expect(controller.startedAt).toBeGreaterThan(before);
+  });
+
+  it("keeps a picked model as the session's own, with the mode map applying over it again", () => {
+    const { controller, session } = controllerIn('agent', {
+      profiles,
+      modeProfiles: { plan: 'kimi' },
+    });
+    controller.pickModel('go');
+    controller.newConversation(echo);
+    expect(session?.profile).toBe('go');
+
+    controller.transition('plan');
+    expect(session?.profile).toBe('kimi');
+    controller.transition('agent');
+    expect(session?.profile).toBe('go');
+  });
+
+  it('keeps the model the session is on, with one line and no switch', () => {
+    const { controller, session } = controllerIn('agent', { profiles }, 'go');
+    session!.profile = 'go';
+    controller.newConversation(echo);
+    expect(session?.profile).toBe('go');
+    expect(session?.setProfile).not.toHaveBeenCalled();
+    expect(controller.messages).toEqual([echo, receipt]);
+  });
+
+  it("comes back from a mode's model to the session's own", () => {
+    const { controller, session } = controllerIn('plan', {
+      profiles,
+      modeProfiles: { plan: 'kimi' },
+    });
+    session!.profile = 'kimi';
+    controller.newConversation(echo);
+    expect(session?.profile).toBe('default');
+  });
+
+  it("lands on agent mode's own model when it has one, under the receipt", () => {
+    const { controller, session } = controllerIn('plan', {
+      profiles,
+      modeProfiles: { agent: 'kimi' },
+    });
+    controller.newConversation(echo);
+    expect(session?.profile).toBe('kimi');
+    expect(controller.messages).toEqual([
+      echo,
+      receipt,
+      note("Switched to profile 'kimi' (kimi-k3)"),
+    ]);
+  });
+});
+
+describe('controller.loadConversation', () => {
+  const saved = {
+    agent: [user('fix the parser'), { role: 'assistant', content: 'fixed' } as Message],
+    chat: [user('what is a monad')],
+  };
+  const from = { title: 'fix the parser', path: '/history/a.jsonl' };
+
+  it('hands back the side on screen and a receipt, and keeps the other side off screen', () => {
+    const { controller, session } = controllerIn('agent');
+    controller.append(user('old conversation'));
+    const rows = controller.loadConversation(saved, from);
+    expect(rows).toEqual([
+      ...saved.agent,
+      note(
+        'Resumed "fix the parser" — 2 agent messages (+ 1 on the chat side) from /history/a.jsonl',
+      ),
+    ]);
+    expect(controller.mode).toBe('agent');
+    expect(controller.messages).toEqual([]);
+    expect(session?.reset).toHaveBeenCalled();
+
+    controller.replace(rows);
+    expect(controller.sides().chat).toBe(saved.chat);
+    controller.transition('chat');
+    expect(controller.messages).toEqual(saved.chat);
+  });
+
+  it('gives the session both model histories, the side on screen first', () => {
+    const { controller, session } = controllerIn('chat');
+    controller.loadConversation(saved, from);
+    const [active, other] = session!.loadHistory.mock.calls[0];
+    expect(active).toEqual([user('what is a monad')]);
+    expect(other).toHaveLength(2);
+  });
+
+  it('opens a chat-only session on the chat side', () => {
+    const { controller, session } = controllerIn('plan');
+    const rows = controller.loadConversation({ agent: [], chat: saved.chat }, from);
+    expect(controller.mode).toBe('chat');
+    expect(session?.switchSide).toHaveBeenLastCalledWith('chat');
+    expect(rows.at(-1)).toEqual(
+      note(
+        'Resumed "fix the parser" — 1 chat messages, switched to chat mode, from /history/a.jsonl',
+      ),
+    );
+  });
+
+  it('opens an agent-only session in agent mode when resumed from chat', () => {
+    const { controller, session } = controllerIn('chat');
+    controller.loadConversation({ agent: saved.agent, chat: [] }, from);
+    expect(controller.mode).toBe('agent');
+    expect(session?.switchSide).toHaveBeenLastCalledWith('agent');
+  });
+
+  it('stays in the current mode for a session with both sides', () => {
+    const { controller, session } = controllerIn('plan');
+    controller.loadConversation(saved, from);
+    expect(controller.mode).toBe('plan');
+    expect(session?.switchSide).not.toHaveBeenCalled();
+  });
+
+  it('calls an untitled session untitled', () => {
+    const { controller } = controllerIn('agent');
+    const rows = controller.loadConversation(saved, { path: '/history/b.jsonl' });
+    expect(rows.at(-1)).toMatchObject({ content: expect.stringContaining('Resumed "untitled"') });
+  });
+
+  it('puts the model a mode change brought under the receipt, not in the old scrollback', () => {
+    const profiles = { default: profileOf('local'), kimi: profileOf('kimi-k3') };
+    const { controller } = controllerIn('chat', { profiles, modeProfiles: { agent: 'kimi' } });
+    controller.append(user('old chat'));
+    const rows = controller.loadConversation({ agent: saved.agent, chat: [] }, from);
+    expect(rows.slice(-2)).toEqual([
+      note(
+        'Resumed "fix the parser" — 2 agent messages, switched to agent mode, from /history/a.jsonl',
+      ),
+      note("Switched to profile 'kimi' (kimi-k3)"),
+    ]);
+  });
+});
+
+describe('controller auto-save', () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'reika-controller-save-'));
+    builtMeta.calls = [];
+  });
+  afterEach(async () => {
+    vi.useRealTimers();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const saving = (mode: Mode = 'agent') => controllerIn(mode, { autosave: true }, 'default', root);
+  const projectDir = (): string => projectHistoryDir('/repo/app', root);
+  const reply: Message = { role: 'assistant', content: 'done' };
+  // A change schedules its save in a microtask; this lets that run and the write land.
+  const settled = async (controller: { saveNow(): Promise<void> }): Promise<void> => {
+    await Promise.resolve();
+    await controller.saveNow();
+  };
+
+  it('writes nothing when the config does not ask for it', async () => {
+    const { controller } = controllerIn('agent', {}, 'default', root);
+    controller.setStatus('idle');
+    controller.append(user('fix the parser'));
+    await settled(controller);
+    expect(controller.sessionPath).toBeNull();
+    expect(await listSessions(projectDir())).toEqual([]);
+  });
+
+  it('writes nothing for launch notices alone', async () => {
+    const { controller } = saving();
+    controller.setStatus('idle');
+    controller.append(note('No network — search is off'));
+    await settled(controller);
+    expect(controller.sessionPath).toBeNull();
+  });
+
+  it("saves from the first real prompt, into the project's directory", async () => {
+    const { controller } = saving();
+    controller.setStatus('idle');
+    controller.append(user('fix the parser'));
+    await settled(controller);
+
+    expect(dirname(controller.sessionPath!)).toBe(projectDir());
+    expect((await loadSession(controller.sessionPath!)).agent).toEqual([user('fix the parser')]);
+    const header = await headerOf(controller.sessionPath!);
+    expect(header).toMatchObject({
+      model: 'local',
+      baseURL: 'http://127.0.0.1:1/v1',
+      cwd: '/repo/app',
+      mode: 'agent',
+      usage: { promptTokens: 0, completionTokens: 0 },
+    });
+    expect(header.midTurn).toBeUndefined();
+  });
+
+  it("writes the active profile and the turn's measurements into the header", async () => {
+    const { controller, session } = controllerIn(
+      'agent',
+      {
+        autosave: true,
+        contextWindow: 32000,
+        minGenTokens: 2048,
+        profiles: { default: profileOf('local'), kimi: profileOf('kimi-k3') },
+      },
+      'default',
+      root,
+    );
+    controller.setStatus('idle');
+    controller.pickModel('kimi');
+    session!.shrink = { sheds: 1, folds: 0 };
+    session!.turn = async (text, opts) => {
+      opts.onTurnStart?.();
+      opts.events!.onMessage!(user(text));
+      opts.events!.onUsage!({ promptTokens: 900, completionTokens: 40, cachedTokens: 600 });
+      opts.events!.onShrink!(
+        { kind: 'age', round: 3, marked: 2, bulk: 2, crumbs: 0, kept: 1, short: 0 },
+        { sheds: 1, folds: 0 },
+      );
+      opts.events!.onContextEstimate!(700);
+      opts.events!.onMessage!(reply);
+      opts.onTurnEnd?.();
+      return [];
+    };
+    await controller.runTurn('fix the parser', {}, {});
+    await settled(controller);
+
+    const header = await headerOf(controller.sessionPath!);
+    expect(header).toMatchObject({ model: 'kimi-k3', cwd: '/repo/app' });
+    expect(header.usage).toEqual({
+      turns: 1,
+      promptTokens: 900,
+      completionTokens: 40,
+      cachedTokens: 600,
+      // The shed cleared the last real count, so the gauge is the estimate after it.
+      contextTokens: 700,
+      contextEstimated: true,
+      contextWindow: 32000,
+      contextUsable: expect.any(Number),
+      sheds: 1,
+      folds: 0,
+      shrinkEvents: [
+        { turn: 1, kind: 'age', round: 3, marked: 2, bulk: 2, crumbs: 0, kept: 1, short: 0 },
+      ],
+    });
+  });
+
+  it('rewrites one file as the conversation grows, with both sides in it', async () => {
+    const { controller } = saving();
+    controller.setStatus('idle');
+    controller.append(user('fix the parser'), reply);
+    await settled(controller);
+    const path = controller.sessionPath;
+
+    controller.transition('chat');
+    controller.append(user('what is a monad'));
+    await settled(controller);
+    expect(controller.sessionPath).toBe(path);
+    expect(await listSessions(projectDir())).toHaveLength(1);
+    expect(await loadSession(path!)).toEqual({
+      agent: [user('fix the parser'), reply],
+      chat: [user('what is a monad')],
+    });
+  });
+
+  it('makes one save decision for a tick with several changes', async () => {
+    const { controller } = saving();
+    controller.setStatus('idle');
+    controller.append(user('a'));
+    controller.append(reply);
+    controller.append(note('receipt'));
+    await Promise.resolve();
+    expect(builtMeta.calls).toHaveLength(1);
+    await controller.saveNow();
+  });
+
+  it('saves at once on the first prompt of a turn, then at most once per interval while it runs', async () => {
+    vi.useFakeTimers();
+    const { controller } = saving();
+    controller.setStatus('busy');
+    controller.append(user('long task'));
+    await Promise.resolve();
+    expect(builtMeta.calls).toEqual([{ midTurn: true, msgs: [user('long task')] }]);
+
+    controller.append(reply);
+    await Promise.resolve();
+    controller.append(reply);
+    await Promise.resolve();
+    expect(builtMeta.calls).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(builtMeta.calls).toHaveLength(2);
+    expect(builtMeta.calls.at(-1)?.midTurn).toBe(true);
+
+    controller.setStatus('idle');
+    await Promise.resolve();
+    expect(builtMeta.calls).toHaveLength(3);
+    vi.useRealTimers();
+    await controller.saveNow();
+    expect((await headerOf(controller.sessionPath!)).midTurn).toBeUndefined();
+  });
+
+  it('starts a new file after a new conversation', async () => {
+    const { controller } = saving();
+    controller.setStatus('idle');
+    controller.append(user('first'));
+    await settled(controller);
+    const first = controller.sessionPath;
+
+    controller.newConversation({ role: 'user', content: '/new', meta: true });
+    await settled(controller);
+    expect(controller.sessionPath).toBeNull();
+
+    controller.append(user('second'));
+    await settled(controller);
+    expect(controller.sessionPath).not.toBe(first);
+    expect(await listSessions(projectDir())).toHaveLength(2);
+  });
+
+  it('continues a resumed project session in its own file, and only once it grows', async () => {
+    const { controller } = saving();
+    controller.setStatus('idle');
+    const path = join(projectDir(), 'earlier.jsonl');
+    const sides = { agent: [user('fix the parser'), reply], chat: [] };
+    controller.replace(controller.loadConversation(sides, { path }));
+    await settled(controller);
+    expect(controller.sessionPath).toBe(path);
+    expect(builtMeta.calls).toEqual([]);
+
+    controller.append(user('and the lexer'));
+    await settled(controller);
+    // The two saved messages, the "Resumed" receipt, and the new prompt.
+    const agent = (await loadSession(path)).agent;
+    expect(agent).toHaveLength(4);
+    expect(agent.at(-1)).toEqual(user('and the lexer'));
+    expect(await listSessions(projectDir())).toHaveLength(1);
+  });
+
+  it('leaves a resumed root save untouched and continues in a project file', async () => {
+    const { controller } = saving();
+    controller.setStatus('idle');
+    const rootSave = join(root, 'manual.jsonl');
+    await writeFile(rootSave, 'left as it was');
+    const sides = { agent: [user('fix the parser'), reply], chat: [] };
+    controller.replace(controller.loadConversation(sides, { path: rootSave }));
+    expect(controller.sessionPath).toBeNull();
+
+    controller.append(user('and the lexer'));
+    await settled(controller);
+    expect(dirname(controller.sessionPath!)).toBe(projectDir());
+    expect(await readFile(rootSave, 'utf8')).toBe('left as it was');
+  });
+
+  it('says so once when a save fails, and keeps the session going', async () => {
+    // A file where the history root should be: every write under it fails.
+    const blocked = join(root, 'not-a-dir');
+    await writeFile(blocked, '');
+    const { controller } = controllerIn('agent', { autosave: true }, 'default', blocked);
+    controller.setStatus('idle');
+    controller.append(user('first'));
+    await settled(controller);
+    controller.append(user('second'));
+    await settled(controller);
+    await settled(controller);
+
+    const warnings = controller.messages.filter(m => m.role === 'system' && m.tone === 'warn');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatchObject({
+      content: expect.stringMatching(/^auto-save failed: .* — \/resume won't have this session/),
+    });
+  });
+});
+
+describe('controller toggles', () => {
+  const echo: Message = { role: 'user', content: '/approvals on', meta: true };
+
+  it('resolves a typed toggle against the live state, and nothing else', () => {
+    const { controller } = controllerIn('agent', { autoApprove: 'safe' });
+    expect(controller.toggleCommand('approvals', 'off')).toEqual({
+      kind: 'set',
+      toggle: 'approvals',
+      on: false,
+    });
+    expect(controller.toggleCommand('approvals', '')).toMatchObject({
+      kind: 'ask',
+      currentlyOn: true,
+    });
+    expect(controller.toggleCommand('unattended', '')).toMatchObject({ currentlyOn: false });
+    expect(controller.toggleCommand('model', '')).toBeNull();
+
+    void controller.setToggle('approvals', false);
+    void controller.setToggle('unattended', true);
+    expect(controller.toggleCommand('approvals', '')).toMatchObject({ currentlyOn: false });
+    expect(controller.toggleCommand('unattended', '')).toMatchObject({ currentlyOn: true });
+  });
+
+  it('answers an env-forced /approvals with a line instead of a switch', () => {
+    const { controller } = controllerIn('agent', {
+      autoApprove: 'bypass',
+      autoApproveExplicit: true,
+    });
+    expect(controller.toggleCommand('approvals', 'off')).toMatchObject({
+      kind: 'reply',
+      content: expect.stringContaining("forced to 'bypass'"),
+    });
+    expect(controller.toggleCommand('approvals', '')).toMatchObject({
+      kind: 'reply',
+      content: expect.stringContaining('auto-approve: bypass'),
+    });
+  });
+
+  it('prints the receipt under the echo when a switch is flipped', async () => {
+    const { controller } = controllerIn('agent');
+    await controller.setToggle('approvals', true, echo);
+    expect(controller.getSnapshot().sessionAutoApprove).toBe(true);
+    expect(controller.messages).toEqual([echo, note('Session auto-approve: on')]);
+
+    await controller.setToggle('unattended', true);
+    expect(controller.messages.at(-1)).toMatchObject({
+      content: expect.stringMatching(/^unattended: on/),
+    });
+  });
+
+  it('turns anonymize on with what it found, and off again', async () => {
+    const { controller } = controllerIn('agent');
+    await controller.setToggle('anon', true);
+    expect(controller.toggleCommand('anon', '')).toMatchObject({ currentlyOn: true });
+    expect(controller.messages.at(-1)).toMatchObject({
+      content: expect.stringContaining('substituting 1 name(s) → <user>, 1 email(s) → <email>'),
+    });
+
+    await controller.setToggle('anon', false);
+    expect(controller.toggleCommand('anon', '')).toMatchObject({ currentlyOn: false });
+    expect(controller.messages.at(-1)).toMatchObject({
+      content: expect.stringMatching(/^anonymize: off/),
+    });
+  });
+});
+
+describe('controller commands on disk', () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await realpath(await mkdtemp(join(tmpdir(), 'reika-controller-cmd-')));
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const echo = (content: string): Message => ({ role: 'user', content, meta: true });
+  const reply: Message = { role: 'assistant', content: 'done' };
+  const inRoot = (mode: Mode = 'agent', policy: Policy = {}) =>
+    controllerIn(mode, policy, 'default', root);
+  const lines = (messages: Message[]): string[] =>
+    messages.filter(m => m.role === 'system').map(m => m.content);
+
+  describe('changeDirectory', () => {
+    it('asks for a path when given none', async () => {
+      const { controller, session } = inRoot();
+      await controller.changeDirectory('  ', echo('/cd'));
+      expect(controller.messages).toEqual([echo('/cd'), note('Usage: /cd <path>')]);
+      expect(session!.updateBundle).not.toHaveBeenCalled();
+    });
+
+    it('re-indexes a path relative to the current project and moves the session there', async () => {
+      await mkdir(join(root, 'app', 'pkg'), { recursive: true });
+      await writeFile(join(root, 'app', 'pkg', 'index.ts'), 'export const a = 1;\n');
+      const { controller, session } = inRoot();
+      session!.bundle = { cwd: join(root, 'app') };
+      controller.setStatus('idle');
+
+      const moving = controller.changeDirectory('pkg', echo('/cd pkg'));
+      expect(controller.status).toBe('busy');
+      await moving;
+
+      const target = join(root, 'app', 'pkg');
+      expect(session!.bundle.cwd).toBe(target);
+      expect(controller.status).toBe('idle');
+      expect(controller.messages).toEqual([
+        echo('/cd pkg'),
+        note(`Re-indexing ${target}…`),
+        note(`cwd is now ${target}`),
+      ]);
+    });
+
+    it('says why and stays put when the path cannot be indexed', async () => {
+      const { controller, session } = inRoot();
+      controller.setStatus('idle');
+      await controller.changeDirectory(join(root, 'missing'), echo('/cd missing'));
+      expect(session!.bundle.cwd).toBe('/repo/app');
+      expect(controller.status).toBe('idle');
+      expect(lines(controller.messages).at(-1)).toMatch(/^cd failed: /);
+    });
+  });
+
+  describe('saveTranscript', () => {
+    it('says there is nothing to save on an empty scrollback', async () => {
+      const { controller } = inRoot();
+      await controller.saveTranscript(false, echo('/save'));
+      expect(controller.messages).toEqual([echo('/save'), note('Nothing to save yet.')]);
+    });
+
+    it('writes the scrollback on screen to the history root and names both files', async () => {
+      const { controller } = inRoot();
+      controller.setStatus('idle');
+      controller.append(user('fix the parser'), reply);
+      await controller.saveTranscript(false, echo('/save'));
+
+      const receipt = lines(controller.messages).at(-1)!;
+      const [, jsonlPath, txtPath] = /^saved 2 messages → (.+)\n\(\+ (.+)\)$/.exec(receipt)!;
+      expect(dirname(jsonlPath)).toBe(root);
+      expect((await loadSession(jsonlPath)).agent).toEqual([user('fix the parser'), reply]);
+      expect(await readFile(txtPath, 'utf8')).toContain('fix the parser');
+      const header = await headerOf(jsonlPath);
+      expect(header).toMatchObject({
+        model: 'local',
+        baseURL: 'http://127.0.0.1:1/v1',
+        cwd: '/repo/app',
+        messageCount: 2,
+        usage: { turns: 1, promptTokens: 0, completionTokens: 0 },
+      });
+      expect(header.midTurn).toBeUndefined();
+    });
+
+    it('marks a raw save and a mid-turn one in the receipt', async () => {
+      const { controller } = inRoot();
+      controller.append(user('fix the parser'));
+      controller.setStatus('busy');
+      await controller.saveTranscript(true, echo('/save --raw'));
+      const receipt = lines(controller.messages).at(-1)!;
+      expect(receipt).toMatch(
+        /^saved 1 messages \(raw, unredacted\) — mid-turn, up to the last completed round; the turn continues → /,
+      );
+      const jsonlPath = /→ (.+)\n/.exec(receipt)![1];
+      expect(await headerOf(jsonlPath)).toMatchObject({ midTurn: true, cwd: '/repo/app' });
+    });
+
+    it('reports a save that could not be written', async () => {
+      const blocked = join(root, 'not-a-dir');
+      await writeFile(blocked, '');
+      const { controller } = controllerIn('agent', {}, 'default', blocked);
+      controller.append(user('fix the parser'));
+      await controller.saveTranscript(false, echo('/save'));
+      expect(controller.messages.at(-1)).toMatchObject({
+        role: 'error',
+        content: expect.stringMatching(/^save failed: /),
+      });
+    });
+  });
+
+  describe('resumeList', () => {
+    const settled = async (controller: { saveNow(): Promise<void> }): Promise<void> => {
+      await Promise.resolve();
+      await controller.saveNow();
+    };
+    // One finished conversation in the project's directory. Written directly: a second
+    // controller in this process would claim the same first file name (#761).
+    const savedSession = async (side: 'agent' | 'chat', prompt: string): Promise<string> => {
+      const path = newSessionPath(projectHistoryDir('/repo/app', root), new Date(), side);
+      const turns = [user(prompt), reply];
+      const sides = side === 'chat' ? { agent: [], chat: turns } : { agent: turns, chat: [] };
+      await writeSession(path, sides, metaFor(sides.agent, '/repo/app', false));
+      return path;
+    };
+
+    it('refuses while a turn runs, and on an argument it does not know', async () => {
+      const { controller } = inRoot();
+      controller.setStatus('busy');
+      expect(await controller.resumeList('')).toEqual({
+        reply: 'Cannot resume while busy. Wait or ctrl-c to abort.',
+      });
+      controller.setStatus('idle');
+      expect(await controller.resumeList('everything')).toMatchObject({
+        reply: expect.stringMatching(/^Usage: \/resume /),
+      });
+    });
+
+    it("lists the project's sessions without the one in progress", async () => {
+      const earlier = await savedSession('agent', 'fix the parser');
+      const { controller } = inRoot('agent', { autosave: true });
+      controller.setStatus('idle');
+      controller.append(user('and the lexer'), reply);
+      await settled(controller);
+
+      const list = await controller.resumeList('');
+      expect(list).toMatchObject({ heading: 'this project' });
+      expect('entries' in list && list.entries.map(e => e.path)).toEqual([earlier]);
+    });
+
+    it('lists only chats in chat mode, and everything for /resume all', async () => {
+      await savedSession('agent', 'fix the parser');
+      const chat = await savedSession('chat', 'what is a monad');
+      const { controller } = inRoot('chat');
+      controller.setStatus('idle');
+
+      const chats = await controller.resumeList('');
+      expect(chats).toMatchObject({ heading: 'chats in this project' });
+      expect('entries' in chats && chats.entries.map(e => e.path)).toEqual([chat]);
+      const all = await controller.resumeList('all');
+      expect('entries' in all && all.entries).toHaveLength(2);
+    });
+
+    it('falls back to the manual saves when the project has none, and says so', async () => {
+      const { controller } = inRoot();
+      controller.setStatus('idle');
+      controller.append(user('fix the parser'), reply);
+      await controller.saveTranscript(false, echo('/save'));
+
+      const fallback = await controller.resumeList('');
+      expect(fallback).toMatchObject({ heading: 'none for this project — saved with /save' });
+      expect('entries' in fallback && fallback.entries).toHaveLength(1);
+      expect(await controller.resumeList('root')).toMatchObject({ heading: 'saved with /save' });
+    });
+
+    it('says what is missing when there is nothing to list', async () => {
+      const off = inRoot().controller;
+      off.setStatus('idle');
+      expect(await off.resumeList('')).toEqual({
+        reply: 'No saved sessions for this project (auto-save is off: REIKA_AUTOSAVE=0).',
+      });
+      expect(await off.resumeList('root')).toEqual({ reply: `No saved sessions in ${root}.` });
+
+      const on = inRoot('agent', { autosave: true }).controller;
+      on.setStatus('idle');
+      expect(await on.resumeList('')).toEqual({
+        reply: 'No saved sessions for this project yet.',
+      });
+
+      const chat = inRoot('chat', { autosave: true }).controller;
+      chat.setStatus('idle');
+      expect(await chat.resumeList('')).toEqual({
+        reply: 'No saved chats for this project. /resume all lists every session.',
+      });
+    });
+  });
+});
+
+describe('controller.runTurn', () => {
+  const lastSubmit = (session: ReturnType<typeof fakeSession>) => session.submit.mock.calls.at(-1)!;
+
+  it('runs nothing before the session has booted', async () => {
+    const { controller } = controllerIn('agent', null);
+    expect(await controller.runTurn('hi', {}, {})).toEqual([]);
+  });
+
+  it("hands the session the turn's options, recorded as the controller's mode", async () => {
+    const { controller, session } = controllerIn('vibe');
+    const nativeImages = [{ marker: '[Image 1]', mime: 'image/png', bytes: new Uint8Array([1]) }];
+    await controller.runTurn(
+      'implement the plan',
+      { mode: 'agent', display: '/implement', skill: 'issue', nativeImages, manualCompact: true },
+      {},
+    );
+    const [text, opts] = lastSubmit(session!);
+    expect(text).toBe('implement the plan');
+    expect(opts).toMatchObject({
+      mode: 'agent',
+      recordAs: 'vibe',
+      display: '/implement',
+      skill: 'issue',
+      nativeImages,
+      manualCompact: true,
+    });
+
+    await controller.runTurn('fix it', {}, {});
+    expect(lastSubmit(session!)[1]).toMatchObject({ mode: 'vibe', recordAs: 'vibe' });
+  });
+
+  it("runs with no gate under bypass, the front end's wrapper when given, and its own otherwise", async () => {
+    const bypass = controllerIn('agent', { autoApprove: 'bypass' });
+    await bypass.controller.runTurn('x', {}, {});
+    expect(lastSubmit(bypass.session!)[1].requestApproval).toBeUndefined();
+
+    const { controller, session } = controllerIn('agent', { autoApprove: 'off' });
+    const requestApproval = vi.fn(async () => true as const);
+    const requestQuestion = vi.fn(async () => null);
+    await controller.runTurn('x', {}, { requestApproval, requestQuestion });
+    expect(lastSubmit(session!)[1]).toMatchObject({ requestApproval, requestQuestion });
+
+    await controller.runTurn('x', {}, {});
+    const own = lastSubmit(session!)[1];
+    const request = { tool: 'edit', subject: 'a.ts', preview: '+ x' };
+    void own.requestApproval!(request);
+    expect(controller.approval).toBe(request);
+    void own.requestQuestion!({ question: 'Which?', options: [{ label: 'A' }] });
+    expect(controller.question).toMatchObject({ question: 'Which?' });
+  });
+
+  it('reads unattended live, so a toggle mid-turn applies to the next action', async () => {
+    const { controller, session } = controllerIn('agent');
+    await controller.runTurn('x', {}, {});
+    const { isUnattended } = lastSubmit(session!)[1];
+    expect(isUnattended!()).toBe(false);
+    await controller.setToggle('unattended', true);
+    expect(isUnattended!()).toBe(true);
+  });
+
+  it('is busy for the turn, with the hooks inside the busy spell', async () => {
+    const { controller, session } = controllerIn('agent');
+    controller.setStatus('idle');
+    const seen: string[] = [];
+    const statusAt = (label: string) => () => seen.push(`${label}:${controller.status}`);
+    session!.turn = async (_text, opts) => {
+      opts.onTurnStart?.();
+      seen.push(`running:${controller.status}`);
+      opts.onTurnEnd?.();
+      seen.push(`ended:${controller.status}`);
+      return [];
+    };
+    await controller.runTurn(
+      'x',
+      {},
+      { onTurnStart: statusAt('start'), onTurnEnd: statusAt('end') },
+    );
+    expect(seen).toEqual(['start:busy', 'running:busy', 'end:busy', 'ended:idle']);
+  });
+
+  it('aborts the running turn through the signal it handed the session, and nothing when idle', async () => {
+    const { controller, session } = controllerIn('agent');
+    controller.setStatus('idle');
+    expect(controller.abort()).toBe(false);
+    let signal: AbortSignal | void = undefined;
+    session!.turn = async (_text, opts) => {
+      signal = opts.onTurnStart?.();
+      expect(controller.abort()).toBe(true);
+      opts.onTurnEnd?.();
+      return [];
+    };
+    await controller.runTurn('x', {}, {});
+    expect((signal as AbortSignal | undefined)?.aborted).toBe(true);
+    expect(controller.abort()).toBe(false);
+  });
+
+  it('puts the notices right after the first user message, once', async () => {
+    const { controller, session } = controllerIn('agent');
+    const receipt = note('Skill /issue applied');
+    const seen: Message[] = [];
+    session!.turn = async (_text, opts) => {
+      opts.onTurnStart?.();
+      opts.events!.onMessage!(user('/issue 14'));
+      opts.events!.onMessage!({ role: 'assistant', content: 'on it' });
+      opts.events!.onMessage!(user('and more'));
+      opts.onTurnEnd?.();
+      return [];
+    };
+    await controller.runTurn('body', { notices: [receipt] }, { onMessage: m => seen.push(m) });
+    expect(controller.messages).toEqual([
+      user('/issue 14'),
+      receipt,
+      { role: 'assistant', content: 'on it' },
+      user('and more'),
+    ]);
+    // The front end hears the turn's own messages, not the receipts.
+    expect(seen).toHaveLength(3);
+  });
+
+  it('prints a failed turn, and rolls up what an unattended session declined at the end', async () => {
+    const { controller, session } = controllerIn('agent', { autoApprove: 'off', unattended: true });
+    session!.turn = async (_text, opts) => {
+      opts.onTurnStart?.();
+      await controller.requestApproval({ tool: 'bash', subject: 'npm test', preview: 'npm test' });
+      opts.onTurnError?.(new Error('connection refused'));
+      opts.onTurnEnd?.();
+      return [];
+    };
+    await controller.runTurn('x', {}, {});
+    expect(controller.messages[0]).toEqual({ role: 'error', content: 'connection refused' });
+    expect(controller.messages[1]).toMatchObject({
+      role: 'system',
+      tone: 'warn',
+      content: expect.stringContaining('npm test'),
+    });
+    expect(controller.takeUnattendedDeclines()).toEqual([]);
+  });
+
+  it('adds the files a tool wrote to the file index, and nothing from outside the project', async () => {
+    const { controller, session } = controllerIn('agent');
+    session!.turn = async (_text, opts) => {
+      opts.onTurnStart?.();
+      opts.events!.onMessage!({
+        role: 'tool',
+        callId: 'call-1',
+        summary: 'Wrote src/new.ts',
+        diff: { text: '+ x', path: 'src/new.ts', added: 1, removed: 0 },
+        changes: {
+          files: [
+            { path: 'src/made.ts', kind: 'added', added: 1, removed: 0 },
+            { path: 'src/gone.ts', kind: 'deleted', added: 0, removed: 1 },
+            { path: '../elsewhere.ts', kind: 'added', added: 1, removed: 0 },
+          ],
+          more: 0,
+        },
+      } as unknown as Message);
+      opts.onTurnEnd?.();
+      return [];
+    };
+    await controller.runTurn('x', {}, {});
+    expect(session!.updateBundle).toHaveBeenCalledTimes(1);
+    expect(session!.bundle.fileIndex).toEqual(['src/made.ts', 'src/new.ts']);
+  });
+});
+
+describe('controller live turn state', () => {
+  const steps = () => [
+    { n: 1, text: 'edit a.ts', paths: ['a.ts'], commands: [], snippets: [], done: false },
+  ];
+  // A controller with its own clock, recording every live change.
+  const live = (policy: Policy = {}) => {
+    const remember = vi.fn<(state: LastState) => void>();
+    const controller = createController({ mode: 'agent', remember, now: () => 1234 });
+    const session = fakeSession(policy);
+    controller.attachSession(session as unknown as Session, 'default');
+    controller.setStatus('idle');
+    const changes: LiveChange[] = [];
+    controller.subscribeLive(c => changes.push(c));
+    // Drives one turn by hand; `during` runs inside it, before it ends.
+    const turn = async (during: (opts: SubmitOptions) => Promise<void> | void, end = true) => {
+      session.turn = async (_text, opts) => {
+        opts.onTurnStart?.();
+        await during(opts);
+        if (end) opts.onTurnEnd?.();
+        return [];
+      };
+      await controller.runTurn('x', {}, {});
+    };
+    return { controller, session, changes, turn };
+  };
+
+  it('starts empty', () => {
+    expect(emptyLive()).toEqual({
+      phase: null,
+      content: '',
+      reasoning: '',
+      tool: null,
+      pending: null,
+      plan: null,
+      usage: null,
+      subagent: false,
+      note: false,
+      typechecking: false,
+      recovering: false,
+      promptProgress: null,
+      looping: false,
+    });
+    expect(emptyLive()).not.toBe(emptyLive());
+    expect(live().controller.live).toEqual(emptyLive());
+  });
+
+  it('accumulates the three streamed channels as deltas, and every other event as live', async () => {
+    const { controller, changes, turn } = live();
+    let mid = emptyLive();
+    await turn(opts => {
+      const ev = opts.events!;
+      changes.length = 0;
+      ev.onReasoningDelta!('let me ');
+      ev.onReasoningDelta!('see');
+      ev.onContentDelta!('Hi');
+      ev.onToolProgress!('out', 'bash');
+      ev.onToolProgress!('put', 'bash');
+      ev.onSubagent!(true);
+      ev.onCompactionNote!(true);
+      ev.onTypecheck!(true);
+      ev.onRecovering!(true);
+      ev.onPromptProgress!({ processed: 10, total: 100 } as never);
+      mid = controller.live;
+    });
+    expect(changes).toEqual([
+      { type: 'delta', channel: 'reasoning', text: 'let me ' },
+      { type: 'delta', channel: 'reasoning', text: 'see' },
+      { type: 'delta', channel: 'content', text: 'Hi' },
+      { type: 'live' },
+      { type: 'delta', channel: 'tool', text: 'put' },
+      { type: 'live' },
+      { type: 'live' },
+      { type: 'live' },
+      { type: 'live' },
+      { type: 'live' },
+      // The turn's end.
+      { type: 'live' },
+    ]);
+    expect(mid).toMatchObject({
+      phase: 'thinking',
+      reasoning: 'let me see',
+      content: 'Hi',
+      tool: { name: 'bash', output: 'output' },
+      subagent: true,
+      note: true,
+      typechecking: true,
+      recovering: true,
+      promptProgress: { processed: 10, total: 100 },
+    });
+  });
+
+  it('starts a fresh tool block for a chunk from another tool', async () => {
+    const { controller, changes, turn } = live();
+    let mid = emptyLive();
+    await turn(opts => {
+      opts.events!.onToolProgress!('a', 'bash');
+      changes.length = 0;
+      opts.events!.onToolProgress!('b', 'grep');
+      mid = controller.live;
+    });
+    expect(changes[0]).toEqual({ type: 'live' });
+    expect(mid.tool).toEqual({ name: 'grep', output: 'b' });
+  });
+
+  it('clears the stream at an assistant message, and the tool block and pending call at a tool one', async () => {
+    const { controller, turn } = live();
+    const seen: Partial<LiveTurn>[] = [];
+    await turn(opts => {
+      const ev = opts.events!;
+      ev.onReasoningDelta!('r');
+      ev.onContentDelta!('c');
+      ev.onToolStart!('bash');
+      ev.onToolProgress!('out', 'bash');
+      ev.onMessage!({ role: 'assistant', content: 'c' });
+      seen.push({ ...controller.live });
+      ev.onReasoningDelta!('again');
+      ev.onMessage!({ role: 'tool', callId: 'c1', summary: 'Ran: ls' });
+      seen.push({ ...controller.live });
+    });
+    expect(seen[0]).toMatchObject({
+      content: '',
+      reasoning: '',
+      tool: { name: 'bash', output: 'out' },
+      pending: { name: 'bash', since: 1234 },
+    });
+    expect(seen[1]).toMatchObject({ reasoning: 'again', tool: null, pending: null });
+  });
+
+  it('resets at turn start with phase thinking, and at turn end keeps only the plan', async () => {
+    const { controller, turn } = live();
+    const loopSteps = steps();
+    let atStart = emptyLive();
+    await turn(opts => {
+      opts.events!.onPlanProgress!(loopSteps as never);
+      opts.events!.onContentDelta!('half');
+      opts.events!.onPhase!('tool');
+    });
+    expect(controller.live).toEqual({ ...emptyLive(), plan: [expect.objectContaining({ n: 1 })] });
+    await turn(() => {
+      atStart = controller.live;
+    });
+    expect(atStart).toEqual({ ...emptyLive(), phase: 'thinking' });
+  });
+
+  it('copies the plan steps, since the loop mutates its array in place', async () => {
+    const { controller, turn } = live();
+    const loopSteps = steps();
+    await turn(opts => opts.events!.onPlanProgress!(loopSteps as never));
+    loopSteps[0].done = true;
+    expect(controller.live.plan).toEqual([expect.objectContaining({ done: false })]);
+  });
+
+  it('drops the in-flight estimate when the real count lands', async () => {
+    const { controller, turn } = live();
+    const seen: (LiveTurn['usage'] | undefined)[] = [];
+    await turn(opts => {
+      opts.events!.onLiveUsage!({ promptTokens: 9 } as never);
+      seen.push(controller.live.usage);
+      opts.events!.onUsage!({ promptTokens: 10, completionTokens: 2 });
+      seen.push(controller.live.usage);
+    });
+    expect(seen).toEqual([{ promptTokens: 9 }, null]);
+  });
+
+  it('hides the pending call while an approval or a question is open, with a live change at each edge', async () => {
+    const { controller, changes, turn } = live();
+    const seen: (LiveTurn['pending'] | string)[] = [];
+    await turn(async opts => {
+      opts.events!.onToolStart!('bash');
+      changes.length = 0;
+      const approved = opts.requestApproval!({ tool: 'bash', subject: 'Run', preview: 'ls' });
+      seen.push(controller.live.pending, `${changes.length}`);
+      controller.answerApproval(true);
+      await approved;
+      seen.push(controller.live.pending, `${changes.length}`);
+      const answered = opts.requestQuestion!({ question: 'Which?', options: [] });
+      seen.push(controller.live.pending, `${changes.length}`);
+      controller.answerQuestion(null);
+      await answered;
+      seen.push(controller.live.pending, `${changes.length}`);
+    });
+    const pending = { name: 'bash', since: 1234, call: 1 };
+    expect(seen).toEqual([null, '1', pending, '2', null, '3', pending, '4']);
+    expect(changes.slice(0, 4)).toEqual(Array(4).fill({ type: 'live' }));
+  });
+
+  it('numbers every call it sees start, so two same-name calls differ', async () => {
+    const { controller, turn } = live();
+    const calls: (number | undefined)[] = [];
+    await turn(opts => {
+      opts.events!.onToolStart!('read');
+      calls.push(controller.live.pending?.call);
+      opts.events!.onMessage!({ role: 'tool', callId: 'c1', summary: 'Read a.ts' });
+      opts.events!.onToolStart!('read');
+      calls.push(controller.live.pending?.call);
+    });
+    await turn(opts => {
+      opts.events!.onToolStart!('read');
+      calls.push(controller.live.pending?.call);
+    });
+    expect(calls).toEqual([1, 2, 3]);
+  });
+
+  it('keeps the running call readable while a dialog hides it from live', async () => {
+    const { controller, turn } = live();
+    const seen: unknown[] = [];
+    await turn(async opts => {
+      opts.events!.onToolStart!('bash');
+      const approved = opts.requestApproval!({ tool: 'bash', subject: 'Run', preview: 'ls' });
+      seen.push(controller.live.pending, controller.runningCall);
+      controller.answerApproval(true);
+      await approved;
+      opts.events!.onMessage!({ role: 'tool', callId: 'c1', summary: 'Ran: ls' });
+      seen.push(controller.runningCall);
+    });
+    expect(seen).toEqual([null, { name: 'bash', since: 1234, call: 1 }, null]);
+  });
+
+  it('says nothing when a dialog opens with no call pending', async () => {
+    const { controller, changes } = live();
+    void controller.requestApproval({ tool: 'bash', subject: 'Run', preview: 'ls' });
+    controller.answerApproval(false);
+    expect(changes).toEqual([]);
+  });
+
+  it('follows the looping hint, and drops it when the phase leaves thinking or the stream resets', async () => {
+    const { controller, turn } = live();
+    const seen: boolean[] = [];
+    await turn(opts => {
+      const ev = opts.events!;
+      ev.onReasoningStatus!(true);
+      seen.push(controller.live.looping);
+      ev.onPhase!('thinking');
+      seen.push(controller.live.looping);
+      ev.onPhase!('tool');
+      seen.push(controller.live.looping);
+      ev.onReasoningStatus!(true);
+      ev.onReasoningReset!();
+      seen.push(controller.live.looping);
+      ev.onReasoningStatus!(true);
+    });
+    expect(seen).toEqual([true, true, false, false]);
+    expect(controller.live.looping).toBe(false);
+  });
+
+  it('clears the stream, then freezes what had streamed into the scrollback once', async () => {
+    const { controller, changes, turn } = live();
+    const order: string[] = [];
+    controller.subscribe(() => order.push(`messages:${controller.messages.length}`));
+    let after = emptyLive();
+    await turn(opts => {
+      const ev = opts.events!;
+      ev.onSubagent!(true);
+      ev.onReasoningDelta!('round and round');
+      ev.onContentDelta!('so far');
+      changes.length = 0;
+      order.length = 0;
+      controller.subscribeLive(() => order.push('live'));
+      ev.onReasoningReset!();
+      after = controller.live;
+    });
+    expect(controller.messages.filter(m => m.role === 'assistant')).toEqual([
+      {
+        role: 'assistant',
+        content: 'so far',
+        reasoning: 'round and round',
+        discarded: 'stream',
+        nested: true,
+      },
+    ]);
+    expect(after).toMatchObject({ content: '', reasoning: '', subagent: true });
+    // The clear first: a front end drawing both would show the text twice (#985).
+    expect(order.slice(0, 2)).toEqual(['live', 'messages:1']);
+  });
+
+  it('marks a frozen compaction note as one, and freezes nothing when nothing streamed', async () => {
+    const { controller, turn } = live();
+    await turn(opts => {
+      opts.events!.onReasoningReset!();
+      opts.events!.onCompactionNote!(true);
+      opts.events!.onContentDelta!('the note');
+      opts.events!.onReasoningReset!();
+    });
+    expect(controller.messages).toEqual([
+      { role: 'assistant', content: 'the note', discarded: 'note' },
+    ]);
+  });
+
+  it("freezes once with a front end that brings its own reset, which runs after the controller's", async () => {
+    const { controller, session } = live();
+    const seenByFront: number[] = [];
+    session.turn = async (_text, opts) => {
+      opts.onTurnStart?.();
+      opts.events!.onReasoningDelta!('spinning');
+      opts.events!.onReasoningReset!();
+      opts.onTurnEnd?.();
+      return [];
+    };
+    await controller.runTurn(
+      'x',
+      {},
+      {
+        events: { onReasoningReset: () => seenByFront.push(controller.messages.length) },
+      },
+    );
+    expect(
+      controller.messages.filter(m => m.role === 'assistant' && m.discarded === 'stream'),
+    ).toHaveLength(1);
+    expect(seenByFront).toEqual([1]);
+  });
+
+  it("still calls the front end's own handlers, after its rules are applied", async () => {
+    const { controller, session } = live();
+    const seen: string[] = [];
+    const at = (label: string) => () => {
+      seen.push(`${label}:${controller.live.content || '-'}:${controller.live.phase ?? '-'}`);
+    };
+    session.turn = async (_text, opts) => {
+      opts.onTurnStart?.();
+      opts.events!.onContentDelta!('Hi');
+      opts.events!.onPhase!('tool');
+      opts.events!.onMessage!({ role: 'assistant', content: 'Hi' });
+      opts.onTurnEnd?.();
+      return [];
+    };
+    await controller.runTurn(
+      'x',
+      {},
+      {
+        onTurnStart: at('start'),
+        onMessage: at('message'),
+        onTurnEnd: at('end'),
+        events: { onContentDelta: at('delta'), onPhase: at('phase') },
+      },
+    );
+    expect(seen).toEqual([
+      'start:-:thinking',
+      'delta:Hi:thinking',
+      'phase:Hi:tool',
+      'message:-:tool',
+      'end:-:-',
+    ]);
+  });
+
+  it('streams a shell run under the empty tool name and clears it at the end', async () => {
+    const { controller, session, changes } = live();
+    session.bundle.cwd = tmpdir();
+    const during: (LiveTurn['tool'] | null)[] = [];
+    const chunks: string[] = [];
+    await controller.runShell('echo hi', {
+      onStart: () => during.push(controller.live.tool),
+      onProgress: chunk => {
+        chunks.push(chunk);
+        during.push(controller.live.tool);
+      },
+    });
+    expect(chunks.join('')).toContain('hi');
+    expect(during[0]).toBeNull();
+    expect(during[1]).toEqual({ name: '', output: expect.stringContaining('hi') });
+    expect(controller.live.tool).toBeNull();
+    expect(changes.at(-1)).toEqual({ type: 'live' });
+  });
+
+  it('resets for a new conversation and for a resume, plan included', async () => {
+    const { controller, turn } = live();
+    await turn(opts => opts.events!.onPlanProgress!(steps() as never));
+    expect(controller.live.plan).not.toBeNull();
+    controller.newConversation(user('/new'));
+    expect(controller.live).toEqual(emptyLive());
+
+    await turn(opts => opts.events!.onPlanProgress!(steps() as never));
+    controller.loadConversation({ agent: [user('old')], chat: [] }, { path: '/saved/a.jsonl' });
+    expect(controller.live).toEqual(emptyLive());
+  });
+
+  it('drops a live listener that throws, and keeps the turn and the other listeners going', async () => {
+    const { controller, changes, turn } = live();
+    let calls = 0;
+    controller.subscribeLive(() => {
+      calls++;
+      throw new Error('socket closed');
+    });
+    await turn(opts => {
+      opts.events!.onContentDelta!('a');
+      opts.events!.onContentDelta!('b');
+    });
+    expect(calls).toBe(1);
+    expect(changes.filter(c => c.type === 'delta')).toHaveLength(2);
+    expect(controller.status).toBe('idle');
+  });
+
+  it('stops telling a listener that unsubscribed', async () => {
+    const { controller, turn } = live();
+    const seen: LiveChange[] = [];
+    const off = controller.subscribeLive(c => seen.push(c));
+    off();
+    await turn(opts => opts.events!.onContentDelta!('a'));
+    expect(seen).toEqual([]);
+  });
+});
+
+describe('controller measurements', () => {
+  const profiles = { default: profileOf('local'), kimi: profileOf('kimi-k3') };
+  type Events = NonNullable<SubmitOptions['events']>;
+  // A turn that hands its events to `drive` between its brackets.
+  const turnWith =
+    (drive: (events: Events) => void) =>
+    async (_text: string, opts: SubmitOptions): Promise<Message[]> => {
+      opts.onTurnStart?.();
+      drive(opts.events!);
+      opts.onTurnEnd?.();
+      return [];
+    };
+  const fold = { kind: 'fold', round: 4, removed: 6, recapChars: 900 } as const;
+
+  it('adds each round to the total, and keeps the last real count apart from an estimate', async () => {
+    const { controller, session } = controllerIn('agent');
+    const heard = vi.fn();
+    const counts: ReturnType<typeof controller.getSnapshot>[] = [];
+    session!.turn = turnWith(e => {
+      e.onUsage!({ promptTokens: 1000, completionTokens: 50, cachedTokens: 800 });
+      counts.push(controller.getSnapshot());
+      e.onUsage!({ promptTokens: 1200, completionTokens: 30 });
+      counts.push(controller.getSnapshot());
+      e.onUsage!({ promptTokens: 1300, completionTokens: 20, estimated: true });
+    });
+    await controller.runTurn('x', {}, { events: { onUsage: heard } });
+
+    expect(counts[0]).toMatchObject({
+      usage: { promptTokens: 1000, completionTokens: 50, cachedTokens: 800 },
+      lastUsage: { promptTokens: 1000, completionTokens: 50, cachedTokens: 800 },
+    });
+    // A round that reports no cache count leaves the total's as it was.
+    expect(counts[1].usage).toEqual({
+      promptTokens: 2200,
+      completionTokens: 80,
+      cachedTokens: 800,
+    });
+    expect(controller.getSnapshot()).toMatchObject({
+      usage: { promptTokens: 3500, completionTokens: 100, cachedTokens: 800, estimated: true },
+      lastUsage: { promptTokens: 1200, completionTokens: 30 },
+    });
+    expect(heard).toHaveBeenCalledTimes(3);
+    expect(heard).toHaveBeenLastCalledWith({
+      promptTokens: 1300,
+      completionTokens: 20,
+      estimated: true,
+    });
+  });
+
+  it('carries the total over to the next turn, and adds no cache count nobody reported', async () => {
+    const { controller, session } = controllerIn('agent');
+    session!.turn = turnWith(e => e.onUsage!({ promptTokens: 10, completionTokens: 1 }));
+    await controller.runTurn('x', {}, {});
+    await controller.runTurn('y', {}, {});
+    expect(controller.getSnapshot().usage).toEqual({ promptTokens: 20, completionTokens: 2 });
+  });
+
+  it('records the pre-send estimate and the decode rate, and passes both on', async () => {
+    const { controller, session } = controllerIn('agent');
+    const onContextEstimate = vi.fn();
+    const onDecodeRate = vi.fn();
+    session!.turn = turnWith(e => {
+      e.onContextEstimate!(4200);
+      e.onDecodeRate!(21.5);
+    });
+    await controller.runTurn('x', {}, { events: { onContextEstimate, onDecodeRate } });
+    expect(controller.getSnapshot()).toMatchObject({ estimatedContext: 4200, decodeRate: 21.5 });
+    expect(onContextEstimate).toHaveBeenCalledWith(4200);
+    expect(onDecodeRate).toHaveBeenCalledWith(21.5);
+  });
+
+  it('counts a shrink, drops the stale real count, and stamps the event with its turn', async () => {
+    const { controller, session } = controllerIn('agent');
+    const onShrink = vi.fn();
+    session!.turn = turnWith(e => {
+      e.onUsage!({ promptTokens: 9000, completionTokens: 10 });
+      e.onMessage!({ role: 'assistant', content: 'first' });
+      e.onMessage!({ role: 'assistant', content: 'second' });
+      e.onShrink!(fold, { sheds: 0, folds: 1 });
+    });
+    await controller.runTurn('x', {}, { events: { onShrink } });
+    expect(controller.getSnapshot()).toMatchObject({
+      shrink: { sheds: 0, folds: 1 },
+      lastUsage: null,
+      usage: { promptTokens: 9000, completionTokens: 10 },
+    });
+    expect(onShrink).toHaveBeenCalledWith(fold, { sheds: 0, folds: 1 });
+  });
+
+  // A turn that leaves every measurement set.
+  const measured = turnWith(e => {
+    e.onUsage!({ promptTokens: 500, completionTokens: 5 });
+    e.onContextEstimate!(600);
+    e.onDecodeRate!(30);
+    e.onShrink!(fold, { sheds: 0, folds: 1 });
+    e.onUsage!({ promptTokens: 100, completionTokens: 5 });
+  });
+  const blank = {
+    usage: { promptTokens: 0, completionTokens: 0 },
+    lastUsage: null,
+    estimatedContext: null,
+    shrink: { sheds: 0, folds: 0 },
+  };
+
+  it('starts a new conversation with nothing measured', async () => {
+    const { controller, session } = controllerIn('agent');
+    session!.turn = measured;
+    await controller.runTurn('x', {}, {});
+    controller.newConversation({ role: 'user', content: '/new', meta: true });
+    expect(controller.getSnapshot()).toMatchObject({ ...blank, decodeRate: undefined });
+  });
+
+  it('drops the counts on a resume and keeps the decode rate of the model still on', async () => {
+    const { controller, session } = controllerIn('agent');
+    session!.turn = measured;
+    await controller.runTurn('x', {}, {});
+    controller.loadConversation({ agent: [user('earlier')], chat: [] }, { path: '/h/a.jsonl' });
+    expect(controller.getSnapshot()).toMatchObject({ ...blank, decodeRate: 30 });
+  });
+
+  it('drops the decode rate when a resume brings another model with its mode', async () => {
+    const { controller, session } = controllerIn('chat', {
+      profiles,
+      modeProfiles: { agent: 'kimi' },
+    });
+    session!.turn = measured;
+    await controller.runTurn('x', {}, {});
+    controller.loadConversation({ agent: [user('earlier')], chat: [] }, { path: '/h/a.jsonl' });
+    expect(session!.profile).toBe('kimi');
+    expect(controller.getSnapshot().decodeRate).toBeUndefined();
+  });
+
+  it('drops the decode rate on a picked model, even the one already on, and keeps the counts', async () => {
+    const { controller, session } = controllerIn('agent', { profiles });
+    session!.turn = measured;
+    await controller.runTurn('x', {}, {});
+    controller.pickModel('default');
+    expect(controller.getSnapshot()).toMatchObject({
+      decodeRate: undefined,
+      usage: { promptTokens: 600, completionTokens: 10 },
+    });
+  });
+
+  it('drops the decode rate when a mode brings its own model, and not when the model stays', async () => {
+    const { controller, session } = controllerIn('agent', {
+      profiles,
+      modeProfiles: { plan: 'kimi' },
+    });
+    session!.turn = measured;
+    await controller.runTurn('x', {}, {});
+    controller.transition('grind');
+    expect(controller.getSnapshot().decodeRate).toBe(30);
+    controller.transition('plan');
+    expect(controller.getSnapshot().decodeRate).toBeUndefined();
+  });
+});
+
+describe('controller.submitPrompt', () => {
+  const answers = {};
+  const input = (
+    overrides: Partial<Parameters<ReturnType<typeof createController>['submitPrompt']>[1]> = {},
+  ) => ({
+    answers,
+    images: [],
+    pastes: [],
+    onStage: vi.fn(),
+    ...overrides,
+  });
+
+  it('sends a plain prompt as typed, and clears the stage at the end', async () => {
+    const { controller, session } = controllerIn('agent');
+    const typed = input({ onBuilt: vi.fn() });
+    await controller.submitPrompt('fix the parser', typed, {});
+    const [text, opts] = session!.submit.mock.calls[0];
+    expect(text).toBe('fix the parser');
+    expect(opts).toMatchObject({ mode: 'agent', display: undefined, skill: undefined });
+    expect(typed.onBuilt).toHaveBeenCalledTimes(1);
+    expect(typed.onStage).toHaveBeenLastCalledWith(null);
+    expect(controller.messages).toEqual([user('fix the parser')]);
+  });
+
+  it('applies a routed skill and prints its receipt under the bubble', async () => {
+    const { controller, session } = controllerIn('agent');
+    session!.bundle.skills = [
+      {
+        name: 'issue',
+        description: 'Work on an issue',
+        body: 'Run gh issue view.',
+        source: 'bundled',
+        path: '/repo/app/skills/issue.md',
+        triggers: ['work on issue'],
+      },
+    ];
+    await controller.submitPrompt('work on issue 14', input({ answers: { skill: 'issue' } }), {});
+    const [text, opts] = session!.submit.mock.calls[0];
+    expect(text).toBe('Run gh issue view.\n\nwork on issue 14');
+    expect(opts).toMatchObject({ skill: 'issue', display: 'work on issue 14' });
+    expect(controller.messages[1]).toMatchObject({
+      role: 'system',
+      content: expect.stringMatching(/^Skill \/issue applied/),
+    });
+  });
+
+  it('runs vibe mode as the vibe chain', async () => {
+    const { controller, session } = controllerIn('vibe');
+    await controller.submitPrompt('add a flag', input(), {});
+    expect(session!.submit.mock.calls[0][1]).toMatchObject({ mode: 'vibe' });
+  });
+
+  it('drops a second prompt while the first is still expanding', async () => {
+    const { controller, session } = controllerIn('agent');
+    const first = controller.submitPrompt('one', input(), {});
+    await controller.submitPrompt('two', input(), {});
+    await first;
+    expect(session!.submit.mock.calls.map(c => c[0])).toEqual(['one']);
+  });
+});
+
+describe('controller shell runs', () => {
+  let cwd: string;
+  beforeEach(async () => {
+    cwd = await realpath(await mkdtemp(join(tmpdir(), 'reika-controller-shell-')));
+  });
+  afterEach(async () => {
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  const inCwd = (mode: Mode = 'shell') => {
+    const made = controllerIn(mode);
+    made.session!.bundle.cwd = cwd;
+    made.controller.setStatus('idle');
+    return made;
+  };
+  const shellFront = () => {
+    const seen: string[] = [];
+    return {
+      seen,
+      front: {
+        onStart: vi.fn(),
+        onProgress: (chunk: string) => seen.push(chunk),
+        onEnd: vi.fn(),
+      },
+    };
+  };
+
+  it('echoes the command, streams its output, shows it and goes idle', async () => {
+    const { controller } = inCwd();
+    const { seen, front } = shellFront();
+    const statuses: string[] = [];
+    controller.subscribe(() => statuses.push(controller.status));
+    await controller.runShell('echo hi', front);
+    expect(controller.messages[0]).toEqual({ role: 'user', content: 'echo hi', meta: true });
+    expect(controller.messages[1]).toMatchObject({ role: 'shell', command: 'echo hi' });
+    expect((controller.messages[1] as { output: string }).output).toContain('hi');
+    expect(seen.join('')).toContain('hi');
+    expect(front.onStart).toHaveBeenCalledTimes(1);
+    expect(front.onEnd).toHaveBeenCalledTimes(1);
+    expect(statuses).toContain('busy');
+    expect(controller.status).toBe('idle');
+  });
+
+  it('holds the run for the next prompt, once', async () => {
+    const { controller, session } = inCwd();
+    await controller.runShell('echo hi', shellFront().front);
+    controller.setMode('agent');
+    await controller.submitPrompt(
+      'what did that print?',
+      { answers: {}, images: [], pastes: [], onStage: () => {} },
+      {},
+    );
+    await controller.submitPrompt(
+      'and now?',
+      { answers: {}, images: [], pastes: [], onStage: () => {} },
+      {},
+    );
+    const [first, second] = session!.submit.mock.calls.map(c => c[0]);
+    expect(first).toContain('echo hi');
+    expect(first).toMatch(/what did that print\?$/);
+    expect(second).toBe('and now?');
+  });
+
+  it('keeps the run for the agent side while in chat', async () => {
+    const { controller, session } = inCwd();
+    await controller.runShell('echo hi', shellFront().front);
+    controller.setMode('chat');
+    await controller.submitPrompt(
+      'a question',
+      { answers: {}, images: [], pastes: [], onStage: () => {} },
+      {},
+    );
+    controller.setMode('agent');
+    await controller.submitPrompt(
+      'a task',
+      { answers: {}, images: [], pastes: [], onStage: () => {} },
+      {},
+    );
+    const [chat, agent] = session!.submit.mock.calls.map(c => c[0]);
+    expect(chat).toBe('a question');
+    expect(agent).toContain('echo hi');
+  });
+
+  it('drops the held runs with a new conversation', async () => {
+    const { controller, session } = inCwd();
+    await controller.runShell('echo hi', shellFront().front);
+    controller.newConversation({ role: 'user', content: '/new', meta: true });
+    await controller.submitPrompt(
+      'a task',
+      { answers: {}, images: [], pastes: [], onStage: () => {} },
+      {},
+    );
+    expect(session!.submit.mock.calls[0][0]).toBe('a task');
+  });
+
+  it('prints an error when the command cannot run, and still goes idle', async () => {
+    const { controller } = inCwd();
+    shellFailure.next = new Error('spawn /bin/sh ENOENT');
+    const { front } = shellFront();
+    await controller.runShell('echo hi', front);
+    expect(controller.messages.at(-1)).toEqual({ role: 'error', content: 'spawn /bin/sh ENOENT' });
+    expect(controller.messages.at(-1)).toMatchObject({ role: 'error' });
+    expect(front.onEnd).toHaveBeenCalledTimes(1);
+    expect(controller.status).toBe('idle');
+  });
+});
+
+describe('controller.runMcpCommand', () => {
+  const command: McpCommand = {
+    name: 'files:read_file',
+    server: 'files',
+    tool: 'read_file',
+    description: 'Read a file',
+    parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+  };
+
+  it('prints why the arguments are wrong and calls nothing', async () => {
+    const { controller, session } = controllerIn('agent');
+    await controller.runMcpCommand('/files:read_file {oops', command, '{oops');
+    expect(controller.messages).toEqual([
+      expect.objectContaining({ role: 'system', tone: 'warn' }),
+    ]);
+    expect(session!.mcp.call).not.toHaveBeenCalled();
+  });
+
+  it('shows the result as a shell message', async () => {
+    const { controller, session } = controllerIn('agent');
+    controller.setStatus('idle');
+    session!.mcp.call.mockResolvedValue({
+      content: [{ type: 'text', text: 'hello from the file' }],
+    });
+    const raw = '/files:read_file {"path":"src/a.ts"}';
+    await controller.runMcpCommand(raw, command, '{"path":"src/a.ts"}');
+    expect(session!.mcp.call).toHaveBeenCalledWith(
+      'files',
+      'read_file',
+      { path: 'src/a.ts' },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+    expect(controller.messages[0]).toMatchObject({ role: 'shell', command: raw });
+    expect((controller.messages[0] as { output: string }).output).toContain('hello from the file');
+    expect(controller.status).toBe('idle');
+  });
+
+  it('can be aborted while the call runs', async () => {
+    const { controller, session } = controllerIn('agent');
+    controller.setStatus('idle');
+    session!.mcp.call.mockImplementation(
+      (_server, _tool, _args, opts) =>
+        new Promise((_resolve, reject) =>
+          opts?.signal?.addEventListener('abort', () => reject(new Error('aborted'))),
+        ),
+    );
+    const running = controller.runMcpCommand('/files:read_file a.ts', command, '{"path":"a.ts"}');
+    await Promise.resolve();
+    expect(controller.status).toBe('busy');
+    expect(controller.abort()).toBe(true);
+    await running;
+    expect(controller.status).toBe('idle');
+    expect((controller.messages[0] as { output: string }).output).toContain('aborted');
+  });
+});
+
+describe('controller.boot', () => {
+  const profiles = {
+    default: profileOf('local'),
+    kimi: profileOf('kimi-k3'),
+    go: profileOf('go-1'),
+  };
+  type Facts = {
+    offline?: boolean;
+    limitsNotice?: string;
+    windowNotice?: string;
+    searchNotice?: string;
+    mcpNotices?: string[];
+  };
+
+  // A controller whose `createSession` hands back a fake session opened on the profile it was
+  // asked for, with the given launch facts.
+  function booting(mode: Mode, facts: Facts = {}) {
+    const calls: string[] = [];
+    let made: ReturnType<typeof fakeSession> | null = null;
+    const create = vi.fn(async (o: SessionOptions) => {
+      calls.push('createSession');
+      made = Object.assign(fakeSession(o.config ?? {}), {
+        offline: false,
+        mcpNotices: [] as string[],
+        ...facts,
+      });
+      made.profile = o.profile ?? 'default';
+      return made as unknown as Session;
+    });
+    const controller = createController({
+      mode,
+      remember: vi.fn(),
+      createSession: create as unknown as typeof createSession,
+    });
+    return { controller, create, calls, made: () => made };
+  }
+  const configOf = (policy: Policy): Config =>
+    ({ autoApprove: 'off', models: ['local'], profiles, ...policy }) as Config;
+
+  it('opens the session, prints the launch notices and ends idle', async () => {
+    const { controller, create, calls, made } = booting('agent', {
+      windowNotice: 'no window',
+      mcpNotices: ['MCP: 1 server, 2 tools'],
+    });
+    const onConfig = vi.fn(() => calls.push('onConfig'));
+    const onSession = vi.fn(() => {
+      calls.push('onSession');
+      // Nothing is on screen yet, so a header painted here lands above the notices.
+      expect(controller.messages).toEqual([]);
+    });
+    const s = await controller.boot({
+      cwd: '/repo/app',
+      loadConfig: () => configOf({}),
+      lastState: {},
+      defaultMode: 'agent',
+      onConfig,
+      onSession,
+    });
+    expect(calls).toEqual(['onConfig', 'createSession', 'onSession']);
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: '/repo/app', profile: 'default', canAsk: true }),
+    );
+    expect(s).toBe(made());
+    expect(controller.session).toBe(s);
+    expect(onSession).toHaveBeenCalledWith(s, { profile: 'default', own: 'default' });
+    expect(controller.messages).toEqual([
+      { role: 'system', content: 'no window', tone: 'warn', skipAutosave: true },
+      { role: 'system', content: 'MCP: 1 server, 2 tools', tone: 'info', skipAutosave: true },
+    ]);
+    expect(controller.status).toBe('idle');
+    expect(controller.getSnapshot().error).toBeNull();
+
+    controller.pickModel('kimi');
+    expect(made()?.setProfile).toHaveBeenCalledWith('kimi');
+  });
+
+  it('prints nothing when the launch has nothing to say', async () => {
+    const { controller } = booting('agent');
+    await controller.boot({
+      cwd: '/repo/app',
+      loadConfig: () => configOf({}),
+      lastState: {},
+      defaultMode: 'agent',
+    });
+    expect(controller.messages).toEqual([]);
+    expect(controller.status).toBe('idle');
+  });
+
+  // A REIKA_MODEL exported in the shell running the suite pins the start profile to the default.
+  it.skipIf(setAtLaunch('REIKA_MODEL'))(
+    "opens on the start mode's own model and comes back to the session's",
+    async () => {
+      const { controller, create, made } = booting('plan');
+      const onSession = vi.fn();
+      await controller.boot({
+        cwd: '/repo/app',
+        loadConfig: () => configOf({ model: 'kimi-k3', modeProfiles: { plan: 'kimi' } }),
+        lastState: { profile: 'go' },
+        defaultMode: 'agent',
+        onSession,
+      });
+      expect(create).toHaveBeenCalledWith(expect.objectContaining({ profile: 'kimi' }));
+      expect(onSession).toHaveBeenCalledWith(made(), { profile: 'kimi', own: 'go' });
+      expect(controller.messages.map(m => (m as { content: string }).content)).toEqual([
+        "Resumed plan mode and profile 'kimi' (kimi-k3) from the last session.",
+      ]);
+
+      controller.transition('agent');
+      expect(made()?.profile).toBe('go');
+    },
+  );
+
+  it('does not offer ask_user to an unattended session', async () => {
+    const { controller, create } = booting('agent');
+    await controller.boot({
+      cwd: '/repo/app',
+      loadConfig: () => configOf({ unattended: true }),
+      lastState: {},
+      defaultMode: 'agent',
+    });
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ canAsk: false }));
+  });
+
+  it('ends in error when the config cannot be loaded', async () => {
+    const { controller, create } = booting('agent');
+    const onConfig = vi.fn();
+    const s = await controller.boot({
+      cwd: '/repo/app',
+      loadConfig: () => {
+        throw new Error('REIKA_MODEL is not set');
+      },
+      lastState: {},
+      defaultMode: 'agent',
+      onConfig,
+    });
+    expect(s).toBeNull();
+    expect(create).not.toHaveBeenCalled();
+    expect(onConfig).not.toHaveBeenCalled();
+    expect(controller.status).toBe('error');
+    expect(controller.getSnapshot().error).toBe('REIKA_MODEL is not set');
+    expect(controller.messages).toEqual([]);
+    expect(controller.session).toBeNull();
+  });
+
+  it('ends in error when the session cannot be created', async () => {
+    const { controller, create } = booting('agent', { windowNotice: 'no window' });
+    create.mockRejectedValueOnce(new Error('bootstrap failed'));
+    const onSession = vi.fn();
+    const s = await controller.boot({
+      cwd: '/repo/app',
+      loadConfig: () => configOf({}),
+      lastState: {},
+      defaultMode: 'agent',
+      onSession,
+    });
+    expect(s).toBeNull();
+    expect(onSession).not.toHaveBeenCalled();
+    expect(controller.status).toBe('error');
+    expect(controller.getSnapshot().error).toBe('bootstrap failed');
+    expect(controller.messages).toEqual([]);
+  });
+});
+
+describe('controller.runCommand', () => {
+  const echo = (content: string): Message => ({ role: 'user', content, meta: true });
+  // Every hook a vi.fn, the dialog left to the controller unless a test passes `ask`.
+  const commandFront = (overrides: Partial<CommandFrontEnd> = {}) => ({
+    turn: {},
+    pastes: [],
+    exit: vi.fn(),
+    pickModel: vi.fn(),
+    pickSession: vi.fn(),
+    ...overrides,
+  });
+  const issueSkill: Skill = {
+    name: 'issue',
+    description: 'Work on an issue',
+    body: 'Run gh issue view.',
+    source: 'bundled',
+    path: '/repo/app/skills/issue.md',
+    triggers: [],
+  };
+
+  it('starts a new conversation seeded with the echo for /new and /clear', async () => {
+    for (const raw of ['/new', '/clear']) {
+      const { controller } = controllerIn('plan');
+      controller.append(user('old'));
+      const front = commandFront();
+      await controller.runCommand(raw, front);
+      expect(controller.messages[0]).toEqual(echo(raw));
+      expect(controller.messages[1]).toMatchObject({
+        content: expect.stringMatching(/^New session/),
+      });
+      expect(controller.mode).toBe('agent');
+    }
+  });
+
+  it('exits on /exit and /quit and prints nothing', async () => {
+    for (const raw of ['/exit', '/quit']) {
+      const { controller } = controllerIn('agent');
+      const front = commandFront();
+      await controller.runCommand(raw, front);
+      expect(front.exit).toHaveBeenCalledTimes(1);
+      expect(controller.messages).toEqual([]);
+    }
+  });
+
+  it('prints a reply command under its echo, before boot too', async () => {
+    const { controller } = controllerIn('agent');
+    await controller.runCommand('/help', commandFront());
+    expect(controller.messages).toEqual([echo('/help'), note(helpText())]);
+    await controller.runCommand('/cwd', commandFront());
+    expect(controller.messages.at(-1)).toEqual(note('/repo/app'));
+    await controller.runCommand('/mcp', commandFront());
+    expect(controller.messages.at(-1)).toEqual(note('MCP: 1 server'));
+
+    const unbooted = controllerIn('agent', null).controller;
+    await unbooted.runCommand('/cwd', commandFront());
+    expect(unbooted.messages).toEqual([echo('/cwd'), note('(unknown)')]);
+    await unbooted.runCommand('/skills', commandFront());
+    expect(unbooted.messages.at(-1)).toMatchObject({
+      content: expect.stringMatching(/^No skills loaded/),
+    });
+  });
+
+  it('switches mode with the echo and the banner, and refuses while busy', async () => {
+    const { controller } = controllerIn('agent');
+    await controller.runCommand('/plan', commandFront());
+    expect(controller.mode).toBe('plan');
+    expect(controller.messages).toHaveLength(2);
+    expect(controller.messages[0]).toEqual(echo('/plan'));
+    expect(controller.messages[1]).toMatchObject({ role: 'system' });
+
+    const busy = controllerIn('agent').controller;
+    busy.setStatus('busy');
+    await busy.runCommand('/plan', commandFront());
+    expect(busy.mode).toBe('agent');
+    expect(busy.messages).toEqual([
+      echo('/plan'),
+      note('Cannot switch modes while busy. Wait or ctrl-c to abort.'),
+    ]);
+  });
+
+  it('runs /compact as a turn with its echo and line in front', async () => {
+    const { controller, session } = controllerIn('vibe');
+    await controller.runCommand('/compact', commandFront());
+    const [text, opts] = session!.submit.mock.calls[0];
+    expect(text).toBe('compact');
+    expect(opts).toMatchObject({ mode: 'agent', manualCompact: true, display: undefined });
+    expect(controller.messages.slice(0, 2)).toEqual([
+      echo('/compact'),
+      { role: 'system', content: 'Compacting context…', tone: 'info', emphasis: 'line' },
+    ]);
+    expect(controller.messages[2]).toEqual(user('compact'));
+  });
+
+  it('refuses a turn command with a line and runs no turn', async () => {
+    const { controller, session } = controllerIn('chat');
+    await controller.runCommand('/compact', commandFront());
+    expect(session!.submit).not.toHaveBeenCalled();
+    expect(controller.messages).toEqual([
+      echo('/compact'),
+      note("/compact isn't available in chat mode."),
+    ]);
+  });
+
+  it("runs /implement from plan mode in the mode the front end's picker chose, with no echo", async () => {
+    const { controller, session } = controllerIn('plan');
+    await controller.runCommand('/implement', commandFront({ implementMode: 'grind' }));
+    expect(controller.mode).toBe('grind');
+    const [, opts] = session!.submit.mock.calls[0];
+    expect(opts).toMatchObject({ mode: 'grind', display: '/implement' });
+    expect(controller.messages).toEqual([
+      note('Grind mode — implementing the plan above.'),
+      user('/implement'),
+    ]);
+  });
+
+  it('answers /cd with no path and /save on an empty scrollback under the echo', async () => {
+    const { controller } = controllerIn('agent');
+    await controller.runCommand('/cd', commandFront());
+    expect(controller.messages).toEqual([echo('/cd'), note('Usage: /cd <path>')]);
+
+    const empty = controllerIn('agent').controller;
+    await empty.runCommand('/save', commandFront());
+    expect(empty.messages).toEqual([echo('/save'), note('Nothing to save yet.')]);
+  });
+
+  describe('/resume', () => {
+    let root: string;
+    beforeEach(async () => {
+      root = await realpath(await mkdtemp(join(tmpdir(), 'reika-controller-run-')));
+    });
+    afterEach(async () => {
+      await rm(root, { recursive: true, force: true });
+    });
+
+    it('prints why it cannot list under the echo', async () => {
+      const { controller } = controllerIn('agent', {}, 'default', root);
+      controller.setStatus('idle');
+      const front = commandFront();
+      await controller.runCommand('/resume everything', front);
+      expect(controller.messages[0]).toEqual(echo('/resume everything'));
+      expect(controller.messages[1]).toMatchObject({
+        content: expect.stringMatching(/^Usage: \/resume /),
+      });
+      expect(front.pickSession).not.toHaveBeenCalled();
+    });
+
+    it('hands the front end the list to pick from, after the echo alone', async () => {
+      const path = newSessionPath(projectHistoryDir('/repo/app', root), new Date(), 'agent');
+      const turns = [user('fix the parser'), { role: 'assistant' as const, content: 'done' }];
+      await writeSession(path, { agent: turns, chat: [] }, metaFor(turns, '/repo/app', false));
+      const { controller } = controllerIn('agent', {}, 'default', root);
+      controller.setStatus('idle');
+      const pickSession = vi.fn<CommandFrontEnd['pickSession']>(() =>
+        expect(controller.messages).toEqual([echo('/resume')]),
+      );
+      await controller.runCommand('/resume', commandFront({ pickSession }));
+      expect(pickSession).toHaveBeenCalledTimes(1);
+      const [list] = pickSession.mock.calls[0];
+      expect(list.heading).toBe('this project');
+      expect(list.entries.map(e => e.path)).toEqual([path]);
+      expect(controller.messages).toEqual([echo('/resume')]);
+    });
+  });
+
+  it('flips a toggle typed with its state, and replies when the env forces it', async () => {
+    const { controller } = controllerIn('agent');
+    await controller.runCommand('/approvals on', commandFront());
+    expect(controller.getSnapshot().sessionAutoApprove).toBe(true);
+    expect(controller.messages).toEqual([echo('/approvals on'), note('Session auto-approve: on')]);
+
+    const forced = controllerIn('agent', { autoApprove: 'bypass', autoApproveExplicit: true });
+    await forced.controller.runCommand('/approvals off', commandFront());
+    expect(forced.controller.messages[0]).toEqual(echo('/approvals off'));
+    expect(forced.controller.messages[1]).toMatchObject({
+      content: expect.stringContaining("forced to 'bypass'"),
+    });
+  });
+
+  it("asks a bare toggle through the front end's dialog, cursor on the current state", async () => {
+    const { controller } = controllerIn('agent', { autoApprove: 'off' });
+    const ask = vi.fn(async () => TOGGLE_ON);
+    await controller.runCommand('/approvals', commandFront({ ask }));
+    expect(ask).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Approvals', options: ['on', 'off', 'Cancel'] }),
+      TOGGLE_OFF,
+    );
+    expect(controller.getSnapshot().sessionAutoApprove).toBe(true);
+    expect(controller.messages).toEqual([echo('/approvals'), note('Session auto-approve: on')]);
+
+    const on = controllerIn('agent', { autoApprove: 'safe' }).controller;
+    const askOn = vi.fn(async () => TOGGLE_ON);
+    await on.runCommand('/approvals', commandFront({ ask: askOn }));
+    expect(askOn).toHaveBeenCalledWith(expect.anything(), TOGGLE_ON);
+  });
+
+  it('leaves the echo alone and the state unchanged when the toggle dialog is cancelled', async () => {
+    for (const answer of [TOGGLE_CANCEL, 'abort' as const]) {
+      const { controller } = controllerIn('agent');
+      await controller.runCommand('/unattended', commandFront({ ask: async () => answer }));
+      expect(controller.messages).toEqual([echo('/unattended')]);
+      expect(controller.getSnapshot().sessionUnattended).toBeNull();
+    }
+  });
+
+  it("asks through the controller's own confirm when the front end brings no dialog", async () => {
+    const { controller } = controllerIn('agent');
+    const running = controller.runCommand('/approvals', commandFront());
+    expect(controller.confirm).toMatchObject({ title: 'Approvals' });
+    controller.answerConfirm(TOGGLE_ON);
+    await running;
+    expect(controller.confirm).toBeNull();
+    expect(controller.getSnapshot().sessionAutoApprove).toBe(true);
+  });
+
+  it('switches to a named model, and hands the front end the picker for a bare /model', async () => {
+    const profiles = { default: profileOf('local'), kimi: profileOf('kimi-k3') };
+    const { controller, session } = controllerIn('agent', { profiles });
+    await controller.runCommand('/model kimi', commandFront());
+    expect(session!.setProfile).toHaveBeenCalledWith('kimi');
+    expect(controller.messages.slice(0, 2)).toEqual([
+      echo('/model kimi'),
+      note("Switched to profile 'kimi' (kimi-k3)"),
+    ]);
+
+    const bare = controllerIn('agent', { profiles });
+    const front = commandFront({
+      pickModel: vi.fn(() => expect(bare.controller.messages).toEqual([echo('/model')])),
+    });
+    await bare.controller.runCommand('/model', front);
+    expect(front.pickModel).toHaveBeenCalledWith(bare.controller.modelTargets());
+    expect(bare.controller.messages).toEqual([echo('/model')]);
+  });
+
+  it('says the config is not loaded for /model before boot', async () => {
+    const { controller } = controllerIn('agent', null);
+    const front = commandFront();
+    await controller.runCommand('/model kimi', front);
+    expect(controller.messages).toEqual([echo('/model kimi'), note('config not loaded')]);
+    expect(front.pickModel).not.toHaveBeenCalled();
+  });
+
+  it("runs an MCP command through the session's server", async () => {
+    const { controller, session } = controllerIn('agent');
+    session!.mcp.commands = [
+      {
+        name: 'files:read_file',
+        server: 'files',
+        tool: 'read_file',
+        description: 'Read a file',
+        parameters: { type: 'object', properties: { path: { type: 'string' } } },
+      },
+    ];
+    session!.mcp.call.mockResolvedValue({ content: [{ type: 'text', text: 'hello' }] });
+    const raw = '/files:read_file {"path":"a.ts"}';
+    await controller.runCommand(raw, commandFront());
+    expect(session!.mcp.call).toHaveBeenCalledWith(
+      'files',
+      'read_file',
+      { path: 'a.ts' },
+      expect.anything(),
+    );
+    expect(controller.messages).toEqual([expect.objectContaining({ role: 'shell', command: raw })]);
+  });
+
+  it('runs a skill as a turn with no echo, stamped with the skill and shown as typed', async () => {
+    const { controller, session } = controllerIn('agent');
+    session!.bundle.skills = [issueSkill];
+    await controller.runCommand('/issue 14', commandFront());
+    const [text, opts] = session!.submit.mock.calls[0];
+    expect(text).toBe('Run gh issue view.\n\n14');
+    expect(opts).toMatchObject({ skill: 'issue', display: '/issue 14' });
+    expect(controller.messages[0]).toEqual(user('/issue 14'));
+    expect(controller.messages[1]).toMatchObject({
+      content: expect.stringMatching(/^Skill \/issue applied/),
+    });
+    expect(controller.messages).toHaveLength(2);
+  });
+
+  it('expands a pasted text the skill arguments point into', async () => {
+    const { controller, session } = controllerIn('agent');
+    session!.bundle.skills = [issueSkill];
+    const { pastes, marker } = rememberPaste([], 'the pasted log');
+    await controller.runCommand(`/issue ${marker}`, commandFront({ pastes }));
+    expect(session!.submit.mock.calls[0][0]).toContain('the pasted log');
+  });
+
+  it('names an unknown command under its echo', async () => {
+    const { controller } = controllerIn('agent');
+    await controller.runCommand('/nope', commandFront());
+    expect(controller.messages).toEqual([
+      echo('/nope'),
+      note('Unknown command: /nope. Try /help.'),
+    ]);
+  });
+
+  it('lets a built-in shadow a skill of the same name', async () => {
+    const { controller, session } = controllerIn('agent');
+    session!.bundle.skills = [
+      { ...issueSkill, name: 'help' },
+      { ...issueSkill, name: 'model' },
+    ];
+    await controller.runCommand('/help', commandFront());
+    expect(controller.messages).toEqual([echo('/help'), note(helpText())]);
+    const front = commandFront();
+    await controller.runCommand('/model', front);
+    expect(front.pickModel).toHaveBeenCalledTimes(1);
+    expect(session!.submit).not.toHaveBeenCalled();
+  });
+});
+
+describe('controller.submit', () => {
+  const echo = (content: string): Message => ({ role: 'user', content, meta: true });
+  const verify: Skill = {
+    name: 'verify',
+    description: 'verify a change',
+    body: 'VERIFY BODY',
+    source: 'project',
+    path: '/repo/app/skills/verify.md',
+    triggers: ['verify the change'],
+  };
+  const incidental = 'the build failed\nError: see https://example.com/docs for details\nexit 1';
+  const image: ImageAttachment = { marker: '[Image 1]', text: 'a screenshot', source: 'clipboard' };
+
+  // Every hook a vi.fn that also lands in `calls`, so a test can read the order they ran in.
+  const inputFront = (overrides: Partial<InputFrontEnd> = {}) => {
+    const calls: string[] = [];
+    warmStop.fn.mockClear();
+    warmStop.hook = () => calls.push('sending');
+    const front = {
+      turn: { onTurnStart: () => calls.push('turn') },
+      pastes: [],
+      images: [] as ImageAttachment[],
+      exit: vi.fn(),
+      pickModel: vi.fn(),
+      pickSession: vi.fn(),
+      shell: { onProgress: vi.fn() },
+      onStage: vi.fn(),
+      onImagesTaken: vi.fn(() => calls.push('images')),
+      onTaken: vi.fn((line?: string) => calls.push(line === undefined ? 'taken' : `taken:${line}`)),
+      beforeImplementQuestion: vi.fn(() => calls.push('suggestions')),
+      ...overrides,
+    };
+    return { front, calls };
+  };
+  const asking = (answer: number | 'abort', calls?: string[]) =>
+    vi.fn(async () => {
+      calls?.push('ask');
+      return answer;
+    });
+  const idle = (mode: Mode = 'agent', policy: Policy = {}, historyRoot?: string) => {
+    const made = controllerIn(mode, policy, 'default', historyRoot);
+    made.controller.setStatus('idle');
+    return made;
+  };
+  beforeEach(() => {
+    pasteFetches.incidental = [];
+  });
+
+  it('runs a plain prompt after the warm stops and the box clears with history', async () => {
+    const { controller, session } = idle();
+    const { front, calls } = inputFront();
+    await controller.submit('  fix the parser ', front);
+    expect(calls).toEqual(['sending', 'taken:fix the parser', 'images', 'turn']);
+    expect(session!.submit.mock.calls[0][0]).toBe('fix the parser');
+  });
+
+  it('clears the box for an empty line and runs nothing, with no history', async () => {
+    const { controller, session } = idle();
+    const { front } = inputFront();
+    await controller.submit('   ', front);
+    expect(front.onTaken).toHaveBeenCalledWith(undefined);
+    expect(session!.submit).not.toHaveBeenCalled();
+    expect(controller.messages).toEqual([]);
+  });
+
+  it('dispatches a command and records it', async () => {
+    const { controller } = idle();
+    const { front } = inputFront();
+    await controller.submit('/help', front);
+    expect(front.onTaken).toHaveBeenCalledWith('/help');
+    expect(controller.messages).toEqual([echo('/help'), note(helpText())]);
+  });
+
+  it("asks /implement's mode in plan mode after the suggestions hook, and runs the turn in it", async () => {
+    const { controller, session } = idle('plan');
+    const { front, calls } = inputFront();
+    const ask = asking(IMPLEMENT_MODES.indexOf('grind'), calls);
+    await controller.submit('/implement', { ...front, ask });
+    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ title: 'Implement' }));
+    expect(calls).toEqual(['sending', 'suggestions', 'ask', 'taken:/implement', 'turn']);
+    expect(controller.mode).toBe('grind');
+    expect(session!.submit.mock.calls[0][1]).toMatchObject({ mode: 'grind' });
+  });
+
+  it("runs nothing and leaves the box when /implement's question is dismissed", async () => {
+    const { controller, session } = idle('plan');
+    const { front } = inputFront();
+    await controller.submit('/implement', { ...front, ask: asking('abort') });
+    expect(front.onTaken).not.toHaveBeenCalled();
+    expect(session!.submit).not.toHaveBeenCalled();
+    expect(controller.messages).toEqual([]);
+  });
+
+  describe('in shell mode', () => {
+    let cwd: string;
+    beforeEach(async () => {
+      cwd = await realpath(await mkdtemp(join(tmpdir(), 'reika-controller-submit-')));
+    });
+    afterEach(async () => {
+      await rm(cwd, { recursive: true, force: true });
+    });
+
+    it('runs the line as a shell command with its paste expanded', async () => {
+      const { controller, session } = idle('shell');
+      session!.bundle.cwd = cwd;
+      const { pastes, marker } = rememberPaste([], 'hello paste');
+      const { front } = inputFront({ pastes });
+      await controller.submit(`echo ${marker}`, front);
+      expect(controller.messages[0]).toEqual(echo('echo hello paste'));
+      expect(controller.messages[1]).toMatchObject({ role: 'shell', command: 'echo hello paste' });
+      expect(front.onTaken).toHaveBeenCalledWith(`echo ${marker}`);
+      expect(session!.submit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('the skill question', () => {
+    const ready = () => {
+      const made = idle('agent', { skillAuto: 'ask' });
+      made.session!.bundle.skills = [verify];
+      return made;
+    };
+
+    it('applies the skill when accepted, in the order warm, ask, box, turn', async () => {
+      const { controller, session } = ready();
+      const { front, calls } = inputFront();
+      const ask = asking(CONFIRM_ACCEPT, calls);
+      await controller.submit('verify the change', { ...front, ask });
+      expect(ask).toHaveBeenCalledWith(expect.objectContaining({ title: 'Skill' }));
+      expect(calls).toEqual(['sending', 'ask', 'taken:verify the change', 'images', 'turn']);
+      expect(session!.submit.mock.calls[0][0]).toBe('VERIFY BODY\n\nverify the change');
+    });
+
+    it('sends the prompt as typed when declined', async () => {
+      const { controller, session } = ready();
+      const { front } = inputFront();
+      await controller.submit('verify the change', { ...front, ask: asking(CONFIRM_DECLINE) });
+      expect(session!.submit.mock.calls[0][0]).toBe('verify the change');
+    });
+
+    it('runs nothing and leaves the box when dismissed', async () => {
+      const { controller, session } = ready();
+      const { front } = inputFront();
+      await controller.submit('verify the change', { ...front, ask: asking('abort') });
+      expect(warmStop.fn).toHaveBeenCalledWith('submit');
+      expect(front.onTaken).not.toHaveBeenCalled();
+      expect(session!.submit).not.toHaveBeenCalled();
+    });
+
+    it('is not asked again for a replay that carries its answer', async () => {
+      const { controller, session } = ready();
+      const { front } = inputFront();
+      const ask = asking(CONFIRM_ACCEPT);
+      await controller.submit('verify the change', { ...front, ask }, { skill: null });
+      expect(ask).not.toHaveBeenCalled();
+      expect(session!.submit.mock.calls[0][0]).toBe('verify the change');
+    });
+
+    it("asks through the controller's own confirm when the front end brings no dialog", async () => {
+      const { controller, session } = ready();
+      const { front } = inputFront();
+      const running = controller.submit('verify the change', front);
+      expect(controller.confirm).toMatchObject({ title: 'Skill' });
+      controller.answerConfirm(CONFIRM_ACCEPT);
+      await running;
+      expect(session!.submit.mock.calls[0][1]).toMatchObject({ skill: 'verify' });
+    });
+  });
+
+  describe('the pasted-link question', () => {
+    const ready = () => idle('agent', { pasteFetch: 'ask' });
+
+    it('fetches the link when accepted', async () => {
+      const { controller, session } = ready();
+      const { front } = inputFront();
+      const ask = asking(CONFIRM_ACCEPT);
+      await controller.submit(incidental, { ...front, ask });
+      expect(ask).toHaveBeenCalledWith(expect.objectContaining({ title: 'Pasted link' }));
+      expect(pasteFetches.incidental).toEqual([true]);
+      expect(session!.submit.mock.calls[0][0]).toMatch(/^<url href="stub">/);
+    });
+
+    it('leaves the link when declined', async () => {
+      const { controller, session } = ready();
+      const { front } = inputFront();
+      await controller.submit(incidental, { ...front, ask: asking(CONFIRM_DECLINE) });
+      expect(pasteFetches.incidental).toEqual([false]);
+      expect(session!.submit.mock.calls[0][0]).toBe(incidental);
+    });
+
+    it('runs nothing and leaves the box when dismissed', async () => {
+      const { controller, session } = ready();
+      const { front } = inputFront();
+      await controller.submit(incidental, { ...front, ask: asking('abort') });
+      expect(front.onTaken).not.toHaveBeenCalled();
+      expect(pasteFetches.incidental).toEqual([]);
+      expect(session!.submit).not.toHaveBeenCalled();
+    });
+
+    it('is not asked again for a replay that carries its answer', async () => {
+      const { controller } = ready();
+      const { front } = inputFront();
+      const ask = asking(CONFIRM_ACCEPT);
+      await controller.submit(incidental, { ...front, ask }, { fetchUrls: false });
+      expect(ask).not.toHaveBeenCalled();
+      expect(pasteFetches.incidental).toEqual([false]);
+    });
+  });
+
+  describe('input history', () => {
+    it('records each line sent, commands and shell lines too, once per run of repeats', async () => {
+      const { controller } = idle();
+      for (const line of ['fix it', 'fix it', '/help', ' fix it ']) {
+        await controller.submit(line, inputFront().front);
+      }
+      expect(controller.getSnapshot().history).toEqual(['fix it', '/help', 'fix it']);
+    });
+
+    it('records a queued line when it replays, not when it is queued', async () => {
+      const { controller } = idle();
+      controller.setStatus('busy');
+      await controller.submit('later', inputFront().front);
+      expect(controller.getSnapshot().history).toEqual([]);
+      controller.setStatus('idle');
+      const next = controller.takeQueued({ resuming: false })!;
+      await controller.submit(next.content, inputFront().front, next.answers);
+      controller.replayDone();
+      expect(controller.getSnapshot().history).toEqual(['later']);
+    });
+
+    it('records /save run mid-turn, and nothing for an empty line', async () => {
+      const { controller } = idle();
+      await controller.submit('   ', inputFront().front);
+      expect(controller.getSnapshot().history).toEqual([]);
+      controller.setStatus('busy');
+      await controller.submit('/save', inputFront().front);
+      expect(controller.getSnapshot().history).toEqual(['/save']);
+    });
+
+    it('keeps it across /new', async () => {
+      const { controller } = idle();
+      await controller.submit('fix it', inputFront().front);
+      await controller.submit('/new', inputFront().front);
+      expect(controller.getSnapshot().history).toEqual(['fix it', '/new']);
+    });
+
+    it('drops the oldest past the entry bound', async () => {
+      const { controller } = idle();
+      for (let i = 0; i <= MAX_HISTORY_ENTRIES; i++) {
+        await controller.submit(`/cwd ${i}`, inputFront().front);
+      }
+      const history = controller.getSnapshot().history;
+      expect(history).toHaveLength(MAX_HISTORY_ENTRIES);
+      expect(history[0]).toBe('/cwd 1');
+    });
+  });
+
+  describe('completions', () => {
+    it('lists commands, skills, MCP commands, models and files from the session', () => {
+      const { controller, session } = idle();
+      session!.bundle.skills = [verify];
+      session!.bundle.fileIndex = ['src/app.ts'];
+      session!.mcp.commands = [
+        { name: 'docs:find', server: 'docs', description: 'find a page' } as McpCommand,
+      ];
+      const names = (text: string) => controller.completions(text)?.items.map(i => i.value);
+      expect(names('/ver')).toEqual(['/verify']);
+      expect(names('/docs')).toEqual(['/docs:find']);
+      expect(controller.completions('/docs')?.items[0].display).toContain('MCP docs · find a page');
+      expect(names('see @app')).toEqual(['@src/app.ts']);
+      expect(names('/model ')).toEqual(expect.arrayContaining(['/model default']));
+      expect(controller.completions('plain words')).toBeNull();
+    });
+
+    it('is null before boot', () => {
+      const { controller } = controllerIn('agent', null);
+      expect(controller.completions('/he')).toBeNull();
+    });
+  });
+
+  describe('while another line is being prepared (#993)', () => {
+    const asked = () => {
+      const made = idle('agent', { skillAuto: 'ask' });
+      made.session!.bundle.skills = [verify];
+      return made;
+    };
+
+    it('queues a second line instead of dropping it, and replays it once the first is done', async () => {
+      const { controller, session } = asked();
+      const first = inputFront();
+      const running = controller.submit('verify the change', first.front);
+      expect(controller.confirm).toMatchObject({ title: 'Skill' });
+      expect(controller.getSnapshot().preparing).toBe(true);
+
+      const second = inputFront();
+      await controller.submit('and then the docs', second.front);
+      expect(second.front.onTaken).toHaveBeenCalledWith();
+      expect(controller.getSnapshot().queue).toEqual([
+        { content: 'and then the docs', answers: {} },
+      ]);
+      expect(controller.takeQueued({ resuming: false })).toBeNull();
+
+      controller.answerConfirm(CONFIRM_DECLINE);
+      await running;
+      expect(session!.submit.mock.calls.map(c => c[0])).toEqual(['verify the change']);
+      expect(controller.getSnapshot().preparing).toBe(false);
+      expect(controller.takeQueued({ resuming: false })).toMatchObject({
+        content: 'and then the docs',
+      });
+    });
+
+    it("waits for the first line's question before asking the second's", async () => {
+      const { controller } = asked();
+      const running = controller.submit('verify the change', inputFront().front);
+      const first = controller.confirm;
+      const queued = controller.submit('verify the change again', inputFront().front);
+      expect(controller.confirm).toBe(first);
+
+      controller.answerConfirm(CONFIRM_DECLINE);
+      await running;
+      expect(controller.confirm).not.toBeNull();
+      expect(controller.confirm).not.toBe(first);
+      controller.answerConfirm(CONFIRM_ACCEPT);
+      await queued;
+      expect(controller.getSnapshot().queue).toEqual([
+        { content: 'verify the change again', answers: { skill: 'verify' } },
+      ]);
+    });
+
+    it('runs /save at once', async () => {
+      const { controller } = asked();
+      const running = controller.submit('verify the change', inputFront().front);
+      const save = inputFront();
+      await controller.submit('/save', save.front);
+      expect(save.front.onTaken).toHaveBeenCalledWith('/save');
+      expect(controller.getSnapshot().queue).toEqual([]);
+      controller.answerConfirm(CONFIRM_DECLINE);
+      await running;
+    });
+  });
+
+  describe('while busy', () => {
+    const busy = (policy: Policy | null = { skillAuto: 'ask' }) => {
+      const made = controllerIn('agent', policy);
+      if (made.session) made.session.bundle.skills = [verify];
+      made.controller.setStatus('busy');
+      return made;
+    };
+
+    it('asks now and queues the line with its answers and images, with no history', async () => {
+      const { controller, session } = busy();
+      const { front, calls } = inputFront({ images: [image] });
+      const ask = asking(CONFIRM_DECLINE, calls);
+      await controller.submit('verify the change [Image 1]', { ...front, ask });
+      expect(calls).toEqual(['ask', 'images', 'taken']);
+      expect(controller.getSnapshot().queue).toEqual([
+        { content: 'verify the change [Image 1]', images: [image], answers: { skill: null } },
+      ]);
+      expect(controller.messages.at(-1)).toMatchObject({
+        content: '[Queued] [image] verify the change [Image 1]',
+      });
+      expect(session!.submit).not.toHaveBeenCalled();
+    });
+
+    it('queues nothing and clears nothing for an empty line', async () => {
+      const { controller } = busy();
+      const { front } = inputFront();
+      await controller.submit('  ', front);
+      expect(controller.getSnapshot().queue).toEqual([]);
+      expect(front.onTaken).not.toHaveBeenCalled();
+      expect(front.onImagesTaken).not.toHaveBeenCalled();
+    });
+
+    it('drops the line, left in the box, when a question is dismissed', async () => {
+      const { controller } = busy();
+      const { front } = inputFront();
+      await controller.submit('verify the change', { ...front, ask: asking('abort') });
+      expect(controller.getSnapshot().queue).toEqual([]);
+      expect(front.onTaken).not.toHaveBeenCalled();
+    });
+
+    it('queues the same way before boot', async () => {
+      const { controller } = controllerIn('agent', null);
+      const { front } = inputFront();
+      await controller.submit('/save', front);
+      expect(controller.getSnapshot().queue).toEqual([{ content: '/save', answers: {} }]);
+      expect(front.onTaken).toHaveBeenCalledWith();
+    });
+
+    describe('/save', () => {
+      let root: string;
+      beforeEach(async () => {
+        root = await realpath(await mkdtemp(join(tmpdir(), 'reika-controller-submit-save-')));
+      });
+      afterEach(async () => {
+        await rm(root, { recursive: true, force: true });
+      });
+
+      it('runs at once, records it and queues nothing', async () => {
+        const { controller } = controllerIn('agent', {}, 'default', root);
+        controller.append(user('fix the parser'));
+        controller.setStatus('busy');
+        const { front } = inputFront();
+        await controller.submit('/save', front);
+        expect(front.onTaken).toHaveBeenCalledWith('/save');
+        expect(warmStop.fn).not.toHaveBeenCalled();
+        expect(controller.getSnapshot().queue).toEqual([]);
+        expect(controller.messages.at(-1)).toMatchObject({
+          content: expect.stringMatching(/^saved 1 messages — mid-turn/),
+        });
+      });
+
+      it('takes the ordinary path while idle', async () => {
+        const { controller } = idle('agent', {}, root);
+        controller.append(user('fix the parser'));
+        const { front, calls } = inputFront();
+        await controller.submit('/save', front);
+        expect(calls).toEqual(['sending', 'taken:/save']);
+        expect(controller.messages.at(-1)).toMatchObject({
+          content: expect.stringMatching(/^saved 1 messages → /),
+        });
+      });
+    });
+  });
+});

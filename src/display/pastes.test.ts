@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
+  adoptPastes,
   expandPastes,
   hasPasteMarker,
+  isPasteMarker,
+  pasteMarkersIn,
   isLargePaste,
   rememberPaste,
   MAX_PASTE_STORE_CHARS,
@@ -109,5 +112,89 @@ describe('hasPasteMarker', () => {
     const { marker } = rememberPaste([], lines(PASTE_LINE_THRESHOLD));
     expect(hasPasteMarker(marker)).toBe(true);
     expect(hasPasteMarker(marker)).toBe(true);
+  });
+});
+
+describe('isPasteMarker', () => {
+  it('takes a whole marker and nothing else', () => {
+    expect(isPasteMarker('[Pasted text #3 +412 lines]')).toBe(true);
+    expect(isPasteMarker('[Pasted text #3 +1500 chars]')).toBe(true);
+    expect(isPasteMarker(' [Pasted text #3 +412 lines]')).toBe(false);
+    expect(isPasteMarker('[Pasted text #3 +412 lines] and more')).toBe(false);
+    expect(isPasteMarker('[Pasted text #x +4 lines]')).toBe(false);
+    expect(isPasteMarker('')).toBe(false);
+  });
+});
+
+describe('adoptPastes', () => {
+  const big = (tag: string) => `${tag}\n`.repeat(PASTE_LINE_THRESHOLD);
+  const tab = (id: number, text: string) => ({
+    marker: `[Pasted text #${id} +${PASTE_LINE_THRESHOLD} lines]`,
+    text,
+  });
+
+  it('gives each incoming paste a marker of the store, in one pass', () => {
+    const own = rememberPaste([], big('own'));
+    // The tab's #1 and #2 become the store's #2 and #3; a sequential rewrite would turn the new #2
+    // into #3 when it reached the tab's #2.
+    const incoming = [tab(1, big('a')), tab(2, big('b'))];
+    const out = adoptPastes(
+      own.pastes,
+      `x ${incoming[0].marker} y ${incoming[1].marker}`,
+      incoming,
+    );
+    expect(out.text).toBe(
+      `x [Pasted text #2 +${PASTE_LINE_THRESHOLD} lines] y [Pasted text #3 +${PASTE_LINE_THRESHOLD} lines]`,
+    );
+    expect(expandPastes(out.text, out.pastes)).toBe(`x ${big('a')} y ${big('b')}`);
+  });
+
+  it("leaves the store's own markers from a recalled line alone", () => {
+    const own = rememberPaste([], big('own'));
+    const incoming = [tab(5, big('new'))];
+    const out = adoptPastes(own.pastes, `${own.marker} then ${incoming[0].marker}`, incoming);
+    expect(expandPastes(out.text, out.pastes)).toBe(`${big('own')} then ${big('new')}`);
+  });
+
+  it('keeps no incoming paste whose marker the text no longer holds', () => {
+    const incoming = [tab(1, big('gone')), tab(2, big('kept'))];
+    const out = adoptPastes([], `only ${incoming[1].marker}`, incoming);
+    expect(out.pastes.map(p => p.text)).toEqual([big('kept')]);
+    expect(out.text).toBe(`only [Pasted text #1 +${PASTE_LINE_THRESHOLD} lines]`);
+  });
+
+  it('maps a marker written twice to one paste', () => {
+    const incoming = [tab(7, big('twice'))];
+    const out = adoptPastes([], `${incoming[0].marker} ${incoming[0].marker}`, incoming);
+    expect(out.pastes).toHaveLength(1);
+    expect(expandPastes(out.text, out.pastes)).toBe(`${big('twice')} ${big('twice')}`);
+  });
+
+  it('does not read a marker inside pasted text as one of its own', () => {
+    const inner = `log line [Pasted text #9 +${PASTE_LINE_THRESHOLD} lines]\n`.repeat(2);
+    const incoming = [tab(1, big('x') + inner), tab(9, big('nine'))];
+    const out = adoptPastes([], incoming[0].marker, incoming);
+    expect(out.pastes).toHaveLength(1);
+    expect(expandPastes(out.text, out.pastes)).toBe(big('x') + inner);
+  });
+
+  it('changes nothing with no incoming pastes', () => {
+    const own = rememberPaste([], big('own'));
+    const out = adoptPastes(own.pastes, own.marker, []);
+    expect(out).toEqual({ pastes: own.pastes, text: own.marker });
+  });
+});
+
+describe('pasteMarkersIn', () => {
+  it('lists every marker in order, after hasPasteMarker has moved the shared regex', () => {
+    const text =
+      'a [Pasted text #2 +12 lines] b [Pasted text #1 +40 chars] [Pasted text #2 +12 lines]';
+    expect(hasPasteMarker(text)).toBe(true);
+    expect(pasteMarkersIn(text)).toEqual([
+      '[Pasted text #2 +12 lines]',
+      '[Pasted text #1 +40 chars]',
+      '[Pasted text #2 +12 lines]',
+    ]);
+    expect(pasteMarkersIn('nothing here')).toEqual([]);
   });
 });

@@ -1,4 +1,5 @@
 import { Box, Text } from 'ink';
+import { scrubApproval } from './scrubdialogs.js';
 import wrapAnsi from 'wrap-ansi';
 import type { ApprovalRequest } from '../types.js';
 import { APPROVAL_OPTIONS } from './dialogspecs.js';
@@ -15,7 +16,7 @@ import {
   wrappedRows,
   wrapStyledRows,
 } from './layout.js';
-import { toolLabel } from './format.js';
+import { toolLabel } from '../display/format.js';
 
 // The dialog's own border (1 column each side) plus its paddingX={1}, on top of the App padding
 // contentWidth already accounts for. The diff has to wrap inside all of it or its rows push
@@ -101,7 +102,7 @@ export function layoutApproval(
 // stays neutral (no borderColor) to match the input; caution is signalled inside
 // via themed `▲` warning lines, not a colored border.
 export function Approval({
-  request,
+  request: asked,
   selectedIndex,
   typing = false,
   width,
@@ -118,6 +119,7 @@ export function Approval({
   // Other live rows above the dialog (plan checklist, queued messages) the preview must leave room for.
   reservedRows?: number;
 }) {
+  const request = scrubApproval(asked);
   const isCommand = request.tool === 'bash';
   const warnings = request.warnings ?? [];
   // `useContentWidth`, not a bare contentWidth(): the packing has to follow a resize, and this is

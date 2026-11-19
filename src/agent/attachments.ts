@@ -26,6 +26,9 @@ export type ImageAttachment = {
   // dropped with the attachment (the ref is cleared the moment a turn sends), so an image reaches
   // the model exactly once and is never re-sent.
   native?: NativeImageBytes;
+  // Printed under the user row when the line is sent, for a front end whose box is not the
+  // scrollback's only reader: a page with several tabs open (#979). The TUI prints at paste time.
+  receipt?: string;
 };
 
 export type NativeImageBytes = {
@@ -86,7 +89,13 @@ export async function readNativeAttachments(
     attachments.map(async (a): Promise<ImageAttachment> => {
       if (!a.native) return a;
       const result = await ocr(a.native.bytes);
-      if (result.ok) return { marker: a.marker, text: result.text, source: a.source };
+      if (result.ok) {
+        // A receipt written for bytes sent as they are would now say the wrong thing.
+        const receipt = a.receipt
+          ? { receipt: `${a.marker} — ${result.text.length} chars read from the image.` }
+          : {};
+        return { marker: a.marker, text: result.text, source: a.source, ...receipt };
+      }
       failed.push(a.marker);
       return { marker: a.marker, text: '(image could not be read)', source: a.source };
     }),

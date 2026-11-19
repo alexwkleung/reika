@@ -3,7 +3,63 @@
 User-facing changes in each release: fixes, changed behavior or defaults, new or renamed config
 keys, commands and tools. Reika is 0.x, so a minor version may change behavior and config.
 
-## [Unreleased]
+## [0.13.0] - 2026-11-18
+
+### Added
+
+- `reika web` serves the agent to a browser tab on this machine, and `reika web --window` opens it in
+  its own app window that stops Reika when it closes. It is the same session as the terminal UI —
+  modes, tools, approvals, auto-save — with a history pane for this project's saved sessions, and
+  images pasted or dropped on the input box. Experimental. See [docs/web.md](docs/web.md) (#1014).
+
+### Changed
+
+- `/new` (and New conversation in `reika web`) keeps the model you are on instead of switching back
+  to the default profile. It still resets the conversation, tokens and mode, and `REIKA_MODE_MODELS`
+  applies over the kept model again (#1033).
+
+## [0.12.0] - 2026-11-17
+
+### Changed
+
+- `pnpm run install:global` now installs a copy of the checkout instead of a link to it. A linked
+  install showed the version of whatever branch was checked out and ran whatever was last built, so
+  switching branches or building elsewhere silently changed the installed `reika`. Run
+  `pnpm run reinstall:global` to pick up new changes (#956).
+- A turn stopped with ctrl-c now closes with `■ Interrupted after 4s` instead of `Worked for`,
+  and no longer prints `(aborted)` under the reply as if it were text the model wrote (#1063).
+- The TUI's conversation logic (turns, the queue, approvals, commands, auto-save) moved out of
+  the UI into a controller that other front ends can drive. Nothing is meant to behave
+  differently; if something does, please open an issue (#1064).
+- The ↑ input history keeps the last 500 prompts of a session (#1064).
+
+### Fixed
+
+- The PR badge in the status bar now follows `/cd` instead of staying on the directory reika was
+  started in (#1064).
+- A command that takes 150–300ms no longer flashes its `↳ Running…` row for a few frames: the row
+  now waits 300ms instead of 150ms, which covers most of the sandbox and diff overhead every
+  `bash` call pays. A fast command's streamed output also waits with the row instead of forcing it
+  up, so a command that prints and returns at once paints only its result (#1062).
+- `reika -p --json` piped into another program (`| jq`, a harness capturing stdout) no longer
+  cuts off at 64 KiB on macOS. The process exited before the output reached the pipe; it now waits
+  for it, up to five seconds (#1061).
+- The TUI now shortens home paths to `~/…`, and hides your name, handle and email under `/anon`, in
+  assistant replies, Thinking, compaction notes, diffs, the plan checklist, queued prompts and the
+  approval, question and confirm dialogs. An approval still shows any secret in full, since you
+  must see what you approve. Paths also stay project-relative after a `/cd` (#1035).
+- A prompt sent while another was still being prepared (a pasted link being fetched, or its
+  question open) was dropped without a trace. It is now queued and runs after the first (#994).
+- A loop-break recovery and the end of a shell-mode run no longer draw their text twice for one
+  frame, once still streaming and once committed (#986).
+- With two or more prompts queued behind a running turn, the second could be dropped without a
+  trace when the first replayed. Each queued prompt now waits until the one before it has been
+  submitted (#960).
+- A queued prompt with a pasted image no longer shows its `[Image N]` marker twice when it runs,
+  and an image whose marker was deleted before Enter is no longer sent with the queued prompt
+  (#960).
+
+## [0.11.0] - 2026-11-12
 
 ### Added
 

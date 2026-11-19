@@ -9,6 +9,8 @@ export const pageDescriptions: Record<string, string> = {
     'Install Reika with npm, pnpm or Homebrew, serve a model with llama.cpp, MLX or vLLM, or point it at a hosted API, and run your first turn.',
   'usage.md':
     "Reika's modes (agent, plan, minimal, vibe, grind, chat, shell), headless runs for scripts and CI, slash commands and session transcripts.",
+  'web.md':
+    'reika web serves the coding agent to a browser tab or its own app window on this machine: the page, session history, what is not supported yet, and how the local server is locked down.',
   'configuration.md':
     'Every REIKA_* setting: model profiles, context window, approvals, the macOS sandbox, web search, MCP servers and the experimental flags.',
   'tools.md':

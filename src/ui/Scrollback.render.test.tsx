@@ -10,7 +10,7 @@ import { Scrollback, markProse, noticeLead } from './Scrollback.js';
 import { drawnWidth } from './termtext.js';
 import { contentWidth } from './layout.js';
 import { clearIdentity, setIdentity } from './identity.js';
-import { TIMER_AFTER_S } from './format.js';
+import { TIMER_AFTER_S } from '../display/format.js';
 import { renderMarkdown } from './markdown.js';
 import { theme } from './theme.js';
 import type { Message } from '../types.js';
@@ -280,7 +280,7 @@ describe('Scrollback nested (subagent) messages', () => {
 
   it('folds a thinking tail the endpoint cut at a tag the model wrote in its own prose', () => {
     // The parser ends the reasoning channel at a literal tag in the model's prose, so the rest of
-    // the thought arrives as `content` (ui/reasoningfold.ts). It belongs behind the bar, with no
+    // the thought arrives as `content` (display/reasoningfold.ts). It belongs behind the bar, with no
     // prose row under it.
     const frame = framePlusApp([
       {
@@ -1621,7 +1621,7 @@ describe('Scrollback nested user-bubble color', () => {
   });
 
   // `▎` is a legend, not decoration: three different speakers share the glyph and are told apart
-  // by color alone. theme.ts says so in prose next to `subagent` — so it is pinned here rather
+  // by color alone. display/palette.ts says so in prose next to `subagent` — so it is pinned here rather
   // than left as a comment a later palette tweak could quietly falsify.
   it('keeps every ▎ speaker on a distinct color', () => {
     const bars = { reasoning: theme.reasoning, user: theme.accent, subagent: theme.subagent };
@@ -2347,5 +2347,55 @@ describe('Scrollback live-block reuse', () => {
         clearIdentity();
       }
     });
+  });
+});
+
+// An aborted turn's content ends in `(aborted)` for the model; on screen that read as a placeholder,
+// so the closing line says the turn was interrupted instead.
+describe('Scrollback interrupted turn', () => {
+  const linesOf = (messages: Message[]): string[] => {
+    const { lastFrame } = render(
+      <Scrollback messages={messages} streaming="" streamingReasoning="" streamingTool="" />,
+    );
+    return stripAnsi(lastFrame() ?? '').split('\n');
+  };
+  const user: Message = { role: 'user', content: 'go' };
+
+  it('drops the marker and closes with an interrupted line', () => {
+    const lines = linesOf([
+      user,
+      {
+        role: 'assistant',
+        content: 'Half an answer\n\n(aborted)',
+        interrupted: true,
+        durationMs: 4000,
+      },
+      user,
+    ]);
+    const text = lines.join('\n');
+    expect(text).toContain('Half an answer');
+    expect(text).not.toContain('(aborted)');
+    expect(text).toContain('■ Interrupted after 4s');
+    expect(text).not.toContain('Worked for');
+  });
+
+  it('draws nothing but the closing line for an abort before any output', () => {
+    const lines = linesOf([
+      user,
+      { role: 'assistant', content: '(aborted)', interrupted: true, durationMs: 2000 },
+      user,
+    ]);
+    const text = lines.join('\n');
+    expect(text).not.toContain('(aborted)');
+    expect(text).toContain('■ Interrupted after 2s');
+  });
+
+  it('leaves a model’s own "(aborted)" alone when the turn was not interrupted', () => {
+    const lines = linesOf([
+      user,
+      { role: 'assistant', content: 'Status: (aborted)', durationMs: 1000 },
+      user,
+    ]);
+    expect(lines.join('\n')).toContain('Status: (aborted)');
   });
 });

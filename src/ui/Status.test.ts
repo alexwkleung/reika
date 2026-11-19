@@ -10,7 +10,7 @@ import {
 } from './Status.js';
 import { packChips, packStatus, type StatusPack } from './statuspack.js';
 import { theme } from './theme.js';
-import { contextFill, formatShrink, kFormat } from './format.js';
+import { contextFill, formatShrink, kFormat } from '../display/format.js';
 
 describe('kFormat', () => {
   it('shows raw numbers below 1k', () => {
