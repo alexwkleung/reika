@@ -414,16 +414,7 @@ const MAX_VERBATIM_RECOVERIES = 2;
 const REASONING_HARD_CEIL = ceilFromEnv('REIKA_REASONING_CEIL', 32000);
 const FORCE_WRITE_REASONING_CEIL = 12000;
 const VERBATIM_ABORT = process.env.REIKA_VERBATIM_ABORT !== '0';
-// Content-channel spin cut (#944). The cut above reads the reasoning stream only, so a reply that
-// degenerates in its VISIBLE output runs to the max_tokens wall and only then takes the length
-// retry — on slow local decode that is the whole window spent on text nobody can use. The bar is
-// much stricter than reasoning's (agent/contentspin.ts: near-verbatim only, past CONTENT_SPIN_MIN_CHARS,
-// no length ceiling), because content is the deliverable — a false cut throws away an answer, where
-// a false cut on a thought only costs a round. Default on: replaying 626 saved transcripts through
-// the gate, 5 replies reach the judged length — the two content loops fire (0.88 and 0.83 over the
-// trailing window) and the other three score 0.027, 0.001, 0.001. `REIKA_CONTENT_SPIN=0` is the
-// baseline arm; the `content-spin` debug line records ratio/window/fence either way, which is what
-// any threshold change has to be re-graded against (evals/contentspin-replay.ts).
+// Content-channel spin cut (#944): the cut above reads reasoning only. Rules and evidence: AGENTS.md.
 const CONTENT_SPIN = process.env.REIKA_CONTENT_SPIN !== '0';
 // One cut-retry per turn, then fall through to the round's normal recovery. A model that loops in
 // its output twice is stuck, and its next repeat simply runs to the token wall, where the length
@@ -2885,7 +2876,7 @@ export async function runTurn(opts: {
         }
       : opts.onReasoningDelta;
     // Content-channel spin cut (#944). Same debounce shape as the reasoning cut above, a much wider
-    // window and a much stricter bar — see agent/contentspin.ts for why the two channels cannot
+    // window and a much stricter bar — see AGENTS.md for why the two channels cannot
     // share a threshold. Wrapped when a recovery budget remains this turn OR under REIKA_DEBUG,
     // where the ratio is logged at every check so the thresholds can be re-graded from real runs;
     // with neither, the delta callback is passed straight through and this costs nothing.

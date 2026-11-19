@@ -1,37 +1,5 @@
-// Content-channel spin gate (#944). The live loop's other cut reads the REASONING stream only
-// (reasoningtrace.ts liveSpinSignal / verbatimAbortThreshold), so a reply that degenerates in its
-// visible output runs to max_tokens and only then takes the length retry. On slow local decode that
-// is the whole window spent on text nobody can use: measured in two saved sessions, ~24k chars of
-// "let me re-read the task…" written into `content` (thinking that leaked into the output channel,
-// so the reasoning detectors never saw it) and ~37k chars of one code block re-emitted.
-//
-// The bar here is deliberately NOT the reasoning bar. The two channels cost different things when
-// the gate is wrong. A wrong cut on reasoning throws away a thought and the model recovers from its
-// findings; a wrong cut on CONTENT throws away the deliverable — an answer or a code block the user
-// asked for. And repetitive output is not automatically wrong output: tables, generated fixtures,
-// numbered lists with a fixed shape and switch-heavy code all repeat by construction. So:
-//
-//   - ratio >= 0.8, near-verbatim only. Of the five saved replies long enough to judge, the two
-//     content loops scored 0.88 and 0.83 and the other three 0.027, 0.001 and 0.001. The reasoning
-//     curve's descent toward 0.25 (verbatimAbortThreshold) is far too loose here — that band is full
-//     of legitimate structure.
-//   - only past CONTENT_SPIN_MIN_CHARS. Below ~16k chars a high ratio is cheap to reach by accident
-//     (one paragraph said twice), and it is not a cost worth measuring: the round is short anyway.
-//   - NO absolute length ceiling, unlike REASONING_HARD_CEIL. Long output is not evidence of a loop;
-//     a 100k-char answer of distinct text keeps a low ratio and is left alone. max_tokens already
-//     bounds the length, and this gate exists to stop paying for the repetition, not the volume.
-//
-// The trailing window is what makes it a recovery and not a death sentence: the ratio is measured
-// over the most recent slice only, so a model that breaks out of the repeat clears it. Several
-// window lengths are tried and the strongest ratio wins, because a repeat has a period and a window
-// narrower than a few periods reads low (a 10k block repeated twice in 20k is a loop, but a
-// 16k-only window sees 1.5 copies and scores ~0.5). WINDOWS tops out at 64k, which spans repeats
-// with a period up to ~12k at the 0.8 bar.
-//
-// Measured with evals/contentspin-replay.ts over the saved corpus — the replay walks every assistant
-// content block through this exact function, stepping the gate the way the stream does, so it
-// reports the false-positive rate a threshold change would buy. Re-run it before moving either
-// number.
+// Content-channel spin gate (#944): the reasoning cuts never see a loop in the visible output. Why
+// the bar is stricter than reasoning's, and the replay to re-run before moving it: AGENTS.md.
 import { selfRepeatRatio } from './reasoningtrace.js';
 
 // Below this the gate judges nothing: too short to conclude a repeat from, and the round is not
@@ -39,7 +7,7 @@ import { selfRepeatRatio } from './reasoningtrace.js';
 // already obvious.
 export const CONTENT_SPIN_MIN_CHARS = 16000;
 
-// Near-verbatim only. See the header: content is the deliverable, and structure repeats legitimately.
+// Near-verbatim only. See AGENTS.md: content is the deliverable, and structure repeats legitimately.
 export const CONTENT_SPIN_RATIO = 0.8;
 
 // Re-scan cadence, in new content chars. Coarser than the reasoning debounce (400) because the
@@ -47,7 +15,7 @@ export const CONTENT_SPIN_RATIO = 0.8;
 // extra 2000 of a repeat is cheap to pay for skipping ~8 window scans.
 export const CONTENT_SPIN_DEBOUNCE = 2000;
 
-// Trailing window scales, tried in order; the strongest ratio wins (see the header). The smallest is
+// Trailing window scales, tried in order; the strongest ratio wins (see AGENTS.md). The smallest is
 // the minimum judged length, so a check below it has nothing to look at anyway.
 const CONTENT_SPIN_WINDOWS = [CONTENT_SPIN_MIN_CHARS, 32000, 64000];
 
