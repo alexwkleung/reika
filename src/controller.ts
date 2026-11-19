@@ -122,16 +122,22 @@ import type {
 // The conversation a front end shows, held outside any UI framework (#584): the scrollback of the
 // side on screen, the other side's scrollback while it is off screen, the mode, whether a turn is
 // running, the prompts waiting for it to end, whatever is waiting on the user, and whether a tool
-// has to ask at all. A front end
-// renders from `getSnapshot`/`subscribe` and changes them only through these methods, as it does
-// with the session — a copy kept in UI state goes stale between a change and the next render.
+// has to ask at all. A front end renders from `getSnapshot`/`subscribe` and changes them only
+// through these methods, as it does with the session — a copy kept in UI state goes stale between
+// a change and the next render.
 //
 // The session holds the model-facing history; this holds what the user sees, which also carries
 // notices, command echoes and shell output and is never folded.
+//
+// Map of `createController`, in file order: snapshot/live setters and autosave (`saveNow`),
+// approval/question/confirm gates, mode and model (`switchModel`, `modeChanged`), `boot`,
+// `runTurn` (mirrors every loop event into `live` and the counters), `runCommand`, the pre-send
+// questions (`decide*`, `askSubmitAnswers`), `submit`/`runLine`, then the `controller` object
+// literal, which holds the rest: queue, dialogs' answers, `transition`, `newConversation`,
+// resume, `/cd`, `/save`, `submitPrompt`, `runShell`, `runMcpCommand`, `abort`/`stop`.
 
 type Side = 'agent' | 'chat';
 
-// `loading` until the session has booted, `error` when it could not.
 const AUTOSAVE_INTERVAL_MS = 3000;
 // How often the status bar's PR is looked up again (ui/pr.ts caches the gh call per branch).
 const PR_POLL_MS = 15_000;
@@ -141,6 +147,7 @@ const PR_POLL_MS = 15_000;
 export const MAX_HISTORY_ENTRIES = 500;
 export const MAX_HISTORY_CHARS = 2_000_000;
 
+// `loading` until the session has booted, `error` when it could not.
 export type ControllerStatus = 'loading' | 'idle' | 'busy' | 'error';
 
 // What `/resume` comes to: sessions to pick from under a heading, or a line saying why not.
