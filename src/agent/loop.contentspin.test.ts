@@ -238,13 +238,14 @@ describe('content-channel spin cut (integration)', () => {
     expect(messages.some(m => m.role === 'system' && m.content.includes('repeating'))).toBe(false);
   });
 
-  it('does not judge the arguments of an in-band tool call', async () => {
-    // A model with no native tool template streams a write's file body through content.
+  it('cuts a looping in-band tool call before it runs', async () => {
+    // Judged on purpose: a stuck call argument is a loop, and cut before dispatch it writes nothing.
     h.stream.push(
-      `<tool_call>{"name":"write","arguments":{"content":${JSON.stringify(loopingContent())}}}</tool_call>`,
+      `<tool_call>{"name":"write","arguments":{"content":${JSON.stringify(loopingContent())}`,
+      'the answer',
     );
     const { messages } = await run();
-    expect(vi.mocked(callModel)).toHaveBeenCalledTimes(1);
-    expect(messages.some(m => m.role === 'system' && m.content.includes('repeating'))).toBe(false);
+    expect(vi.mocked(callModel)).toHaveBeenCalledTimes(2);
+    expect(messages.some(m => m.role === 'system' && m.content.includes('repeating'))).toBe(true);
   });
 });

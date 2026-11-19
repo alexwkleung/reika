@@ -4,7 +4,6 @@ import {
   CONTENT_SPIN_RATIO,
   contentSpinSignal,
   fenceOpenAtTail,
-  textBeforeInbandCall,
 } from './contentspin.js';
 
 // The gate this file exists for: cut a reply that repeats itself near-verbatim, and never cut one
@@ -165,25 +164,15 @@ describe('contentSpinSignal', () => {
   });
 });
 
-describe('textBeforeInbandCall', () => {
-  it('keeps content with no in-band call whole', () => {
-    expect(textBeforeInbandCall('plain answer')).toBe('plain answer');
-  });
-
-  it('stops at the first call opener of either dialect', () => {
-    expect(textBeforeInbandCall('intro <tool_call>{"name":"x"}</tool_call>')).toBe('intro ');
-    expect(textBeforeInbandCall('intro <function=write><parameter=a>b')).toBe('intro ');
-  });
-
-  it('keeps a looping preamble before a call judged', () => {
-    const r = contentSpinSignal(`${leakedThinking()}<tool_call>{"name":"read"}</tool_call>`);
+describe('in-band tool-call text', () => {
+  it('fires on an unclosed in-band call whose argument repeats (the second observed loop)', () => {
+    // A model with no native template streamed an edit whose new_string re-emitted one block until
+    // the stream was cut. Excluding call text from the gate hid exactly this loop.
+    const block = 'for (const child of node.children) {\n  paintTree(child, theme);\n}\n';
+    const r = contentSpinSignal(
+      `Let me implement the changes now.\n\n<tool_call>\n<function=edit>\n<parameter=new_string>\n${block.repeat(400)}`,
+    );
     expect(r.spinning).toBe(true);
-  });
-
-  it('does not judge a repetitive file body inside a call', () => {
-    const r = contentSpinSignal(`<tool_call>{"arguments":${JSON.stringify(leakedThinking())}}`);
-    expect(r.chars).toBe(0);
-    expect(r.spinning).toBe(false);
   });
 });
 
