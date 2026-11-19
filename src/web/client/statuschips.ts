@@ -101,7 +101,7 @@ export function statusStrip(s: WireState, stream: StreamStatus | null): StripIte
   if (shrink)
     items.push({ kind: 'stat', text: shrink, title: 'Context shed and folded this session' });
   if (s.pr) {
-    const url = s.pr.url && /^https:\/\//.test(s.pr.url) ? s.pr.url : null;
+    const url = s.pr.url && s.pr.url.startsWith('https://') ? s.pr.url : null;
     items.push({ kind: 'pr', number: s.pr.number, url, state: s.pr.state ?? null });
   }
   if (stream && stream !== 'open') items.push({ kind: 'alert', text: stream });

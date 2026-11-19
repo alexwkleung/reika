@@ -68,7 +68,7 @@ export function groupedReads(
   log: readonly LogItem[],
   index: number,
 ): boolean {
-  if (msg.role !== 'tool' || !/^Read /.test(msg.summary)) return false;
+  if (msg.role !== 'tool' || !msg.summary.startsWith('Read ')) return false;
   const nested = 'nested' in msg && !!msg.nested;
   // Same nesting level, not merely "not nested": a subagent's reads stack at the nested indent and
   // group with each other, never with a top-level row across the block boundary.

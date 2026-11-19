@@ -259,7 +259,7 @@ describe('McpClient', () => {
     const client = makeClient();
     await client.connect();
     const result = await client.callTool('ask', {});
-    const replies = JSON.parse(String((result.content?.[0] as { text: string }).text)) as {
+    const replies = JSON.parse(String((result.content![0] as { text: string }).text)) as {
       id: string;
       result?: unknown;
       error?: { code: number };
@@ -421,7 +421,7 @@ describe('McpClient', () => {
     await expect(aborted).rejects.toThrow('aborted');
     await expect(client.callTool('slow', {}, { timeoutMs: 50 })).rejects.toThrow(/after 50ms/);
     const log = await client.callTool('cancelled', {});
-    const notices = JSON.parse(String((log.content?.[0] as { text: string }).text)) as {
+    const notices = JSON.parse(String((log.content![0] as { text: string }).text)) as {
       requestId: unknown;
       reason: string;
     }[];
@@ -435,7 +435,7 @@ describe('McpClient', () => {
       const client = makeClient({ env: { FIXTURE_EXTRA: '1' } });
       await client.connect();
       const out = await client.callTool('env', {});
-      const keys = JSON.parse(String((out.content?.[0] as { text: string }).text)) as string[];
+      const keys = JSON.parse(String((out.content![0] as { text: string }).text)) as string[];
       expect(keys).toContain('PATH');
       expect(keys).toContain('FIXTURE_EXTRA');
       expect(keys).not.toContain('REIKA_MCP_TEST_SECRET');
@@ -477,7 +477,7 @@ describe('McpClient against a 2026-07-28 server', () => {
       protocol: MODERN_PROTOCOL_VERSION,
     });
     const out = await client.callTool('meta', {});
-    const { meta, seen } = JSON.parse(String((out.content?.[0] as { text: string }).text)) as {
+    const { meta, seen } = JSON.parse(String((out.content![0] as { text: string }).text)) as {
       meta: Record<string, unknown>;
       seen: string[];
     };

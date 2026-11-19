@@ -222,8 +222,8 @@ describe('App layout', () => {
     const top = rows.find(r => r.startsWith('╭'));
     expect(top).toBeDefined();
     expect(top!.length).toBe(app.stdout.columns);
-    expect(rows.find(r => /^│ > /.test(r))).toBeDefined();
-    expect(rows.find(r => /^ agent /.test(r))).toBeDefined();
+    expect(rows.find(r => r.startsWith('│ > '))).toBeDefined();
+    expect(rows.find(r => r.startsWith(' agent '))).toBeDefined();
     app.unmount();
   });
 
