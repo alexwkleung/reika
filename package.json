@@ -51,7 +51,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "build:web": "node scripts/build-web.mjs",
-    "dev": "tsx src/cli.tsx",
+    "dev": "node scripts/build-web.mjs && tsx src/cli.tsx",
     "typecheck": "tsc --noEmit && tsc -p src/web/client/tsconfig.json && tsc -p tsconfig.eval.json",
     "lint": "oxlint .",
     "lint:fix": "oxlint --fix-suggestions -A all -D no-unused-vars . ; oxlint --fix .",

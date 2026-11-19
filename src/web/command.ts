@@ -61,7 +61,7 @@ export type WebIo = {
   defaultMode?: () => Mode;
   createSession?: typeof createSession;
   // The built page's directory; dist/web/ from source and from the bundle alike, since
-  // PACKAGE_ROOT is the package root in both. From source it needs `pnpm run build:web` first.
+  // PACKAGE_ROOT is the package root in both. From source `pnpm dev` builds it first.
   clientRoot?: string;
   // Injected so a test never launches a browser, or waits out the real delays.
   openWindow?: typeof openWindow;
