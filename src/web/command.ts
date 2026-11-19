@@ -210,8 +210,8 @@ export async function runWeb(args: WebArgs, io: WebIo): Promise<WebHandle | numb
 
   const header = `reika web (experimental) — ${session.config.model} in ${session.bundle.cwd}`;
   const linkNote = [
-    'Only this machine can connect, and the link signs in one browser tab: it works once, within',
-    'ten minutes. Press Enter for a new link. ctrl-c to stop.',
+    'Only this machine can connect, and the link signs in one browser tab.',
+    'It works once, within ten minutes. Press Enter for a new link, ctrl-c to stop.',
   ];
   if (!args.window) {
     io.stdout([header, '', `  ${server.url}`, '', ...linkNote, ''].join('\n'));
