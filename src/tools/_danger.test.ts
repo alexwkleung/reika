@@ -589,7 +589,7 @@ describe('detectDangerousPatterns — destructive filesystem gaps', () => {
     expect(detectDangerousPatterns('find . -name "*.ts" -delete')).toContain(
       'Delete files by search (find -delete)',
     );
-    expect(detectDangerousPatterns('find . -name "*.ts" -exec rm {} ;')).toContain(
+    expect(detectDangerousPatterns('find . -name "*.ts" -exec rm {} \\;')).toContain(
       'Delete files by search (find -delete)',
     );
     expect(detectDangerousPatterns('find . -name "*.ts"')).toEqual([]);
