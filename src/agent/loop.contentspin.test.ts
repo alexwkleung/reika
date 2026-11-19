@@ -5,7 +5,7 @@ import ignore from 'ignore';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelResponse } from '../provider/client.js';
 import { PayloadStore } from '../store/payloads.js';
-import type { Config, ContextBundle, Message } from '../types.js';
+import type { Config, ContextBundle, Message, Tool } from '../types.js';
 
 // Drive the real runTurn loop with a scripted model to exercise the content-channel spin cut
 // end to end (#944): a reply that repeats itself in its VISIBLE output is cut mid-stream, retried
@@ -15,18 +15,20 @@ import type { Config, ContextBundle, Message } from '../types.js';
 
 const h = vi.hoisted(() => ({
   scripted: [] as ModelResponse[],
-  // Content to stream through onContentDelta for this call, in order. When an entry is present the
+  // Content to stream through onContentDelta for this call, in order. When an entry is a string the
   // call "answers" with it — which is what a cut stream returns: callModel hands back the partial
-  // content with no tool calls once the abort lands (provider/client.ts).
-  stream: [] as string[],
+  // content once the abort lands (provider/client.ts). `null` takes the next scripted response.
+  stream: [] as (string | null)[],
+  // Tool calls a streamed answer carries, as an in-band call parsed out of its content would.
+  streamCalls: [] as (ModelResponse['toolCalls'] | undefined)[],
 }));
 vi.mock('../provider/client.js', () => ({
   callModel: vi.fn(async (opts: { onContentDelta?: (t: string) => void }) => {
     const chunk = h.stream.shift();
-    if (chunk !== undefined) {
+    if (typeof chunk === 'string') {
       // Chunks larger than CONTENT_SPIN_DEBOUNCE (2000) so the gate actually runs.
       for (let i = 0; i < chunk.length; i += 1000) opts.onContentDelta?.(chunk.slice(i, i + 1000));
-      return { content: chunk, toolCalls: undefined };
+      return { content: chunk, toolCalls: h.streamCalls.shift() };
     }
     return h.scripted.shift() ?? { content: 'done', toolCalls: undefined };
   }),
@@ -119,6 +121,7 @@ describe('content-channel spin cut (integration)', () => {
     process.env.REIKA_DEBUG_FILE = logPath;
     h.scripted.length = 0;
     h.stream.length = 0;
+    h.streamCalls.length = 0;
     vi.mocked(callModel).mockClear();
   });
   afterEach(async () => {
@@ -128,6 +131,8 @@ describe('content-channel spin cut (integration)', () => {
 
   async function run(
     maxTurns = 10,
+    tools: Tool[] = [],
+    promptMode: 'agent' | 'plan' = 'agent',
   ): Promise<{ history: Message[]; messages: Message[]; log: string }> {
     const history: Message[] = [];
     const messages: Message[] = [];
@@ -136,9 +141,9 @@ describe('content-channel spin cut (integration)', () => {
       history,
       bundle: makeBundle(cwd),
       config: { ...makeConfig(), maxTurns },
-      tools: [],
+      tools,
       payloads: new PayloadStore(),
-      promptMode: 'agent',
+      promptMode,
       onMessage: m => messages.push(m),
     });
     return { history, messages, log: await readFile(logPath, 'utf8').catch(() => '') };
@@ -240,12 +245,65 @@ describe('content-channel spin cut (integration)', () => {
 
   it('cuts a looping in-band tool call before it runs', async () => {
     // Judged on purpose: a stuck call argument is a loop, and cut before dispatch it writes nothing.
+    const write = vi.fn(async () => ({ summary: 'Wrote f.txt' }));
+    const writeTool: Tool = {
+      name: 'write',
+      description: 'writes',
+      parameters: { type: 'object', properties: {}, required: [] },
+      run: write,
+    };
     h.stream.push(
       `<tool_call>{"name":"write","arguments":{"content":${JSON.stringify(loopingContent())}`,
       'the answer',
     );
-    const { messages } = await run();
+    h.streamCalls.push([{ id: 'w1', name: 'write', args: { path: 'f.txt', content: 'x' } }]);
+    const { messages } = await run(10, [writeTool]);
     expect(vi.mocked(callModel)).toHaveBeenCalledTimes(2);
     expect(messages.some(m => m.role === 'system' && m.content.includes('repeating'))).toBe(true);
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it('does not cut the plan force-write, whose recovery is its own', async () => {
+    const readTool: Tool = {
+      name: 'read',
+      description: 'reads',
+      parameters: { type: 'object', properties: {}, required: [] },
+      run: async args => ({ summary: `Read ${String(args.path)}`, payload: 'contents' }),
+    };
+    // Twelve rounds that each read a new file: only the round ceiling ends exploration.
+    for (let i = 0; i < 12; i++) {
+      h.stream.push(null);
+      h.scripted.push({
+        content: '',
+        toolCalls: [{ id: `r${i}`, name: 'read', args: { path: `src/f${i}.ts` } }],
+      });
+    }
+    h.stream.push(loopingContent());
+    const { messages, log } = await run(20, [readTool], 'plan');
+    expect(vi.mocked(callModel)).toHaveBeenCalledTimes(13);
+    expect(messages.some(m => m.role === 'system' && m.content.includes('repeating'))).toBe(false);
+    expect(log).toContain('gate=exempt');
+  });
+
+  it('drops a held continuation when the round resuming it is cut', async () => {
+    const thought = (tag: string): string =>
+      Array.from(
+        { length: 20 },
+        (_, i) => `${tag} ${i}: offset ${i * 11} maps to column ${i % 7} on the line after it`,
+      ).join('\n');
+    // Round 0 is cut at the token wall and carried; round 1 resumes it and loops in content; round 2
+    // is cut at the wall again. Its carried tail must not still hold round 0's thought.
+    h.stream.push(null, loopingContent(), null);
+    h.scripted.push(
+      { content: '', reasoning: thought('first'), finishReason: 'length', toolCalls: undefined },
+      { content: '', reasoning: thought('second'), finishReason: 'length', toolCalls: undefined },
+    );
+    const { history } = await run();
+    const tails = history.flatMap(m =>
+      m.role === 'assistant' && m.continuationTail ? [m.content ?? ''] : [],
+    );
+    expect(tails).toHaveLength(2);
+    expect(tails[1]).toContain('second 19');
+    expect(tails[1]).not.toContain('first 0');
   });
 });

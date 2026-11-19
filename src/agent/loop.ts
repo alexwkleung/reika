@@ -2877,19 +2877,19 @@ export async function runTurn(opts: {
       : opts.onReasoningDelta;
     // Content-channel spin cut (#944). Same debounce shape as the reasoning cut above, a much wider
     // window and a much stricter bar — see AGENTS.md for why the two channels cannot
-    // share a threshold. Wrapped when a recovery budget remains this turn OR under REIKA_DEBUG,
-    // where the ratio is logged at every check so the thresholds can be re-graded from real runs;
-    // with neither, the delta callback is passed straight through and this costs nothing.
+    // share a threshold. Wrapped when the round can be cut OR under REIKA_DEBUG, where the ratio is
+    // logged at every check so the thresholds can be re-graded from real runs; with neither, the
+    // delta callback is passed straight through and this costs nothing.
     let roundContent = '';
     let contentCheckedAt = 0;
     let contentSpinCut = false;
-    // Never on the last budgeted round (a retry cannot happen there, and a subagent's report round
-    // would hand the parent nothing) or on a plan force-write, whose recovery is its own ladder.
-    const canCutContentSpin =
-      CONTENT_SPIN &&
-      contentSpinRecoveries < MAX_CONTENT_SPIN_RECOVERIES &&
-      i < opts.config.maxTurns - 1 &&
-      !planForceWrite;
+    // Forced rounds, where the round after a cut is not a retry of this one: the last budgeted round
+    // (a subagent's report round would hand the parent nothing), a plan force-write, and the agent
+    // terminal's steer and logit rounds (the next step is the loop stop).
+    const contentSpinExempt =
+      i >= opts.config.maxTurns - 1 || planForceWrite || convergeSteerNow || !!logitBias;
+    const contentSpinBudgetLeft = contentSpinRecoveries < MAX_CONTENT_SPIN_RECOVERIES;
+    const canCutContentSpin = CONTENT_SPIN && contentSpinBudgetLeft && !contentSpinExempt;
     const onContentDelta =
       canCutContentSpin || debugEnabled()
         ? (delta: string): void => {
@@ -2903,7 +2903,15 @@ export async function runTurn(opts: {
             // is a zero by construction, and logging it would bury the checks that mean something.
             if (reading.chars < CONTENT_SPIN_MIN_CHARS) return;
             const cut = canCutContentSpin && reading.spinning;
-            const gate = cut ? 'cut' : reading.spinning ? 'spent' : 'measure';
+            const gate = cut
+              ? 'cut'
+              : !reading.spinning
+                ? 'measure'
+                : !CONTENT_SPIN
+                  ? 'off'
+                  : contentSpinExempt
+                    ? 'exempt'
+                    : 'spent';
             if (debugEnabled()) {
               debugLog(
                 `[reika:debug] content-spin round=${i} ratio=${reading.ratio.toFixed(2)} ` +
