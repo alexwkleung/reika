@@ -86,7 +86,10 @@ export default defineConfigWithTheme<TranslationTheme>({
           },
           {
             text: '项目',
-            items: [{ text: '支持项目（英文）', link: '/zh/support' }],
+            items: [
+              { text: '支持项目（英文）', link: '/zh/support' },
+              { text: '贡献者', link: '/zh/contributors' },
+            ],
           },
         ],
         outline: { label: '本页目录' },
@@ -188,7 +191,10 @@ export default defineConfigWithTheme<TranslationTheme>({
       },
       {
         text: 'Project',
-        items: [{ text: 'Support', link: '/support' }],
+        items: [
+          { text: 'Support', link: '/support' },
+          { text: 'Contributors', link: '/contributors' },
+        ],
       },
     ],
     socialLinks: [{ icon: 'github', link: 'https://github.com/alexwkleung/reika' }],
