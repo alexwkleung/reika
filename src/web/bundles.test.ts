@@ -48,30 +48,20 @@ describe('bundle boundaries', () => {
     ).toEqual([]);
     const imports = Object.values(result.metafile.inputs).flatMap(f => f.imports.map(i => i.path));
     expect(imports.filter(p => p.startsWith('node:'))).toEqual([]);
-    // Each a pure module the TUI also uses, so both front ends draw by one set of rules. A new
-    // entry must be Ink-, chalk- and Node-free all the way down; listed so one cannot arrive unseen.
-    const SHARED = [
-      'src/mcp/toolprefix.ts', // the MCP name prefix toolLabel reads
-      'src/ui/commandtail.ts', // the command chip's output tail, live and committed
-      'src/ui/diffrows.ts', // diff line numbering
-      'src/ui/format.ts', // toolLabel, toolVerb, toolTimer, changeLabel, prefillLabel
-      'src/ui/harnessecho.ts', // reasoningfold's echo strip
-      'src/ui/intraline.ts', // which paired diff lines get word highlights; the path's language
-      'src/ui/pastes.ts', // protocol's paste marker check; imports nothing
-      'src/ui/pendingrow.ts', // PENDING_ROW_DELAY_MS (its hook imports only react)
-      'src/ui/planwindow.ts', // the plan checklist's fold and tail cap
-      'src/ui/reasoningfold.ts', // the display-only reasoning fold
-      'src/ui/scrollbackrules.ts', // read-verb elision, notice lead, call args, grouped reads
-      'src/ui/shimmer.ts', // the busy line's glow colours, solved per hue as the TUI's are
-      'src/ui/workingwords.ts', // the busy line's verbs, spinner and sweep timing
-      'src/web/protocol.ts', // PROTOCOL_VERSION; its one value import is ui/pastes.ts
-    ];
+    // Outside the client, the page reaches only src/display/ (the display rules both front ends
+    // draw by; display.test.ts keeps that directory Ink-, chalk- and Node-free) and these two.
     const outside = inputs.filter(f => f.startsWith('src/') && !f.startsWith('src/web/client/'));
-    expect(outside.sort()).toEqual(SHARED);
+    const BESIDE_DISPLAY = [
+      'src/mcp/toolprefix.ts', // the MCP name prefix toolLabel reads
+      'src/web/protocol.ts', // PROTOCOL_VERSION; its one value import is display/pastes.ts
+    ];
+    expect(
+      outside.filter(f => !f.startsWith('src/display/') && !BESIDE_DISPLAY.includes(f)),
+    ).toEqual([]);
     expect(result.metafile.inputs['src/web/protocol.ts']!.imports.map(i => i.path)).toEqual([
-      'src/ui/pastes.ts',
+      'src/display/pastes.ts',
     ]);
-    expect(result.metafile.inputs['src/ui/pastes.ts']!.imports).toEqual([]);
+    expect(result.metafile.inputs['src/display/pastes.ts']!.imports).toEqual([]);
     const imported = outside.flatMap(f => result.metafile.inputs[f]!.imports.map(i => i.path));
     expect(
       imported.filter(

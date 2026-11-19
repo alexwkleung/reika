@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PASTE_LINE_THRESHOLD } from '../../ui/pastes.js';
+import { PASTE_LINE_THRESHOLD } from '../../display/pastes.js';
 import { afterSend, parkPaste, pastesFor } from './composerpastes.js';
 
 const big = (tag: string) => `${tag}\n`.repeat(PASTE_LINE_THRESHOLD);

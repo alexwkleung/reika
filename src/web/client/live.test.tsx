@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { WireLive } from '../protocol.js';
-import { WORKING_WORDS } from '../../ui/workingwords.js';
+import { WORKING_WORDS } from '../../display/workingwords.js';
 import { ReasoningBlock } from './blocks.js';
 import { BusyLine, busyLabel, LiveTurn } from './LiveTurn.js';
 

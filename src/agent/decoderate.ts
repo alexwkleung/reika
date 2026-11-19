@@ -138,7 +138,7 @@ export class DecodeRate {
 
 // `<rate>tok/s`, or `?` when there is no number to print — the debug line's field shape, and the
 // ONLY rendering of a rate that reaches a log line: `prefillcost.ts` imports this one for the
-// prefill rate it prints, so both lines state a rate identically. The chip's is `ui/format.ts`'s
+// prefill rate it prints, so both lines state a rate identically. The chip's is `display/format.ts`'s
 // formatTokensPerSecond (a space, no `?`); this one is for the log, where an absent value is stated
 // rather than omitted (a missing field reads as a cheap round), and where four digits want no
 // decimal. Both spell the unit `tok/s`, so the log and the chip agree on what the number IS even

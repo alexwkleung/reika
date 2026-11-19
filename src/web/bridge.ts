@@ -6,7 +6,7 @@ import { loadSession, type SessionEntry, type SessionSides } from '../store/sess
 import type { ApprovalRequest, Message, QuestionRequest } from '../types.js';
 import type { ConfirmSpec } from '../ui/dialogspecs.js';
 import type { ModelTarget } from '../ui/models.js';
-import { adoptPastes, type PastedText } from '../ui/pastes.js';
+import { adoptPastes, type PastedText } from '../display/pastes.js';
 import { submitStageLabel } from '../agent/submitinput.js';
 import { compactThreshold } from '../agent/compaction.js';
 import { scrubGeneration } from '../ui/identity.js';

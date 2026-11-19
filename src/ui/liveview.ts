@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Controller, LiveTurn } from '../controller.js';
 import type { LiveUsage } from '../agent/liveusage.js';
 import type { Usage } from '../types.js';
-import { prefillLabel } from './format.js';
+import { prefillLabel } from '../display/format.js';
 
 // The TUI's view of the controller's live turn (#584): the state and its clearing rules are the
 // controller's; what is left here is display timing.

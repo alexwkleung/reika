@@ -1,4 +1,4 @@
-import { pasteMarkersIn, rememberPaste, type PastedText } from '../../ui/pastes.js';
+import { pasteMarkersIn, rememberPaste, type PastedText } from '../../display/pastes.js';
 
 // Large pastes, parked as the TUI parks them (#120): the box holds a `[Pasted text #N …]` marker
 // and the text rides beside it on submit, so the server's questions read only the words typed

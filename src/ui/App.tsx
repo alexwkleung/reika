@@ -22,7 +22,7 @@ import { Scrollback } from './Scrollback.js';
 import { VERSION } from '../version.js';
 import { Input } from './Input.js';
 import { Working } from './Working.js';
-import { WORKING_WORDS } from './workingwords.js';
+import { WORKING_WORDS } from '../display/workingwords.js';
 import { usePendingRow } from './pendingrow.js';
 import { PlanProgress, planProgressRows } from './PlanProgress.js';
 import { Status, useStatusLayout, type StatusProps } from './Status.js';
@@ -51,7 +51,7 @@ import { clipboardImageSupported, readClipboardImage } from './clipboard.js';
 import { isWarmEdge } from './warmtrigger.js';
 import { Suggestions, suggestionRows } from './Suggestions.js';
 import { ModelSelect } from './ModelSelect.js';
-import { mcpStartupLine, prefillLabel } from './format.js';
+import { mcpStartupLine, prefillLabel } from '../display/format.js';
 import { useContentWidth } from './layout.js';
 import { ResumeSelect } from './ResumeSelect.js';
 import { loadSession, type SessionEntry, type SessionSides } from '../store/sessions.js';
@@ -63,7 +63,7 @@ import { QueuedList } from './QueuedList.js';
 import { createController, type InputFrontEnd, type TurnFrontEnd } from '../controller.js';
 import { useLiveView } from './liveview.js';
 import { type SubmitAnswers } from '../agent/busyqueue.js';
-import { rememberPaste, type PastedText } from './pastes.js';
+import { rememberPaste, type PastedText } from '../display/pastes.js';
 import type {
   ApprovalAnswer,
   ApprovalRequest,
@@ -281,7 +281,7 @@ export function App() {
   // and re-rendering on paste would fight the Input's own cursor bookkeeping.
   const imageAttachmentsRef = useRef<ImageAttachment[]>([]);
   // Text from pastes too large to sit in the input buffer, keyed by the `[Pasted text #N +412 lines]` marker
-  // holding its place there (ui/pastes.ts). Ref-held for the same reason as image attachments.
+  // holding its place there (display/pastes.ts). Ref-held for the same reason as image attachments.
   // Unlike them it is NOT consumed at submit: the marker is plain text the user can recall from
   // history or leave sitting in a queued message, and it has to still expand when they do.
   const pastedTextsRef = useRef<PastedText[]>([]);

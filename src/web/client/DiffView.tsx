@@ -1,13 +1,13 @@
 import { memo, type ReactNode } from 'react';
-import { assignLineNumbers, parseDiffBlocks, type RenderRow } from '../../ui/diffrows.js';
-import { detectLanguage, intraLineParts } from '../../ui/intraline.js';
+import { assignLineNumbers, parseDiffBlocks, type RenderRow } from '../../display/diffrows.js';
+import { detectLanguage, intraLineParts } from '../../display/intraline.js';
 import { highlightNodes, sliceNodes, toReact } from './highlight.js';
 import './diff.css';
 
-// An edit's or a hunk's `+ `/`- `/`  ` lines, numbered by the TUI's rules (ui/diffrows.ts): a
+// An edit's or a hunk's `+ `/`- `/`  ` lines, numbered by the TUI's rules (display/diffrows.ts): a
 // removed line takes the old file's number, an added or context line the new file's. No gutter
 // without a start line, as in the TUI. Every row is syntax-coloured from the path, and a paired
-// line marks its changed words when the TUI would (ui/intraline.ts).
+// line marks its changed words when the TUI would (display/intraline.ts).
 
 function rowContent(row: RenderRow, language: string): ReactNode[] {
   const nodes = highlightNodes(row.text, language);

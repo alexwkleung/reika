@@ -10,7 +10,7 @@ import { Scrollback, markProse, noticeLead } from './Scrollback.js';
 import { drawnWidth } from './termtext.js';
 import { contentWidth } from './layout.js';
 import { clearIdentity, setIdentity } from './identity.js';
-import { TIMER_AFTER_S } from './format.js';
+import { TIMER_AFTER_S } from '../display/format.js';
 import { renderMarkdown } from './markdown.js';
 import { theme } from './theme.js';
 import type { Message } from '../types.js';
@@ -280,7 +280,7 @@ describe('Scrollback nested (subagent) messages', () => {
 
   it('folds a thinking tail the endpoint cut at a tag the model wrote in its own prose', () => {
     // The parser ends the reasoning channel at a literal tag in the model's prose, so the rest of
-    // the thought arrives as `content` (ui/reasoningfold.ts). It belongs behind the bar, with no
+    // the thought arrives as `content` (display/reasoningfold.ts). It belongs behind the bar, with no
     // prose row under it.
     const frame = framePlusApp([
       {

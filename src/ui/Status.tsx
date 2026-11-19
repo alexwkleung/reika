@@ -12,7 +12,7 @@ import {
   formatShrink,
   formatTokensPerSecond,
   kFormat,
-} from './format.js';
+} from '../display/format.js';
 
 export { formatCache, formatContext };
 import { useContentWidth } from './layout.js';

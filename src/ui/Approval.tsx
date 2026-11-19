@@ -16,7 +16,7 @@ import {
   wrappedRows,
   wrapStyledRows,
 } from './layout.js';
-import { toolLabel } from './format.js';
+import { toolLabel } from '../display/format.js';
 
 // The dialog's own border (1 column each side) plus its paddingX={1}, on top of the App padding
 // contentWidth already accounts for. The diff has to wrap inside all of it or its rows push

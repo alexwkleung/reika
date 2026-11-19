@@ -22,10 +22,10 @@ import {
   toolTimer,
   toolVerb,
   turnEndLabel,
-} from './format.js';
+} from '../display/format.js';
 import { contentWidth, hangingWrap, wrapLines } from './layout.js';
-import { foldedAssistantFields, foldedLiveFields } from './reasoningfold.js';
-import { OUTPUT_TAIL_LINES } from './commandtail.js';
+import { foldedAssistantFields, foldedLiveFields } from '../display/reasoningfold.js';
+import { OUTPUT_TAIL_LINES } from '../display/commandtail.js';
 import {
   elidedReadSummary,
   formatArgs,
@@ -33,7 +33,7 @@ import {
   hasBlockUnderSummary,
   noticeLead,
   type LogItem,
-} from './scrollbackrules.js';
+} from '../display/scrollbackrules.js';
 
 export { elidedReadSummary, noticeLead };
 
@@ -96,7 +96,7 @@ export function Scrollback({
   const indent = streamingNested ? NESTED_INDENT : 0;
   const toolOffset = streamingCommand ? COMMAND_MARGIN : 0;
   const region = liveRegionRows(chromeRows);
-  // Same display-only fold as the committed message (ui/reasoningfold.ts), so a thought the
+  // Same display-only fold as the committed message (display/reasoningfold.ts), so a thought the
   // endpoint cut at a tag the model wrote in its own prose stays in its block while it streams
   // instead of landing in the content area and jumping up to the Thinking block on commit.
   // Skipped for the compaction note, whose content is a harness aside rather than model reasoning
@@ -892,7 +892,7 @@ function renderMessage(
   }
   if (msg.role === 'assistant') {
     // Display-only fold for a reasoning block the endpoint cut at a tag the model wrote in its own
-    // prose (ui/reasoningfold.ts). Skipped for a plan-checks message: that offset indexes into
+    // prose (display/reasoningfold.ts). Skipped for a plan-checks message: that offset indexes into
     // `content`, and the fold would move the bytes it counts.
     const folded = msg.planChecks
       ? { reasoning: msg.reasoning, content: msg.content }

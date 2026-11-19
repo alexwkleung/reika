@@ -23,7 +23,7 @@ import { resolveSkillCommand } from '../agent/turncommands.js';
 import { matchSkill, shouldAutoInject } from '../skills/skillmatch.js';
 import { autoApproves } from '../approval.js';
 import { budgetWarning } from '../context/bundlesize.js';
-import { formatElapsed, toolLabel } from '../ui/format.js';
+import { formatElapsed, toolLabel } from '../display/format.js';
 import { stripTerminalControls } from '../ui/termtext.js';
 import { debugLog, processSessionStem } from '../debug.js';
 import { callMcpTool, findMcpCommand, parseMcpArgs } from '../mcp/tools.js';

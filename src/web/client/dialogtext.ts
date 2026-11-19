@@ -1,4 +1,4 @@
-import { toolLabel } from '../../ui/format.js';
+import { toolLabel } from '../../display/format.js';
 
 // The words the dialogs put on what they ask about. Pure, so the wording is tested without a page.
 

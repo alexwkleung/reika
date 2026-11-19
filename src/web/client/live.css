@@ -68,7 +68,7 @@
 }
 /* The TUI's glow: the label rests at a dim tint of its state's colour and a brighter band sweeps
    across it, then pauses off the end (the gradient's last third), as ui/Working.tsx does. The
-   page sets the real gradient inline from ui/shimmer.ts (sweepGradient, LiveTurn.tsx); this one
+   page sets the real gradient inline from display/shimmer.ts (sweepGradient, LiveTurn.tsx); this one
    stands only where the state's colour cannot be read. */
 .busy-label {
   --busy-base: color-mix(in oklab, var(--busy-tone) 82%, var(--reika-page-bg));

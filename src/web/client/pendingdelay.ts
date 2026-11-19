@@ -1,6 +1,6 @@
-import { PENDING_ROW_DELAY_MS } from '../../ui/pendingrow.js';
+import { PENDING_ROW_DELAY_MS } from '../../display/pendingrow.js';
 
-// The TUI's rule (ui/pendingrow.ts, #951): a call that returns inside the delay paints no
+// The TUI's rule (display/pendingrow.ts, #951): a call that returns inside the delay paints no
 // `↳ Running…` row, since a row replaced a moment later reads as a flicker.
 
 export { PENDING_ROW_DELAY_MS };

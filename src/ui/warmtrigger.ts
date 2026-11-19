@@ -1,6 +1,6 @@
 import { hasImageMarker } from '../agent/attachments.js';
 import { hasBareImagePath } from '../agent/mentions.js';
-import { hasPasteMarker } from './pastes.js';
+import { hasPasteMarker } from '../display/pastes.js';
 
 // When a buffer edit is worth spending a speculative prefix warm on (#81, REIKA_WARM).
 //
@@ -15,7 +15,7 @@ import { hasPasteMarker } from './pastes.js';
 //        rather than left to the '/' rule: a dropped path is usually absolute, so it happens
 //        to look like a command, and that coincidence shouldn't be what covers it.
 //   [Pasted text #N …], [Image N]  markers standing in for text parked out of the buffer,
-//        spliced back in at submit (ui/pastes.ts, agent/attachments.ts).
+//        spliced back in at submit (display/pastes.ts, agent/attachments.ts).
 //
 // The expanding cases aren't just larger than the allowance, they're the ones most likely
 // to push the real submit into compaction — which rewrites mid-history and throws away exactly

@@ -1,5 +1,5 @@
 import { MAX_COMPLETE_CHARS } from '../protocol.js';
-import { hasPasteMarker } from '../../ui/pastes.js';
+import { hasPasteMarker } from '../../display/pastes.js';
 
 // When the box tells the server a prompt has begun, so it can warm the engine's cache (#998). The
 // TUI's `isWarmEdge`, minus the bare-image-path check, which needs Node: the server applies the

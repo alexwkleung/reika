@@ -9,7 +9,7 @@ import {
 import { expandPastedUrls, planPastedUrls } from './pastedurls.js';
 import { matchSkill, shouldConfirmInject, type SkillMatch } from '../skills/skillmatch.js';
 import { imageReader, pasteIsNative } from '../ocr/select.js';
-import { expandPastes, type PastedText } from '../ui/pastes.js';
+import { expandPastes, type PastedText } from '../display/pastes.js';
 import type { Skill } from '../skills/skills.js';
 import type { Config, Mode, PasteFetchMode, SkillAutoMode } from '../types.js';
 

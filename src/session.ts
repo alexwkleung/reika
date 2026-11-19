@@ -26,7 +26,7 @@ import type { NativeImage } from './agent/attachments.js';
 import { GenReserve, withGenReserve } from './agent/genreserve.js';
 import { detectIdentity, setIdentity } from './ui/identity.js';
 import { setDisplayRoot } from './ui/paths.js';
-import { kFormat } from './ui/format.js';
+import { kFormat } from './display/format.js';
 import { planWritten } from './ui/commands.js';
 import {
   isMinimalPrompt,

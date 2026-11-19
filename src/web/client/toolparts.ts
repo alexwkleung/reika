@@ -1,5 +1,5 @@
-import { HIDDEN_TOOL_ARGS } from '../../ui/format.js';
-import { formatArgs } from '../../ui/scrollbackrules.js';
+import { HIDDEN_TOOL_ARGS } from '../../display/format.js';
+import { formatArgs } from '../../display/scrollbackrules.js';
 
 // How the page draws a tool call and its result: the words in the page's font and the literal they
 // act on (a command, a path, a pattern, a URL) as inline code. The TUI prints both in one monospace

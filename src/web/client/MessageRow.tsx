@@ -1,7 +1,7 @@
 import { memo, type ReactNode } from 'react';
-import { changeLabel, displayProse, toolLabel, toolTimer } from '../../ui/format.js';
-import { foldedAssistantFields } from '../../ui/reasoningfold.js';
-import { elidedReadSummary, noticeLead } from '../../ui/scrollbackrules.js';
+import { changeLabel, displayProse, toolLabel, toolTimer } from '../../display/format.js';
+import { foldedAssistantFields } from '../../display/reasoningfold.js';
+import { elidedReadSummary, noticeLead } from '../../display/scrollbackrules.js';
 import type { WireMessage } from '../protocol.js';
 import {
   GLYPH,
@@ -93,7 +93,7 @@ function AssistantRow({ m }: { m: Of<'assistant'> }) {
       </div>
     );
   }
-  // The display-only fold (ui/reasoningfold.ts), skipped for a plan-checks message: its offset
+  // The display-only fold (display/reasoningfold.ts), skipped for a plan-checks message: its offset
   // indexes into `content`, and the fold would move the bytes it counts.
   const folded = m.planChecks
     ? { reasoning: m.reasoning, content: m.content }

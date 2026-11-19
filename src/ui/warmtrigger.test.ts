@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { isWarmEdge, isWarmableInput } from './warmtrigger.js';
-import { rememberPaste } from './pastes.js';
+import { rememberPaste } from '../display/pastes.js';
 import { nextImageMarker } from '../agent/attachments.js';
 
 describe('isWarmableInput', () => {

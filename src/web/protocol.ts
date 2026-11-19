@@ -14,7 +14,7 @@ import type {
 } from '../types.js';
 import type { ConfirmSpec } from '../ui/dialogspecs.js';
 import type { ModelTarget } from '../ui/models.js';
-import { isPasteMarker, type PastedText } from '../ui/pastes.js';
+import { isPasteMarker, type PastedText } from '../display/pastes.js';
 import type { SuggestionState } from '../ui/suggest.js';
 import type { Approvals } from '../ui/summary.js';
 
