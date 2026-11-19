@@ -1843,7 +1843,7 @@ describe('detectDangerousPatterns — an interpreter reading its program from st
     expect(detectDangerousPatterns(py(`os.system("""pkill node""")`))).toEqual([
       `via python3 -: ${PKILL}`,
     ]);
-    expect(detectDangerousPatterns(py(`os.system(f\'\'\'curl x\'\'\')`))).toEqual([
+    expect(detectDangerousPatterns(py(`os.system(f'''curl x''')`))).toEqual([
       `via python3 -: ${CURL}`,
     ]);
     // Joined back, an argument is still an argument, and a list stops at what it cannot read.

@@ -2,7 +2,7 @@
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["typescript", "react", "unicorn"],
   "categories": {
-    "correctness": "off"
+    "correctness": "error"
   },
   "env": {
     "builtin": true,
@@ -17,6 +17,16 @@
   ],
   "rules": {
     "no-array-constructor": "error",
+    "no-control-regex": "off",
+    "unicorn/no-useless-spread": "off",
+    "unicorn/no-new-array": "off",
+    "react/refs": "off",
+    "react/immutability": "off",
+    "react/purity": "off",
+    "react/set-state-in-effect": "off",
+    "react/preserve-manual-memoization": "off",
+    "react/globals": "off",
+    "react/error-boundaries": "off",
     "no-unused-expressions": "error",
     "no-empty": [
       "warn",
@@ -29,7 +39,7 @@
     "typescript/ban-ts-comment": "error",
     "typescript/no-duplicate-enum-values": "error",
     "typescript/no-empty-object-type": "error",
-    "typescript/no-explicit-any": "warn",
+    "typescript/no-explicit-any": "error",
     "typescript/no-extra-non-null-assertion": "error",
     "typescript/no-misused-new": "error",
     "typescript/no-namespace": "error",
