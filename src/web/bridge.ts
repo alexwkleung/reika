@@ -134,6 +134,14 @@ function startsWithByIdentity(next: Message[], prev: Message[]): boolean {
   return next.length >= prev.length && prev.every((m, i) => next[i] === m);
 }
 
+// `/help`'s key rows for the page: the TUI's ctrl-v and shift+tab do other things in a browser.
+export const WEB_HELP_KEYS: readonly string[] = [
+  '  ⌘V/Ctrl+V, drop    attach an image; its text is read out and attached',
+  '  shift+enter        new line in the input box',
+  '  esc                stop the running turn (from an empty input box)',
+  '  mode pill          switch mode (the menu in the input box)',
+];
+
 export function createWebBridge(
   controller: Controller,
   // `now` must be the controller's clock: a live event pairs it with `pending.since`.
@@ -665,6 +673,7 @@ export function createWebBridge(
         answered: false,
       });
     },
+    helpKeys: WEB_HELP_KEYS,
     shell: {},
     onStage: next => {
       stage = next ? submitStageLabel(next) : null;
@@ -841,6 +850,10 @@ export function createWebBridge(
           return { ok: true };
         }
         case 'abort':
+          // As the TUI's ctrl-c: an open approval is declined and a question dropped first. An
+          // abort alone leaves the tool waiting on an answer, and the dialog up over a stopped turn.
+          if (controller.approval) controller.answerApproval(false);
+          if (controller.question) controller.answerQuestion(null);
           controller.abort();
           return { ok: true };
         case 'discard':
@@ -882,12 +895,12 @@ export function createWebBridge(
         }
         case 'new': {
           // Its own message rather than a submitted `/new`, which mid-turn would be queued and
-          // wipe the conversation whenever the turn ended.
+          // wipe the conversation whenever the turn ended. No echo: nobody typed `/new`.
           const busy = switchRefusal('conversations');
           if (busy) return busy;
           supersedePicker('session');
           clearUploads();
-          controller.newConversation({ role: 'user', content: '/new', meta: true });
+          controller.newConversation();
           return { ok: true };
         }
         case 'answer':

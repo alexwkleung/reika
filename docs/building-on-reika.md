@@ -18,8 +18,8 @@ If what you want is a different front end rather than a different harness, you d
 anything. [`createController`](../src/controller.ts) holds everything a front end needs: the
 conversation on screen, the approval gate, the open dialogs, the busy queue and the running turn's
 live state, read through `subscribe`/`getSnapshot` and changed only through its methods. The
-terminal UI and the web bridge ([`web/bridge.ts`](../src/web/bridge.ts)) are both front ends over
-it, and neither keeps a copy of that state.
+terminal UI and the [web front end](web.md) are both front ends over it, and neither keeps a copy
+of that state.
 
 ## What lifts out whole
 

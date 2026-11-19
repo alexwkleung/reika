@@ -1,0 +1,89 @@
+/* The quiet strip under the input box (direction B). */
+.status {
+  padding: 0.5rem 0.25rem 0.75rem;
+  font-family: var(--reika-prose);
+  /* The page's small-text size, as the input box's controls and the sidebar's details use. */
+  font-size: 0.875rem;
+  color: var(--reika-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.status-strip {
+  display: flex;
+  /* On the chips' first line when they wrap, not centred across all of them. */
+  align-items: flex-start;
+  gap: 0.25rem 1.125rem;
+  min-width: 0;
+}
+/* The chips wrap among themselves. */
+.status-items {
+  flex: 1 1 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem 1.125rem;
+  min-width: 0;
+}
+.status-tag--auto-approve {
+  color: var(--reika-auto-approve);
+}
+.status-tag--bypass {
+  color: var(--reika-error);
+}
+.status-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  white-space: nowrap;
+}
+.status-track {
+  width: 3.5rem;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--reika-control-border);
+  overflow: hidden;
+  /* Centred on the line box the bar sits at cap height, so the lowercase tag beside it reads low;
+     the middle of the x-height is where it looks centred against both. */
+  transform: translateY(0.09em);
+}
+.status-fill {
+  display: block;
+  height: 100%;
+  background: var(--reika-secondary);
+}
+.status-meter--warn {
+  color: var(--reika-warning);
+}
+.status-meter--warn .status-fill {
+  background: var(--reika-warning);
+}
+.status-stat {
+  white-space: nowrap;
+}
+.status-pr {
+  white-space: nowrap;
+}
+/* A transcript link's colour and underline, as the TUI's chip underlines the number when it opens
+   the PR; unlinked (under /anon, #990) it keeps the strip's own colour and no underline. */
+.status-pr a {
+  color: var(--reika-link);
+  text-decoration: underline;
+}
+.status-pr a:focus-visible {
+  outline: 2px solid var(--reika-accent);
+  outline-offset: 2px;
+}
+.status-pr-state--draft {
+  color: var(--reika-secondary);
+}
+.status-pr-state--merged {
+  color: var(--reika-pr-merged);
+}
+.status-alert {
+  color: var(--reika-warning);
+}
+.status-error {
+  color: var(--reika-error);
+  font-size: 1.15em;
+  margin-bottom: 0.25rem;
+  overflow-wrap: anywhere;
+}

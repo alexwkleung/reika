@@ -3,6 +3,21 @@
 User-facing changes in each release: fixes, changed behavior or defaults, new or renamed config
 keys, commands and tools. Reika is 0.x, so a minor version may change behavior and config.
 
+## [Unreleased]
+
+### Added
+
+- `reika web` serves the agent to a browser tab on this machine, and `reika web --window` opens it in
+  its own app window that stops Reika when it closes. It is the same session as the terminal UI —
+  modes, tools, approvals, auto-save — with a history pane for this project's saved sessions, and
+  images pasted or dropped on the input box. Experimental. See [docs/web.md](docs/web.md) (#1014).
+
+### Changed
+
+- `/new` (and New conversation in `reika web`) keeps the model you are on instead of switching back
+  to the default profile. It still resets the conversation, tokens and mode, and `REIKA_MODE_MODELS`
+  applies over the kept model again (#1033).
+
 ## [0.12.0] - 2026-11-17
 
 ### Changed

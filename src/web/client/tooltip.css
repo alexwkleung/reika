@@ -1,0 +1,35 @@
+/* The page's tooltip (Tooltip.tsx): a small raised label, placed by script once measured. */
+.tip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 10;
+  max-width: 18rem;
+  padding: 0.25rem 0.5rem;
+  font-family: var(--reika-prose);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  color: var(--reika-text);
+  background: var(--reika-code-bg);
+  border: 1px solid var(--reika-rule-strong);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.35);
+  overflow-wrap: anywhere;
+  pointer-events: none;
+  /* Hidden until placed, so the first frame never draws it at the corner. */
+  visibility: hidden;
+}
+.tip[data-placed] {
+  visibility: visible;
+  animation: tip-in 100ms ease-out;
+}
+@keyframes tip-in {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tip[data-placed] {
+    animation: none;
+  }
+}

@@ -319,6 +319,8 @@ export type CommandFrontEnd = {
   // Bare /model and /resume: the front end shows its own picker over what the controller lists.
   pickModel(targets: ModelTarget[]): void;
   pickSession(list: { entries: SessionEntry[]; heading: string }): void;
+  // `/help`'s key rows for this front end's keys; the TUI's when absent.
+  helpKeys?: readonly string[];
 };
 
 // What a front end hands `submit` for a typed line: the command hooks, the shell's, and the input
@@ -428,7 +430,8 @@ export type Controller = {
   // in agent mode on the default profile with the counters, the auto-approve toggle and the model
   // pick cleared. The scrollback is seeded with the echo and a receipt, since an empty screen
   // reads as a fresh launch.
-  newConversation(echo: Message): void;
+  // No echo is a click (the web's New conversation): the cleared transcript is its receipt.
+  newConversation(echo?: Message): void;
   // Puts a saved session in this one's place and hands back the rows to show: the side that is
   // now on screen, then a receipt. The caller shows them, in slices if it wants, starting with a
   // `replace`. A session with only one side opens on that side (#875).
@@ -1131,6 +1134,7 @@ export function createController(opts: {
       startedAt,
       approvals: snapshot.approvals,
       mcpList: () => session?.mcp.list(),
+      ...(front.helpKeys ? { helpKeys: front.helpKeys } : {}),
     });
     if (reply !== null) {
       append(echo, { role: 'system', content: reply });
@@ -1649,23 +1653,25 @@ export function createController(opts: {
       sessionPath = null;
       saveHold = null;
       set({
-        messages: [
-          echo,
-          { role: 'system', content: 'New session — conversation, tokens, and mode reset.' },
-        ],
+        messages: echo
+          ? [
+              echo,
+              { role: 'system', content: 'New session — conversation, tokens, and mode reset.' },
+            ]
+          : [],
         approvals: { approved: 0, declined: 0 },
         sessionAutoApprove: null,
         ...freshMeasurements(),
         // The tok/s chip goes with the token counts it sits next to (#204).
         decodeRate: undefined,
       });
-      // Also drops back to the default profile, which may be another model on other hardware.
-      session?.reset({ relearn: true });
+      // The model stays: it is the user's choice, not the conversation's, and a launch reopens it too.
+      session?.reset();
       session?.switchSide('agent');
-      // A picked model belonged to the conversation that just went away. Unpinned before the mode
-      // moves: the mode's model is applied over `ownProfile`, which must already be the default.
+      // A picked model becomes the session's own, unpinned so the mode map applies over it again.
+      // Set before the mode moves, since the mode's model is applied over `ownProfile`.
+      if (modelPinned && session) ownProfile = session.profile;
       modelPinned = false;
-      ownProfile = 'default';
       setMode('agent');
       applyModeModel();
       setLive(emptyLive());
@@ -1674,7 +1680,7 @@ export function createController(opts: {
       conversation++;
       setLive(emptyLive());
       stashed = {};
-      session?.reset({ relearn: false });
+      session?.reset();
       // A project session carries on in its own file. A manual save from the root is left as it
       // was, and the continuation gets a project file of its own at its next save.
       stopSaveTimer();

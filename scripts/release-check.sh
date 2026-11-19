@@ -27,7 +27,7 @@ tgz="$work/$(echo "$name" | sed 's/^@//; s/\//-/')-$version.tgz"
 step "tarball contents"
 listing="$(tar -tzf "$tgz")"
 echo "$(echo "$listing" | wc -l | tr -d ' ') files, $(du -h "$tgz" | cut -f1) packed"
-for required in package/dist/cli.js package/LICENSE package/NOTICE package/README.md package/skills/; do
+for required in package/dist/cli.js package/dist/web/index.html package/dist/web/app.js package/LICENSE package/NOTICE package/README.md package/skills/; do
   echo "$listing" | grep -q "^$required" || fail "missing $required"
 done
 # Tests, sources and local config must never ship.
@@ -67,6 +67,8 @@ const files = readdirSync(root, { recursive: true })
   .filter((f) => f.endsWith('.js'))
   // cli.js runs the app on import; the --version and --help runs above load it.
   .filter((f) => f !== 'cli.js')
+  // The browser page: `reika web` serves these files to a tab, and Node never imports them.
+  .filter((f) => !f.startsWith('web/'))
   .sort();
 const failed = [];
 for (const f of files) {

@@ -14,13 +14,15 @@ export type ReplyCommandContext = {
   approvals: Approvals;
   // `/mcp`'s listing, or undefined where the session has no MCP manager.
   mcpList: () => string | undefined;
+  // The key rows `/help` ends with, which differ by front end; the TUI's when absent.
+  helpKeys?: readonly string[];
 };
 
 // The reply for a command that only prints, or null when `name` is not one of them.
 export function resolveReplyCommand(name: string, ctx: ReplyCommandContext): string | null {
   switch (name) {
     case 'help':
-      return helpText();
+      return helpText(ctx.helpKeys);
     case 'cwd':
       return ctx.cwd ?? '(unknown)';
     case 'tokens': {
@@ -58,7 +60,13 @@ function skillsText(skills: Skill[]): string {
 }
 
 // Every command in COMMANDS (ui/commands.ts) has a row here; App.render.test.tsx checks it.
-export function helpText(): string {
+// The TUI's keys. A front end with other keys hands its own rows to the controller (`helpKeys`).
+export const TUI_HELP_KEYS: readonly string[] = [
+  '  ctrl-v             paste an image; its text is read out and attached (macOS/Windows)',
+  '  shift+tab          cycle mode (agent → plan → minimal → vibe → grind → chat → shell)',
+];
+
+export function helpText(keys: readonly string[] = TUI_HELP_KEYS): string {
   return [
     'Commands:',
     '  /help              show this list',
@@ -88,7 +96,6 @@ export function helpText(): string {
     '  /search <query>    search the web: the model runs one search and answers from the results',
     '  /exit, /quit       exit reika (prints summary)',
     '  @<path>            in agent mode, inline a file as context',
-    '  ctrl-v             paste an image; its text is read out and attached (macOS/Windows)',
-    '  shift+tab          cycle mode (agent → plan → minimal → vibe → grind → chat → shell)',
+    ...keys,
   ].join('\n');
 }

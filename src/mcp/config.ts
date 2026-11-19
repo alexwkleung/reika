@@ -26,12 +26,7 @@ export type McpServerConfig = {
   approve?: 'always';
 };
 
-// The namespace Reika puts on a server's tools when it hands them to the model: `mcp__<server>__
-// <tool>`. It lives here, in the module with no imports of its own, because both ends read it — the
-// bridge that builds the name (tools.ts) and the UI that spells it back as `/<server>:<tool>`
-// (ui/format.ts) — and tools.ts already imports ui/format.ts for `kFormat`, so a constant shared
-// from there would close the loop.
-export const MCP_TOOL_PREFIX = 'mcp__';
+export { MCP_TOOL_PREFIX } from './toolprefix.js';
 
 // A request that never answers is the common shape of a broken server (it started, then hung), and
 // a model turn must not hang with it. Generous because a slow server is still a working one: a

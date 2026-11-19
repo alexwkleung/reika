@@ -9,7 +9,7 @@ import { TRANSCRIPT_VERSION } from '../store/transcript.js';
 import type { Config, Message, Mode, Profile } from '../types.js';
 import { clearIdentity, setIdentity } from '../ui/identity.js';
 import { compactThreshold } from '../agent/compaction.js';
-import { createWebBridge, MAX_PENDING_UPLOADS } from './bridge.js';
+import { createWebBridge, MAX_PENDING_UPLOADS, WEB_HELP_KEYS } from './bridge.js';
 import { MAX_LISTED_SESSIONS, sessionId, type ServerEvent } from './protocol.js';
 import type * as PastedUrls from '../agent/pastedurls.js';
 
@@ -168,6 +168,19 @@ describe('committed events', () => {
     events.length = 0;
     controller.replace([note('fresh')]);
     expect(events).toEqual([{ type: 'reset', seq: expect.any(Number), messages: [note('fresh')] }]);
+  });
+
+  it("/help lists the page's keys, not the terminal's", async () => {
+    const { bridge, events } = setup();
+    bridge.handle({ type: 'submit', text: '/help' });
+    await flush();
+    const help = events.flatMap(e =>
+      e.type === 'message' && e.message.role === 'system' ? [e.message.content] : [],
+    );
+    expect(help).toHaveLength(1);
+    for (const row of WEB_HELP_KEYS) expect(help[0]).toContain(row);
+    expect(help[0]).not.toContain('ctrl-v');
+    expect(help[0]).not.toContain('cycle mode');
   });
 
   it('sends state once when it changes and not for an unrelated change', () => {
@@ -709,7 +722,7 @@ describe('history drawer', () => {
     expect(contents).not.toContain('x');
   });
 
-  it('starts a new conversation as /new does, closing an open /resume picker', async () => {
+  it('starts a new conversation with an empty transcript, closing an open /resume picker', async () => {
     await saved(project(), 'a', 'x');
     const { controller, bridge, events } = setup();
     bridge.handle({ type: 'submit', text: '/resume' });
@@ -717,7 +730,8 @@ describe('history drawer', () => {
     const [picker] = dialogs(events);
     expect(bridge.handle({ type: 'new' })).toEqual({ ok: true });
     expect(resolved(events)).toContainEqual({ id: picker.id, outcome: 'cancelled' });
-    expect(controller.messages[0]).toEqual({ role: 'user', content: '/new', meta: true });
+    expect(controller.messages).toEqual([]);
+    expect(events.filter(e => e.type === 'reset').at(-1)).toMatchObject({ messages: [] });
     expect(controller.getSnapshot().history).toEqual(['/resume']);
   });
 
@@ -876,6 +890,18 @@ describe('input', () => {
     expect(bridge.handle({ type: 'abort' })).toEqual({ ok: true });
     expect(signal?.aborted).toBe(true);
     expect(bridge.handle({ type: 'abort' })).toEqual({ ok: true });
+  });
+
+  it('a stop declines an open approval and drops a question, as ctrl-c does in the TUI', async () => {
+    const { controller, bridge } = setup();
+    const approval = controller.requestApproval({ tool: 'bash', subject: 'Run', preview: 'ls' });
+    expect(bridge.handle({ type: 'abort' })).toEqual({ ok: true });
+    await expect(approval).resolves.toBe(false);
+    expect(controller.approval).toBeNull();
+    const question = controller.openQuestion({ question: 'Which?', options: [{ label: 'A' }] });
+    bridge.handle({ type: 'abort' });
+    await expect(question).resolves.toBeNull();
+    expect(controller.question).toBeNull();
   });
 
   it('calls onExit for /exit', async () => {

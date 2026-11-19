@@ -1,0 +1,488 @@
+/* Committed rows. One continuous column, no bubbles: markers and role colours carry who is
+   speaking, as in the TUI. Prose is proportional; code, commands, paths and tool rows are mono. */
+.transcript {
+  min-width: 0;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.row {
+  margin-top: 0.9em;
+  min-width: 0;
+}
+.row-tool {
+  margin-top: 0.15em;
+}
+.row-tool.row--gap {
+  margin-top: 0.9em;
+}
+
+/* A subagent's rows: one level in, with a faint guide line. */
+.nest {
+  margin-left: 0.6em;
+  padding-left: 1em;
+  border-left: 1px solid var(--reika-rule);
+}
+.nest > .row:first-child {
+  margin-top: 0;
+}
+
+/* The TUI's ▎ on every line, as one rule down the whole prompt: the Thinking block's shape, in the
+   accent, so the two first-class marks read alike. */
+.row-user {
+  display: flex;
+  background: var(--reika-user-bg);
+  border-left: 2px solid var(--reika-accent);
+  /* As tight as the Thinking block, as the terminal's is, with a sliver of air inside the grey. */
+  padding: 0.1em 0.75em;
+}
+.row-user--nested {
+  border-left-color: var(--reika-subagent);
+}
+.row-user-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  color: #f4f4f4;
+}
+
+.reasoning {
+  border-left: 2px solid var(--reika-reasoning);
+  padding-left: 0.75em;
+  color: var(--reika-muted);
+  font-size: 0.93em;
+}
+.reasoning--info {
+  border-left-color: var(--reika-info);
+}
+.reasoning-label {
+  color: var(--reika-reasoning);
+  font-weight: 700;
+}
+.reasoning--info .reasoning-label {
+  color: var(--reika-info);
+}
+.reasoning-details > summary {
+  cursor: pointer;
+  list-style: none;
+}
+.reasoning-details > summary::-webkit-details-marker {
+  display: none;
+}
+/* The toggle reads as one: a chevron and the line count beside the label, both brightening when
+   the summary or the preview under it is hovered. */
+.reasoning-details > summary {
+  /* Baselines, not centres: the bold label and the smaller chip text share no centre line. */
+  display: flex;
+  align-items: baseline;
+  gap: 0.5em;
+  width: fit-content;
+}
+.reasoning-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2em;
+  padding: 0 0.25em 0 0.45em;
+  border-radius: 999px;
+  color: var(--reika-muted);
+  font-size: 0.9em;
+  transition:
+    color 120ms ease,
+    background-color 120ms ease;
+}
+.reasoning-chevron {
+  width: 0.9em;
+  height: 0.9em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  /* Centred on the line box the caret reads high against the lowercase text, and 0.03em reads low;
+     the down caret is half as tall and reads higher still, so it drops a little more. */
+  transform: translateY(0.015em);
+  transition: transform 120ms ease;
+}
+.reasoning-details[open] .reasoning-chevron {
+  transform: translateY(0.075em) rotate(90deg);
+}
+.reasoning-details > summary:hover .reasoning-toggle,
+.reasoning-details:has(~ .reasoning-tail-toggle:hover) .reasoning-toggle,
+.reasoning-details > summary:focus-visible .reasoning-toggle {
+  color: var(--reika-text);
+  background: var(--reika-control-bg);
+}
+.reasoning-tail-toggle {
+  cursor: pointer;
+}
+@media (prefers-reduced-motion: reduce) {
+  .reasoning-chevron,
+  .reasoning-toggle {
+    transition: none;
+  }
+}
+.reasoning-text {
+  overflow-wrap: anywhere;
+}
+/* Every block a row of its own, as the TUI collapses blank lines in the bar: no margins, headings
+   at the text's size, code without its panel or highlighting. */
+.reasoning-md .md p,
+.reasoning-md .md ul,
+.reasoning-md .md ol,
+.reasoning-md .md blockquote,
+.reasoning-md .md pre,
+.reasoning-md .md .md-table-scroll,
+.reasoning-md .md-heading,
+.reasoning-md .md li > ul,
+.reasoning-md .md li > ol {
+  margin: 0;
+}
+.reasoning-md .md ul,
+.reasoning-md .md ol {
+  padding-left: 1.25em;
+}
+/* A thought breaks lines without blank lines between them; the TUI keeps each one. */
+.reasoning-md .md p,
+.reasoning-md .md li {
+  white-space: pre-line;
+}
+.reasoning-md .md-heading {
+  font-size: 1em;
+  font-weight: 600;
+}
+.reasoning-md .md-code {
+  padding: 0;
+  background: none;
+  font-size: 0.92em;
+  white-space: pre-wrap;
+}
+.reasoning-md .md-inline-code,
+.reasoning-md .md-link,
+.reasoning-md .md-link-plain,
+.reasoning-md .md-code [class^='hljs-'],
+.reasoning-md .md-code [class*=' hljs-'] {
+  color: inherit;
+  font-style: inherit;
+}
+.reasoning-md .md-link {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+}
+.reasoning-md .md-hr {
+  margin: 0.4em 0;
+}
+.reasoning-details[open] ~ .reasoning-tail-toggle {
+  display: none;
+}
+/* REASONING_WINDOW_ROWS (blocks.tsx) rows, filled from the bottom; once full, the oldest row fades at the top. */
+.reasoning-window {
+  max-height: calc(8 * 1.6em);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+.reasoning-window > .reasoning-text {
+  flex: none;
+}
+.reasoning-window--full {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 1.6em);
+  mask-image: linear-gradient(to bottom, transparent 0, black 1.6em);
+}
+.reasoning + .prose,
+.reasoning + .note-body,
+.prose + .calls,
+.reasoning + .calls,
+.checks + .calls {
+  margin-top: 0.6em;
+}
+
+/* Baseline, not centre: a call's marker shares its line's baseline, so the dot sits at the same
+   height over the text as there (and in the TUI). Centred in the line box it rode 1.5px high, the
+   prose's 15px text sitting lower in its line than the 13.2px mono a call's does. */
+.prose {
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+}
+/* The call marker's box exactly (.call-marker): its font, size and column, so the two glyphs share
+   an x and the prose starts where a call's name does. */
+.prose-marker {
+  color: var(--reika-secondary);
+  flex: none;
+  font-family: var(--reika-mono);
+  font-size: 0.88em;
+  width: 1.4em;
+}
+.prose > .md {
+  min-width: 0;
+  flex: 1;
+}
+
+/* A call and its result read as words in the page's font, with the literal they act on as code
+   (toolparts.ts); the TUI's one monospace line read as a terminal dump here. The marker keeps the
+   mono box the prose marker copies, so the two dots still share an x. */
+.calls {
+  font-size: 0.93em;
+}
+.call {
+  /* The marker's column: 1.4em of its own 0.88/0.93-scaled mono size, restated at this one. */
+  --marker-col: calc(1.4em * 0.88 / 0.93);
+  padding-left: var(--marker-col);
+  text-indent: calc(-1 * var(--marker-col));
+  overflow-wrap: anywhere;
+}
+.call-marker {
+  color: var(--reika-tool);
+  display: inline-block;
+  font-family: var(--reika-mono);
+  font-size: calc(0.88em / 0.93);
+  width: 1.4em;
+  text-indent: 0;
+}
+.call-name {
+  color: var(--reika-tool);
+  font-weight: 500;
+  margin-right: 0.45em;
+}
+.call-args {
+  color: var(--reika-secondary);
+}
+.tool-literal {
+  font-family: var(--reika-mono);
+  font-size: 0.88em;
+  color: var(--reika-text);
+  background: var(--reika-code-bg);
+  border-radius: 4px;
+  /* Held on the label's baseline, measured in both rows: at these two sizes the mono baseline
+     rounds half a pixel low (a result row's 0.93em most), and its taller x-height made that read
+     as more. The mono face's deep descent hung the pill low too, so it reaches higher than it
+     reaches down, and sits even around the label's capitals. */
+  position: relative;
+  top: -0.03em;
+  padding: 0.08em 0.35em 0.03em;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.tool-detail {
+  color: var(--reika-muted);
+}
+.call-args .tool-detail {
+  margin-left: 0.45em;
+  font-size: 0.92em;
+}
+
+.sources {
+  margin-top: 0.6em;
+  color: var(--reika-tool);
+  font-size: 0.88em;
+  overflow-wrap: anywhere;
+}
+
+.note {
+  border-left: 2px solid var(--reika-info);
+}
+.note > .reasoning {
+  border-left: 0;
+}
+.note-body {
+  padding-left: 0.75em;
+}
+.note-label {
+  color: var(--reika-info);
+  font-weight: 700;
+  margin-bottom: 0.4em;
+}
+
+.checks {
+  margin-top: 0.6em;
+  margin-left: 1.3em;
+  border-left: 2px solid var(--reika-warning);
+  padding-left: 0.75em;
+}
+.checks-label {
+  color: var(--reika-warning);
+  font-weight: 700;
+}
+.checks-section {
+  margin-top: 0.4em;
+}
+.checks-head {
+  color: var(--reika-secondary);
+}
+.checks-hint {
+  color: var(--reika-muted);
+  font-size: 0.92em;
+}
+
+.row-frozen {
+  opacity: 0.7;
+}
+.row-frozen .md {
+  color: var(--reika-secondary);
+}
+
+/* The ↳ under the call's name and the text over the block below it (.tool-block's 2.4em of the
+   row's size), whatever this row's own size. */
+.tool-summary {
+  font-size: 0.93em;
+  color: var(--reika-secondary);
+  padding-left: calc(2.4em / 0.93);
+  text-indent: calc(-1.2em / 0.93);
+  overflow-wrap: anywhere;
+}
+.tool-marker {
+  color: var(--reika-tool);
+  display: inline-block;
+  width: calc(1.2em / 0.93);
+  text-indent: 0;
+  /* ↳ in the page's font draws as a crooked corner; the call dot's font draws it as the TUI's. */
+  font-family: var(--reika-mono);
+}
+.tool-duration {
+  color: var(--reika-muted);
+}
+.tool-block {
+  margin-top: 0.5em;
+  margin-left: 2.4em;
+  min-width: 0;
+}
+.command {
+  font-family: var(--reika-mono);
+  font-size: 0.88em;
+}
+.command-line {
+  font-family: var(--reika-mono);
+  font-size: 0.88em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding-left: 1.2em;
+  text-indent: -1.2em;
+}
+.command .command-line {
+  font-size: 1em;
+}
+.command-prompt {
+  color: var(--reika-success);
+  display: inline-block;
+  width: 1.2em;
+  text-indent: 0;
+}
+.command-output {
+  margin-top: 0.4em;
+}
+.command-omitted {
+  color: var(--reika-muted);
+}
+.command-tail {
+  margin: 0;
+  font-family: var(--reika-mono);
+  font-size: 0.88em;
+  color: var(--reika-muted);
+  tab-size: 8;
+}
+.command .command-tail {
+  font-size: 1em;
+}
+.row-shell .command-tail {
+  margin-top: 0.3em;
+}
+
+.change + .change {
+  margin-top: 0.8em;
+}
+.change-head {
+  font-family: var(--reika-mono);
+  font-size: 0.88em;
+  overflow-wrap: anywhere;
+}
+.change-path {
+  color: var(--reika-tool);
+}
+.change-label,
+.change-more {
+  color: var(--reika-muted);
+}
+.change-more {
+  font-family: var(--reika-mono);
+  font-size: 0.88em;
+}
+.change .diff {
+  margin-top: 0.3em;
+}
+
+.row-system {
+  display: flex;
+  gap: 0.5em;
+  color: var(--reika-muted);
+  font-size: 0.93em;
+}
+.row-system-marker {
+  flex: none;
+  color: var(--reika-accent);
+}
+.row-system--info .row-system-marker,
+.row-system--info .row-system-lead,
+.row-system--info.row-system--line {
+  color: var(--reika-info);
+}
+.row-system--warn .row-system-marker,
+.row-system--warn .row-system-lead,
+.row-system--warn.row-system--line {
+  color: var(--reika-warning);
+}
+.row-system--default .row-system-lead,
+.row-system--default.row-system--line {
+  color: var(--reika-accent);
+}
+.row-system-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.row-error {
+  color: var(--reika-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.row-error-marker,
+.row-error-label {
+  color: var(--reika-error);
+}
+.row-error-marker {
+  font-size: 0.8em;
+  margin-right: 0.55em;
+}
+
+.row-worked {
+  color: var(--reika-muted);
+  font-size: 0.93em;
+}
+.row-worked-marker {
+  color: var(--reika-accent);
+  margin-right: 0.5em;
+}
+.row-interrupted .row-worked-marker {
+  color: var(--reika-warning);
+}
+
+.row-unknown {
+  color: var(--reika-muted);
+  font-family: var(--reika-mono);
+  font-size: 0.8em;
+  overflow-wrap: anywhere;
+}
+
+/* A notice's divider line (/stats), drawn as a rule so it never wraps. */
+.row-system-rule {
+  display: block;
+  max-width: 24rem;
+  margin: 0.5em 0;
+  border-top: 1px solid var(--reika-rule);
+}

@@ -1,0 +1,569 @@
+/* The input box, direction B: a rounded card holding the text and a row of controls. */
+.composer {
+  padding-top: 0.75rem;
+  font-family: var(--reika-prose);
+}
+
+.composer-queue {
+  list-style: none;
+  margin: 0 0.25rem 0.5rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.composer-queued {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  font-size: 0.875rem;
+  color: var(--reika-text);
+}
+.composer-queued-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-tag {
+  flex-shrink: 0;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  line-height: 1.125rem;
+  padding: 0 0.375rem;
+  border-radius: 5px;
+  border: 1px solid currentColor;
+}
+.composer-tag-queued {
+  color: var(--reika-queued);
+}
+
+.composer-stage,
+.composer-waiting {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0.25rem 0.5rem;
+  font-size: 0.875rem;
+}
+.composer-stage {
+  color: var(--reika-secondary);
+}
+.composer-waiting {
+  color: var(--reika-warning);
+}
+.composer-spinner {
+  width: 0.6875rem;
+  height: 0.6875rem;
+  border-radius: 50%;
+  border: 2px solid var(--reika-rule);
+  border-top-color: var(--reika-accent);
+  box-sizing: border-box;
+  animation: composer-spin 0.9s linear infinite;
+}
+@keyframes composer-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-spinner {
+    animation: none;
+  }
+}
+
+/* The completion list hangs above the card, over the transcript. */
+.composer-anchor {
+  position: relative;
+}
+.composer-completions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 0.375rem);
+  z-index: 2;
+  list-style: none;
+  margin: 0;
+  padding: 0.25rem;
+  max-height: 16rem;
+  overflow-y: auto;
+  background: var(--reika-code-bg);
+  border: 1px solid var(--reika-rule);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.45);
+}
+.composer-completion {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  min-width: 0;
+  padding: 0.3125rem 0.625rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.875rem;
+}
+/* One highlight for every menu (this list, the pills' menus): a fill a clear step off the popover,
+   moved alike by the pointer and the arrow keys, marking what Enter picks. A dialog's choices keep
+   the accent ring instead (dialogs.css): there Enter commits a decision. */
+.composer-completion[aria-selected='true'] {
+  background: var(--reika-menu-active);
+}
+/* The page's font for both: a picker is for scanning names, and a path is code once it is in the
+   transcript. A command keeps a weight of its own so the two kinds read apart. */
+.composer-completion-label {
+  flex-shrink: 0;
+  color: var(--reika-text);
+}
+.composer-completion-label--command {
+  font-weight: 500;
+}
+.composer-completion-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--reika-secondary);
+}
+
+.composer-card {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 0.75rem 0.75rem 0.625rem 1rem;
+  background: var(--reika-code-bg);
+  border: 1px solid var(--reika-rule);
+  border-radius: 14px;
+  cursor: text;
+  transition: border-color 120ms ease;
+}
+/* The card lights for the text only: a pill or the attach button holding focus is not typing.
+   Neutral: the box is focused nearly all the time, so a tint here became the card's own colour. */
+.composer-card:has(.composer-input:focus) {
+  border-color: var(--reika-rule-strong);
+}
+.composer-card-locked {
+  opacity: 0.6;
+}
+/* The box and the backdrop behind it (composertokens.ts): one text laid out twice, so every rule
+   that moves a glyph — font, size, line height, wrapping, padding — must match between them. */
+.composer-field {
+  position: relative;
+}
+.composer-backdrop {
+  position: absolute;
+  /* Reaches past the box (BACKDROP_BLEED_PX) with the same padding, so its text stays where the
+     box's is and a chip's edge at the start of a line is not cut flat. */
+  inset: -4px;
+  padding: 4px;
+  overflow: hidden;
+  pointer-events: none;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  font: inherit;
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  color: transparent;
+}
+/* With a chip in the line, the backdrop draws the text (in the chips' colours) and the box keeps
+   only its caret and its selection. */
+.composer-field--tokens .composer-backdrop {
+  color: var(--reika-text);
+}
+.composer-field--tokens .composer-input {
+  color: transparent;
+  caret-color: var(--reika-text);
+}
+.composer-field--tokens .composer-input::selection {
+  color: transparent;
+  background: color-mix(in srgb, var(--reika-accent) 35%, transparent);
+}
+/* Background and a spread shadow only: padding or a border would widen the run and move every
+   glyph after it out from under the box's caret. Opaque tints of the card's own colour, so the
+   chip is a lighter shade of the box rather than a wash over it. */
+.composer-token {
+  border-radius: 5px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  --chip: color-mix(in oklab, var(--reika-accent) 16%, var(--reika-code-bg));
+  color: color-mix(in oklab, var(--reika-accent) 80%, white);
+  background: var(--chip);
+  box-shadow: 0 0 0 3px var(--chip);
+}
+.composer-token--file {
+  --chip: color-mix(in oklab, var(--reika-link) 15%, var(--reika-code-bg));
+  color: color-mix(in oklab, var(--reika-link) 85%, white);
+}
+.composer-token--marker {
+  --chip: color-mix(in oklab, var(--reika-text) 9%, var(--reika-code-bg));
+  color: var(--reika-secondary);
+}
+.composer-input {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-height: 1.5rem;
+  max-height: 40vh;
+  overflow-y: auto;
+  resize: none;
+  box-sizing: border-box;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: none;
+  color: var(--reika-text);
+  font: inherit;
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.composer-input::placeholder {
+  color: var(--reika-placeholder);
+}
+.composer-input:disabled {
+  cursor: not-allowed;
+}
+
+/* Attached images (#979): one plain row each, the marker the box holds first. Thumbnails later. */
+.composer-images {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.composer-image {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  height: 1.875rem;
+  padding: 0 0.25rem 0 0.625rem;
+  border: 1px solid var(--reika-control-border);
+  border-radius: 8px;
+  background: var(--reika-control-bg);
+  font-size: 0.8125rem;
+  cursor: default;
+}
+.composer-image-thumb {
+  flex-shrink: 0;
+  display: block;
+  width: 1.375rem;
+  height: 1.375rem;
+  margin-left: -0.375rem;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--reika-rule);
+  border-radius: 4px;
+  background: var(--reika-code-bg);
+  cursor: zoom-in;
+}
+.composer-image-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: filter 120ms ease;
+}
+.composer-image-thumb:hover img {
+  filter: brightness(1.15);
+}
+.composer-image-thumb:focus-visible {
+  outline: 2px solid var(--reika-accent);
+  outline-offset: 1px;
+}
+.composer-image-reading .composer-image-thumb img {
+  opacity: 0.5;
+}
+.composer-image-failed .composer-image-thumb {
+  border-color: var(--reika-error);
+}
+.composer-image-marker {
+  flex-shrink: 0;
+  /* The box's font, as the marker reads there: mono sat off the row's centre beside prose. */
+  color: var(--reika-accent);
+  font-variant-numeric: tabular-nums;
+}
+.composer-image-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--reika-control-fg);
+}
+.composer-image-detail {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--reika-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.composer-image-failed {
+  border-color: color-mix(in srgb, var(--reika-error) 45%, var(--reika-control-border));
+}
+.composer-image-failed .composer-image-marker,
+.composer-image-failed .composer-image-detail {
+  color: var(--reika-error);
+}
+.composer-image-reading .composer-image-detail {
+  color: var(--reika-muted);
+}
+.composer-image-remove {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
+}
+.composer-image-remove svg {
+  width: 0.75rem;
+  height: 0.75rem;
+  fill: none;
+  stroke: var(--reika-secondary);
+  stroke-width: 1.6;
+}
+.composer-image-remove:hover svg {
+  stroke: var(--reika-text);
+}
+.composer-image-remove:focus-visible {
+  outline: 2px solid var(--reika-accent);
+  outline-offset: 1px;
+}
+
+/* The bar's gaps keep the card's text cursor: a press there goes to the box too. Its controls
+   set their own. */
+.composer-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+}
+
+.pill-menu {
+  position: relative;
+  min-width: 0;
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  max-width: 100%;
+  height: 1.875rem;
+  padding: 0 0.625rem;
+  box-sizing: border-box;
+  border-radius: 8px;
+  /* A step stronger than the pills' old border, which all but vanished against the card. */
+  border: 1px solid var(--reika-rule-strong);
+  background: var(--reika-control-bg);
+  color: var(--reika-control-fg);
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+/* A fill as well as the border: a 1px line brightening alone was hard to see on a control this
+   small, and the fill matches the menu items the pill opens. */
+.pill:hover:not(:disabled),
+.composer-stop:hover {
+  border-color: color-mix(in oklab, var(--reika-text) 30%, var(--reika-code-bg));
+  background: var(--reika-control-focus-bg);
+}
+.pill:focus-visible,
+.composer-round:focus-visible {
+  outline: 2px solid var(--reika-accent);
+  outline-offset: 1px;
+}
+.pill:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.pill-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pill-dot {
+  flex-shrink: 0;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+}
+.pill-chevron,
+.pill-check {
+  flex-shrink: 0;
+  width: 0.75rem;
+  height: 0.75rem;
+  fill: none;
+  stroke: var(--reika-secondary);
+  stroke-width: 1.6;
+}
+.pill-icon {
+  flex-shrink: 0;
+  width: 1.875rem;
+  padding: 0;
+  justify-content: center;
+}
+.pill-icon svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+
+.pill-popover {
+  /* A menu, not the box: the gaps between its options are not a place to type. */
+  cursor: default;
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 0.375rem);
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  min-width: 11rem;
+  max-width: min(22rem, calc(100vw - 2rem));
+  max-height: 18rem;
+  overflow-y: auto;
+  padding: 0.25rem;
+  background: var(--reika-code-bg);
+  border: 1px solid var(--reika-rule);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.45);
+}
+/* An option scrolled to the edge keeps room for its focus ring, which reaches 3px past it. */
+.pill-popover,
+.composer-completions {
+  scroll-padding-block: 0.375rem;
+}
+.pill-popover--quiet {
+  scrollbar-width: none;
+}
+.pill-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 2rem;
+  padding: 0 0.5rem;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--reika-text);
+  font: inherit;
+  font-size: 0.875rem;
+  text-align: left;
+  cursor: pointer;
+}
+/* The pointer focuses what it enters (PillMenu), so focus alone is the highlight, by key or not. */
+.pill-option:focus {
+  outline: none;
+  background: var(--reika-menu-active);
+}
+.pill-option-label {
+  white-space: nowrap;
+}
+.pill-option-detail {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--reika-secondary);
+}
+.pill-check {
+  margin-left: auto;
+  stroke: var(--reika-accent);
+}
+
+.composer-round {
+  flex-shrink: 0;
+  margin-left: auto;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+/* The circle's own box, not a 1rem box inside it: the button lands on a fractional x, and an icon
+   box of its own snapped to the pixel grid apart from the circle, a device pixel off centre. */
+.composer-round svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  /* A mitred tip reached past the path's top, so the arrow sat high in the circle; round ends
+     keep its outline as even as the path. */
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.composer-send {
+  border: 0;
+  background: var(--reika-accent);
+  color: var(--reika-page-bg);
+}
+.composer-send:disabled {
+  cursor: default;
+  background: var(--reika-control-bg);
+  color: var(--reika-muted);
+}
+.composer-stop {
+  border: 1px solid var(--reika-rule-strong);
+  background: var(--reika-control-bg);
+  color: var(--reika-text);
+}
+.composer-stop-square {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 2px;
+  background: currentColor;
+}
+
+.composer-error {
+  margin: 0.375rem 0.25rem 0;
+  font-size: 0.875rem;
+  color: var(--reika-error);
+  overflow-wrap: anywhere;
+}
+
+/* The project folder, right of the controls and left of Send: muted text, not a pill, since it is
+   not a control. It gives way first, down to nothing, so the pills keep their labels. */
+.composer-folder {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  margin-left: auto;
+  margin-right: 0.375rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+  color: var(--reika-muted);
+}
+.composer-folder svg {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linejoin: round;
+}
+.composer-folder-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer-folder + .composer-round {
+  margin-left: 0;
+}

@@ -167,10 +167,7 @@ function fakeSession(config: Policy) {
     }),
     switchSide: vi.fn(),
     loadHistory: vi.fn(),
-    // Like the real one: a relearning reset drops back to the default profile.
-    reset: vi.fn((opts: { relearn?: boolean } = {}) => {
-      if (opts.relearn) session.profile = 'default';
-    }),
+    reset: vi.fn(),
     addProfile: vi.fn((name: string, profile: Profile) => {
       cfg.profiles[name] = profile;
     }),
@@ -816,10 +813,10 @@ describe('controller.newConversation', () => {
     expect(controller.sides()).toEqual({ agent: [echo, receipt], chat: [] });
   });
 
-  it('resets the session with what it learned, and puts it on the agent side', () => {
+  it('resets the session and puts it on the agent side', () => {
     const { controller, session } = controllerIn('chat');
     controller.newConversation(echo);
-    expect(session?.reset).toHaveBeenCalledWith({ relearn: true });
+    expect(session?.reset).toHaveBeenCalled();
     expect(session?.switchSide).toHaveBeenLastCalledWith('agent');
   });
 
@@ -845,26 +842,38 @@ describe('controller.newConversation', () => {
     expect(controller.startedAt).toBeGreaterThan(before);
   });
 
-  it('forgets a picked model, so the mode map applies again', () => {
+  it("keeps a picked model as the session's own, with the mode map applying over it again", () => {
     const { controller, session } = controllerIn('agent', {
       profiles,
       modeProfiles: { plan: 'kimi' },
     });
     controller.pickModel('go');
     controller.newConversation(echo);
-    expect(session?.profile).toBe('default');
+    expect(session?.profile).toBe('go');
 
     controller.transition('plan');
     expect(session?.profile).toBe('kimi');
+    controller.transition('agent');
+    expect(session?.profile).toBe('go');
   });
 
-  it('comes back to the default profile, not the one the session opened on', () => {
-    const { controller, session } = controllerIn('plan', { profiles }, 'go');
+  it('keeps the model the session is on, with one line and no switch', () => {
+    const { controller, session } = controllerIn('agent', { profiles }, 'go');
+    session!.profile = 'go';
+    controller.newConversation(echo);
+    expect(session?.profile).toBe('go');
+    expect(session?.setProfile).not.toHaveBeenCalled();
+    expect(controller.messages).toEqual([echo, receipt]);
+  });
+
+  it("comes back from a mode's model to the session's own", () => {
+    const { controller, session } = controllerIn('plan', {
+      profiles,
+      modeProfiles: { plan: 'kimi' },
+    });
+    session!.profile = 'kimi';
     controller.newConversation(echo);
     expect(session?.profile).toBe('default');
-    expect(session?.setProfile).not.toHaveBeenCalled();
-    // One line only: no switch to the opening profile and back.
-    expect(controller.messages).toEqual([echo, receipt]);
   });
 
   it("lands on agent mode's own model when it has one, under the receipt", () => {
@@ -901,7 +910,7 @@ describe('controller.loadConversation', () => {
     ]);
     expect(controller.mode).toBe('agent');
     expect(controller.messages).toEqual([]);
-    expect(session?.reset).toHaveBeenCalledWith({ relearn: false });
+    expect(session?.reset).toHaveBeenCalled();
 
     controller.replace(rows);
     expect(controller.sides().chat).toBe(saved.chat);

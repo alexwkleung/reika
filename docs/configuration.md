@@ -37,7 +37,7 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
 - **`REIKA_MODE_MODELS`** — The mode a turn runs in picks the model — at startup and on every mode
   switch, outranking the profile the last session saved. A mode with no entry runs the session's own
   model, so leaving a mapped mode comes back to it. A `/model` you pick by hand outranks the map for
-  the rest of the session (and `/new` clears that). Values are profile names or `REIKA_MODEL`
+  the rest of the session (`/new` keeps the model, with the map applying again). Values are profile names or `REIKA_MODEL`
   models; an entry naming neither is ignored with a startup line. `shell` runs no model and is not a
   mode here. See [Per-mode models](#per-mode-models)
 - **`REIKA_DEFAULT_MODE`** — Unrecognized values fall back to `agent`. `REIKA_PLAN_EXPERIMENT=1`
@@ -147,15 +147,15 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
 
 ## Web tools
 
-| Key                           | Default | What                                                                                                      |
-| ----------------------------- | ------- | --------------------------------------------------------------------------------------------------------- |
-| `REIKA_SEARXNG_URL`           | _unset_ | SearXNG instance URL (self-hosted, local-first); enables the `search` tool when CDP search is not in use. |
-| `REIKA_CDP_SEARCH`            | _auto_  | Drive a real Chrome over CDP for `search`.                                                                |
-| `REIKA_CDP_PORT`              | `9222`  | Chrome remote-debugging port for the above.                                                               |
-| `REIKA_CHROME_PATH`           | _unset_ | Override Chrome/Chromium binary discovery for CDP search                                                  |
-| `REIKA_PASTE_FETCH`           | `1`     | Fetch `http(s)` URLs pasted into a prompt before the turn runs (up to 2, 8k chars each).                  |
-| `REIKA_MAX_SEARCHES_PER_TURN` | `3`     | Cap `search` calls per user turn (prevents runaway / quota burn)                                          |
-| `REIKA_MAX_FETCHES_PER_TURN`  | `5`     | Cap `fetch_url` calls per user turn                                                                       |
+| Key                           | Default | What                                                                                                       |
+| ----------------------------- | ------- | ---------------------------------------------------------------------------------------------------------- |
+| `REIKA_SEARXNG_URL`           | _unset_ | SearXNG instance URL (self-hosted, local-first); enables the `search` tool when CDP search is not in use.  |
+| `REIKA_CDP_SEARCH`            | _auto_  | Drive a real Chrome over CDP for `search`.                                                                 |
+| `REIKA_CDP_PORT`              | `9222`  | Chrome remote-debugging port for the above.                                                                |
+| `REIKA_CHROME_PATH`           | _unset_ | The Chrome/Chromium binary for CDP search and `reika web --window`, instead of a search of the usual paths |
+| `REIKA_PASTE_FETCH`           | `1`     | Fetch `http(s)` URLs pasted into a prompt before the turn runs (up to 2, 8k chars each).                   |
+| `REIKA_MAX_SEARCHES_PER_TURN` | `3`     | Cap `search` calls per user turn (prevents runaway / quota burn)                                           |
+| `REIKA_MAX_FETCHES_PER_TURN`  | `5`     | Cap `fetch_url` calls per user turn                                                                        |
 
 - **`REIKA_SEARXNG_URL`** — `fetch_url` registers regardless
 - **`REIKA_CDP_SEARCH`** — drives a real Chrome over CDP for `search`; unset is **auto**. Three
@@ -373,11 +373,12 @@ to work rather than for the smallest safe fallback. Trim them for a tiny model o
 
 ## Terminal
 
-| Key                  | Default | What                                                                                                                                                                                                           |
-| -------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `REIKA_SYNC_OUTPUT`  | `1`     | Wraps every Ink frame in one synchronized write (DEC mode 2026) so the terminal paints it atomically.                                                                                                          |
-| `REIKA_INPUT_FLOOR`  | `1`     | Experimental. Keeps the input box on the terminal's bottom rows: the live frame fills the screen from startup and never gets shorter than the space it holds. `0` restores the frame that follows its content. |
-| `REIKA_BASIC_GLYPHS` | auto    | Draws the UI with glyphs a basic console font carries (`●`, `└`, `│`, square borders, an ASCII spinner) in place of the ones it lacks (`⏺`, `↳`, `▎`, rounded borders, braille).                               |
+| Key                   | Default | What                                                                                                                                                                                                           |
+| --------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `REIKA_SYNC_OUTPUT`   | `1`     | Wraps every Ink frame in one synchronized write (DEC mode 2026) so the terminal paints it atomically.                                                                                                          |
+| `REIKA_INPUT_FLOOR`   | `1`     | Experimental. Keeps the input box on the terminal's bottom rows: the live frame fills the screen from startup and never gets shorter than the space it holds. `0` restores the frame that follows its content. |
+| `REIKA_BASIC_GLYPHS`  | auto    | Draws the UI with glyphs a basic console font carries (`●`, `└`, `│`, square borders, an ASCII spinner) in place of the ones it lacks (`⏺`, `↳`, `▎`, rounded borders, braille).                               |
+| `REIKA_WORKING_WORDS` | `1`     | Rotates garden and perfumery verbs on the busy line ("Blooming…", "Steeping…"); `0` shows "Working". The web page follows it too.                                                                              |
 
 - **`REIKA_SYNC_OUTPUT`** — Ink paints a frame as erase-then-redraw, three separate writes when a
   message commits to scrollback, and a process swapped out under memory pressure (a large local
@@ -480,7 +481,7 @@ Then in-session:
 - `/model kimi-k2` — switch to a model on the default base URL (model name only swaps)
 - `/model kimi` — switch to a named profile (model + endpoint + key swap as a unit)
 - `/model some-new-model` — a name that isn't in your config still switches: it rides the current base URL/key, so you can test a model without touching `.env`. The switch message and picker flag it as `(not in config)`
-- `/new` — resets to default
+- `/new` — starts a new conversation on the same model
 
 Conversation history persists across switches; if styles clash, run `/new` first. Token counter
 accumulates across models/profiles for a single session bill.
@@ -516,7 +517,8 @@ What it does, in order:
    session's own model — the profile it opened on — so `plan → agent` is a round trip rather than a
    one-way switch onto the plan model.
 3. **A `/model` you pick by hand outranks the map for the rest of the session**: from then on, mode
-   switches leave the model where you put it. `/new` starts a new session and the map applies again.
+   switches leave the model where you put it. `/new` keeps that model as the session's own, and the
+   map applies over it again.
 4. Headless (`-p --mode=plan`) honors it too, since there is no `/model` there: the config decides.
 
 ## Last session state
@@ -541,6 +543,6 @@ shell leaves the last work mode on record. A mode's own model is never saved as 
 re-derived from `REIKA_MODE_MODELS` on every launch, so removing an entry puts the session back on
 its own model rather than stranding it on that mode's. A saved profile the config no longer has — a
 removed `REIKA_PROFILES` entry, or an ad-hoc `/model some-new-model` that was never in `.env` —
-falls back to `default` rather than being recreated. `/new` resets to agent and `default`, and that
-is remembered too. Headless runs (`-p`) neither read nor write it: a script's behavior should
+falls back to `default` rather than being recreated. `/new` resets the mode to agent, which is
+remembered too, and keeps the model. Headless runs (`-p`) neither read nor write it: a script's behavior should
 follow from its env, not from the last interactive session. Delete the file to forget.

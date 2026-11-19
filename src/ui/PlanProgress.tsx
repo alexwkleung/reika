@@ -4,6 +4,7 @@ import { theme } from './theme.js';
 import { renderInlineMarkdown } from './markdown.js';
 import { scrubDisplay } from './scrub.js';
 import type { PlanStep } from '../agent/plantrack.js';
+import { planWindow } from './planwindow.js';
 
 // Live checklist for a plan being implemented (#71). State comes from the loop's deterministic
 // tracker (agent/plantrack.ts) via onPlanProgress — steps check off when the harness observes a
@@ -11,34 +12,17 @@ import type { PlanStep } from '../agent/plantrack.js';
 // region (below Scrollback), so it re-renders as steps flip; the durable per-step record is the
 // system line the loop emits alongside.
 
-// Height cap: the panel is chrome below Scrollback's live region, and the live frame must stay
-// strictly under stdout.rows or Ink falls into its full-repaint path (flicker + scrollback loss).
-// A long plan collapses its leading checked steps into one summary row, then truncates the tail.
-const MAX_STEP_ROWS = 8;
-
-type Layout = { collapsedDone: number; visible: PlanStep[]; hiddenTail: number };
-
-function layout(steps: PlanStep[]): Layout {
-  if (steps.length <= MAX_STEP_ROWS) return { collapsedDone: 0, visible: steps, hiddenTail: 0 };
-  let collapsedDone = 0;
-  while (collapsedDone < steps.length && steps[collapsedDone].done) collapsedDone++;
-  const rest = steps.slice(collapsedDone);
-  const room = MAX_STEP_ROWS - (collapsedDone > 0 ? 1 : 0);
-  const visible = rest.length > room ? rest.slice(0, room - 1) : rest;
-  return { collapsedDone, visible, hiddenTail: rest.length - visible.length };
-}
-
 // Exact rendered height in rows (marginTop + header + step/summary rows). App passes this to
 // Scrollback's chromeRows so the live-region budget accounts for the panel.
 export function planProgressRows(steps: PlanStep[]): number {
-  const l = layout(steps);
+  const l = planWindow(steps);
   return 2 + (l.collapsedDone > 0 ? 1 : 0) + l.visible.length + (l.hiddenTail > 0 ? 1 : 0);
 }
 
 export function PlanProgress({ steps }: { steps: PlanStep[] }) {
   const done = steps.filter(s => s.done).length;
   const waived = steps.filter(s => s.waived).length;
-  const { collapsedDone, visible, hiddenTail } = layout(steps);
+  const { collapsedDone, visible, hiddenTail } = planWindow(steps);
   const nextIdx = visible.findIndex(s => !s.done && !s.waived);
   return (
     <Box flexDirection="column" marginTop={1}>

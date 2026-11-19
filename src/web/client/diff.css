@@ -1,0 +1,63 @@
+/* Diff rows: a block that scrolls sideways on its own, so the page never does. */
+.diff {
+  font-family: var(--reika-mono);
+  font-size: 0.85em;
+  line-height: 1.45;
+  overflow-x: auto;
+  background: var(--reika-code-bg);
+  scrollbar-width: thin;
+  scrollbar-color: var(--reika-rule) transparent;
+  border-radius: 4px;
+  max-width: 100%;
+}
+.diff-rows {
+  display: table;
+  min-width: 100%;
+}
+.diff-row {
+  display: table-row;
+  white-space: pre;
+  tab-size: 4;
+}
+.diff-row > span {
+  display: table-cell;
+  padding: 0 0.4em;
+}
+.diff-lineno {
+  text-align: right;
+  color: var(--reika-muted);
+  user-select: none;
+  width: 1%;
+}
+.diff-marker {
+  width: 1%;
+  user-select: none;
+  padding: 0 0.2em !important;
+}
+.diff-text {
+  width: 100%;
+}
+.diff-row--added {
+  background: var(--reika-diff-added-bg);
+}
+.diff-row--added .diff-marker,
+.diff-row--added .diff-lineno {
+  color: var(--reika-diff-added-fg);
+}
+.diff-row--removed {
+  background: var(--reika-diff-removed-bg);
+}
+.diff-row--removed .diff-marker,
+.diff-row--removed .diff-lineno {
+  color: var(--reika-diff-removed-fg);
+}
+.diff-word {
+  color: var(--reika-diff-word-fg);
+  border-radius: 2px;
+}
+.diff-row--added .diff-word {
+  background: var(--reika-diff-added-word-bg);
+}
+.diff-row--removed .diff-word {
+  background: var(--reika-diff-removed-word-bg);
+}

@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
 # Cuts the raw take from docs/demo.tape into docs/demo.gif: the typed prompt at normal speed, the
-# model's turn sped up, then a short hold on the result.
-#   scripts/demo-cut.sh <turn-end-seconds> [raw.mp4] [speed]
+# model's turn sped up, then a short hold on the result. docs/demo-web.mjs's take goes through the
+# same cut, so the two gifs match. Also writes <out>-poster.png, the last frame, for the landing.
+#   scripts/demo-cut.sh <turn-end-seconds> [raw.mp4] [speed] [out.gif]
 # Find the turn end by scrubbing the raw take for the "Worked for …" line.
 set -euo pipefail
 
-end=${1:?usage: scripts/demo-cut.sh <turn-end-seconds> [raw.mp4] [speed]}
+end=${1:?usage: scripts/demo-cut.sh <turn-end-seconds> [raw.mp4] [speed] [out.gif]}
 raw=${2:-/tmp/reika-demo-raw.mp4}
 speed=${3:-3}
+here=$(cd "$(dirname "$0")" && pwd)
+out=${4:-$here/../docs/demo.gif}
 typed=7   # seconds of prompt typing kept at normal speed
 hold=5    # seconds held on the final screen
-here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
@@ -28,5 +30,7 @@ ffmpeg -v error -y -i "$raw" -filter_complex "\
 
 ffmpeg -v error -y -i "$tmp/cut.mkv" -filter_complex \
   "split[x][y];[x]palettegen=max_colors=64:stats_mode=diff[p];[y][p]paletteuse=dither=none:diff_mode=rectangle" \
-  "$here/../docs/demo.gif"
-ls -la "$here/../docs/demo.gif"
+  "$out"
+# The landing's still for prefers-reduced-motion: the take's last frame.
+ffmpeg -v error -y -sseof -0.2 -i "$tmp/cut.mkv" -frames:v 1 -update 1 "${out%.gif}-poster.png"
+ls -la "$out" "${out%.gif}-poster.png"

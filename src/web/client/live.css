@@ -1,0 +1,118 @@
+/* The running turn: drawn like the rows it will commit as, plus the busy line. */
+.live-pending {
+  margin-top: 0.15em;
+}
+.live-tool {
+  margin: 0.5em 0 0;
+  font-family: var(--reika-mono);
+  font-size: 0.82em;
+  color: var(--reika-muted);
+  tab-size: 8;
+}
+.live-tool--command {
+  margin-left: 2.4em;
+}
+
+.plan {
+  margin-top: 0.9em;
+  font-size: 0.93em;
+}
+.plan-head {
+  color: var(--reika-mode-plan);
+}
+.plan-waived {
+  color: var(--reika-muted);
+}
+.plan-steps {
+  list-style: none;
+  margin: 0.2em 0 0;
+  padding: 0;
+}
+.plan-step {
+  color: var(--reika-secondary);
+}
+.plan-step--done,
+.plan-step--waived {
+  color: var(--reika-muted);
+}
+.plan-mark {
+  display: inline-block;
+  width: 1.3em;
+  color: var(--reika-muted);
+}
+.plan-step--done .plan-mark {
+  color: var(--reika-success);
+}
+.plan-step--waived .plan-mark {
+  color: var(--reika-warning);
+}
+.plan-step--next .plan-mark {
+  color: var(--reika-accent);
+}
+
+.busy {
+  margin: 0 0 0.5em;
+  font-size: 0.93em;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5em;
+  --busy-tone: var(--reika-accent);
+}
+.busy-spinner {
+  font-family: var(--reika-mono);
+  /* Braille dots are drawn small for their cell; a size up reads as the TUI's spinner does. */
+  font-size: 1.15em;
+  line-height: 1;
+  color: var(--busy-tone);
+  width: 1ch;
+}
+/* The TUI's glow: the label rests at a dim tint of its state's colour and a brighter band sweeps
+   across it, then pauses off the end (the gradient's last third), as ui/Working.tsx does. The
+   page sets the real gradient inline from ui/shimmer.ts (sweepGradient, LiveTurn.tsx); this one
+   stands only where the state's colour cannot be read. */
+.busy-label {
+  --busy-base: color-mix(in oklab, var(--busy-tone) 82%, var(--reika-page-bg));
+  --busy-peak: color-mix(in oklab, var(--busy-tone) 65%, white);
+  background: linear-gradient(
+      90deg,
+      var(--busy-base) 0 40%,
+      var(--busy-peak) 46% 48%,
+      var(--busy-base) 54% 100%
+    )
+    0 0 / 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  /* A percent or a countdown ticking must not shift the line's width under the sweep. */
+  font-variant-numeric: tabular-nums;
+  animation-name: busy-sweep;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+}
+@keyframes busy-sweep {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0% 0;
+  }
+}
+.busy--info {
+  --busy-tone: var(--reika-info);
+}
+.busy--prefill {
+  --busy-tone: var(--reika-prefill);
+}
+.busy--warning {
+  --busy-tone: var(--reika-warning);
+}
+.busy--subagent {
+  --busy-tone: var(--reika-subagent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .busy-label {
+    animation: none;
+    background: none !important;
+    color: var(--busy-tone);
+  }
+}

@@ -1,0 +1,346 @@
+/* The show-history button, fixed top-left while the pane is collapsed or the window narrow, and
+   the panel it shows: a pane pinned
+   beside the chat from 72rem (PANE_QUERY in History.tsx), a drawer over it below that. Controls
+   take the pills' surface and border so the panel reads as part of the same set. */
+/* The collapsed rail: show-history over new conversation, the same button twice. Side by side
+   where the page starts below them (narrow), so they take no more height than one did. */
+.history-rail {
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* Tooltips beside the stack: above or below, each lands on the other button. */
+  --tip-side: right;
+}
+@media (max-width: 60rem) {
+  .history-rail {
+    flex-direction: row;
+    --tip-side: initial;
+  }
+}
+.history-show {
+  display: inline-grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  color: var(--reika-control-fg);
+  background: var(--reika-control-bg);
+  border: 1px solid var(--reika-control-border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.history-show:hover:not(:disabled) {
+  border-color: var(--reika-rule-strong);
+  background: var(--reika-control-focus-bg);
+}
+.history-show:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.history-show svg,
+.history-close svg,
+.history-new svg,
+.history-search svg {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.history-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 4;
+}
+.history-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgb(0 0 0 / 0.5);
+}
+.history {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  padding: 0.75rem 0.75rem 1rem;
+  background: var(--reika-code-bg);
+  border-right: 1px solid var(--reika-rule);
+}
+.history--drawer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: min(22rem, 100%);
+  box-shadow: 8px 0 32px rgb(0 0 0 / 0.4);
+  animation: history-in 140ms ease-out;
+}
+.history--pane {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 2;
+  width: 18rem;
+}
+body.with-history {
+  padding-left: 18rem;
+}
+@keyframes history-in {
+  from {
+    transform: translateX(-1.5rem);
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .history--drawer {
+    animation: none;
+  }
+}
+@media (max-width: 480px) {
+  .history--drawer {
+    width: 100%;
+    border-right: 0;
+  }
+}
+
+/* New conversation and the close button share the top row. New conversation is drawn as a row,
+   like the sessions under it, not a raised button, so its length never has to match the filter's. */
+.history-head {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+.history-close {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 2.125rem;
+  height: 2.125rem;
+  padding: 0;
+  color: var(--reika-secondary);
+  background: none;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.history-close:hover {
+  color: var(--reika-text);
+  background: var(--reika-control-bg);
+}
+
+.history-new {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 2.125rem;
+  padding: 0 0.625rem;
+  font: inherit;
+  font-size: 0.875rem;
+  color: var(--reika-text);
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.history-new:hover:not(:disabled) {
+  background: var(--reika-menu-active);
+}
+.history-new:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+/* The search icon under New conversation's plus, so both icons and both labels share one x. */
+.history-search {
+  position: relative;
+  display: flex;
+}
+.history-search svg {
+  position: absolute;
+  left: 0.625rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--reika-muted);
+  pointer-events: none;
+}
+.history-filter {
+  flex: 1;
+  min-width: 0;
+  height: 2.125rem;
+  padding: 0 0.625rem 0 calc(2.125rem - 1px);
+  border-radius: 8px;
+  border: 1px solid color-mix(in oklab, var(--reika-rule) 85%, var(--reika-code-bg));
+  color: var(--reika-control-fg);
+  font: inherit;
+  font-size: 0.875rem;
+  transition: border-color 120ms ease;
+  /* On the panel's own surface, with a faint border: enough to read as a field beside the rows,
+     no louder than them. */
+  background: none;
+}
+.history-filter::placeholder {
+  color: var(--reika-muted);
+}
+/* Lit the way the chat input's card is. */
+.history-filter:focus {
+  outline: none;
+  border-color: var(--reika-rule-strong);
+}
+
+.history-error {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--reika-error);
+}
+
+.history-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 -0.25rem;
+  padding: 0 0.25rem;
+  list-style: none;
+}
+/* One height for every row: the title and the details each hold one line, cut with an ellipsis
+   (the row's tooltip has the whole title), and a tag fits inside the title's line. */
+.history-row {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 0.125rem;
+  width: 100%;
+  height: 3.25rem;
+  padding: 0 0.625rem;
+  text-align: left;
+  font: inherit;
+  color: var(--reika-text);
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.history-row:hover:not(:disabled) {
+  background: var(--reika-menu-active);
+}
+.history-row:focus-visible {
+  outline-offset: -2px;
+}
+.history-row:disabled {
+  cursor: default;
+}
+.history-row:disabled:not([aria-current]) {
+  opacity: 0.55;
+}
+/* A tint of the prompt's colour, so the session you are in is marked the way your prompts are, and
+   reads apart from a hovered row's neutral grey. No edge bar: a row this narrow has no room for a
+   line that looks meant. */
+.history-row[aria-current] {
+  background: color-mix(in oklab, var(--reika-accent) 14%, var(--reika-user-bg));
+}
+/* The details' grey is under 3:1 on the tint; this is about 5:1, past what text this small needs. */
+.history-row[aria-current] .history-meta {
+  color: color-mix(in oklab, var(--reika-secondary) 70%, var(--reika-text));
+}
+.history-title {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-width: 0;
+  height: 1.25rem;
+  font-size: 0.875rem;
+}
+.history-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-tag {
+  flex: none;
+  padding: 0 0.375rem;
+  font-size: 0.6875rem;
+  line-height: 1rem;
+  color: var(--reika-secondary);
+  border: 1px solid var(--reika-control-border);
+  border-radius: 999px;
+}
+.history-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  color: var(--reika-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.history-note {
+  margin: 0;
+  /* The row's own inset, so the note starts where a session title would. */
+  padding: 0.5rem 0.625rem;
+  text-wrap: pretty;
+  font-size: 0.875rem;
+  color: var(--reika-muted);
+}
+
+.history-scope {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.25rem 0;
+  border-top: 1px solid var(--reika-rule);
+  font-size: 0.875rem;
+  color: var(--reika-secondary);
+  cursor: pointer;
+}
+.history-scope input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.history-switch {
+  position: relative;
+  flex: none;
+  width: 1.75rem;
+  height: 1rem;
+  border-radius: 999px;
+  background: var(--reika-control-bg);
+  border: 1px solid var(--reika-rule-strong);
+}
+.history-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
+  background: var(--reika-secondary);
+  transition: transform 120ms ease-out;
+}
+.history-scope input:checked + .history-switch {
+  border-color: var(--reika-accent);
+}
+.history-scope input:checked + .history-switch::after {
+  transform: translateX(0.75rem);
+  background: var(--reika-accent);
+}
+.history-scope input:focus-visible + .history-switch {
+  outline: 2px solid var(--reika-accent);
+  outline-offset: 2px;
+}
+
+/* Where the window leaves no gutter for the button, the page starts below it. */
+@media (max-width: 60rem) {
+  .app {
+    padding-top: 2.75rem;
+  }
+}

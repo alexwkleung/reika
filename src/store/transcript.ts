@@ -61,7 +61,7 @@ export type TranscriptUsage = {
   sheds?: number;
   folds?: number;
   shrinkEvents?: TranscriptShrinkEvent[];
-  // The last call's cached prompt tokens — the numerator behind the status line's `cache N%`.
+  // The last call's cached prompt tokens — the numerator behind the status line's `N% cached`.
   lastCachedTokens?: number;
 };
 

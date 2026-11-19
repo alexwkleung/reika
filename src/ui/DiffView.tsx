@@ -1,5 +1,4 @@
 import { Box, Text } from 'ink';
-import { diffWordsWithSpace } from 'diff';
 import stringWidth from 'string-width';
 import chalk from 'chalk';
 import { theme, themeChalk } from './theme.js';
@@ -7,6 +6,10 @@ import { highlightCode } from './highlight.js';
 import { drawnWidth, sanitizeTerminalText } from './termtext.js';
 import { sliceStyled, wrapLines, wrapStyledRows } from './layout.js';
 import stripAnsi from 'strip-ansi';
+import { assignLineNumbers, parseDiffBlocks, type RenderRow } from './diffrows.js';
+import { detectLanguage, intraLineParts } from './intraline.js';
+
+export { assignLineNumbers, intraLineParts, parseDiffBlocks };
 
 export function DiffView({
   diff,
@@ -134,106 +137,6 @@ export function sanitizeDiffLines(diff: string): string[] {
       ? marker + sanitizeTerminalText(line.slice(2))
       : sanitizeTerminalText(line);
   });
-}
-
-type DiffBlock =
-  | { kind: 'context'; line: string }
-  | { kind: 'change'; removed: string[]; added: string[] };
-
-// Group consecutive `-` and `+` lines into change blocks; everything else is context.
-// Exported for unit tests.
-export function parseDiffBlocks(lines: string[]): DiffBlock[] {
-  const blocks: DiffBlock[] = [];
-  let i = 0;
-  while (i < lines.length) {
-    if (lines[i].startsWith('- ') || lines[i].startsWith('+ ')) {
-      const removed: string[] = [];
-      const added: string[] = [];
-      while (i < lines.length && lines[i].startsWith('- ')) {
-        removed.push(lines[i].slice(2));
-        i++;
-      }
-      while (i < lines.length && lines[i].startsWith('+ ')) {
-        added.push(lines[i].slice(2));
-        i++;
-      }
-      blocks.push({ kind: 'change', removed, added });
-    } else {
-      blocks.push({ kind: 'context', line: lines[i] });
-      i++;
-    }
-  }
-  return blocks;
-}
-
-type RenderRow =
-  | { kind: 'context'; text: string; lineNo: number }
-  | { kind: 'plain'; text: string; side: 'removed' | 'added'; lineNo: number }
-  | { kind: 'paired'; text: string; other: string; side: 'removed' | 'added'; lineNo: number };
-
-// Flatten blocks into rows in display order, assigning each a file line number.
-// Removed lines advance the old-file counter, added lines the new-file counter,
-// context lines both — so the gutter reads like an editor would number the file.
-// Exported for unit tests.
-export function assignLineNumbers(
-  blocks: DiffBlock[],
-  startLine: number | undefined,
-  oldStartLine: number = startLine ?? 1,
-): { lines: RenderRow[]; maxLineNo: number } {
-  const lines: RenderRow[] = [];
-  let oldNo = oldStartLine;
-  let newNo = startLine ?? 1;
-  let maxLineNo = 0;
-  const note = (n: number) => {
-    if (n > maxLineNo) maxLineNo = n;
-  };
-
-  for (const block of blocks) {
-    if (block.kind === 'context') {
-      const text = block.line.startsWith('  ') ? block.line.slice(2) : block.line;
-      lines.push({ kind: 'context', text, lineNo: newNo });
-      note(newNo);
-      oldNo++;
-      newNo++;
-      continue;
-    }
-    const pairedCount = Math.min(block.removed.length, block.added.length);
-    // Removed lines (paired then leftover) keyed off the old-file counter.
-    for (let i = 0; i < block.removed.length; i++) {
-      const lineNo = oldNo + i;
-      note(lineNo);
-      if (i < pairedCount) {
-        lines.push({
-          kind: 'paired',
-          text: block.removed[i],
-          other: block.added[i],
-          side: 'removed',
-          lineNo,
-        });
-      } else {
-        lines.push({ kind: 'plain', text: block.removed[i], side: 'removed', lineNo });
-      }
-    }
-    // Added lines keyed off the new-file counter.
-    for (let i = 0; i < block.added.length; i++) {
-      const lineNo = newNo + i;
-      note(lineNo);
-      if (i < pairedCount) {
-        lines.push({
-          kind: 'paired',
-          text: block.added[i],
-          other: block.removed[i],
-          side: 'added',
-          lineNo,
-        });
-      } else {
-        lines.push({ kind: 'plain', text: block.added[i], side: 'added', lineNo });
-      }
-    }
-    oldNo += block.removed.length;
-    newNo += block.added.length;
-  }
-  return { lines, maxLineNo };
 }
 
 // Muted dim color for the line-number gutter so it recedes behind the code. On a changed row the
@@ -416,31 +319,6 @@ function padToWidth(text: string, maxWidth: number): string {
   return visible < maxWidth ? ' '.repeat(maxWidth - visible) : '';
 }
 
-// Minimum ratio of shared content for intra-line highlighting to be useful.
-// Below this, the two lines are too different — inverse highlights cover most
-// of the line and look noisy. Fall back to plain full-line color.
-const INTRA_LINE_SIMILARITY_THRESHOLD = 0.3;
-// Word edits past which the search stops and the line is drawn plain. The threshold above is the
-// same judgement made after the fact, and Myers is O(D²) in that D: a pair of 20KB lines with
-// nothing in common (a minified bundle, a data row) cost 1.3s in the word diff, per row, on the
-// TUI thread (#244); capped, 3ms. Nothing that many changed words could highlight is readable.
-const INTRA_LINE_MAX_EDITS = 200;
-
-// The word-level segments to paint a paired line with, or null when the pair is better drawn as
-// two plain lines: too different to highlight legibly, or too different to be worth finding out.
-// Exported for unit tests.
-export function intraLineParts(
-  oldText: string,
-  newText: string,
-): ReturnType<typeof diffWordsWithSpace> | null {
-  const raw = diffWordsWithSpace(oldText, newText, { maxEditLength: INTRA_LINE_MAX_EDITS });
-  if (raw === undefined) return null;
-  // Coalesce contiguous same-kind segments so adjacent highlights render as
-  // one continuous block (no visual gap between ", " and "Pi" pieces).
-  const parts = coalesceParts(raw);
-  return isWorthIntraLine(parts, oldText, newText) ? parts : null;
-}
-
 // A line that has a counterpart on the other side — render with intra-line
 // word-level diff highlighting via jsdiff, IF the lines are similar enough.
 function PairedLine({
@@ -507,83 +385,6 @@ function PairedLine({
   return (
     <WrappedRow content={painted} prefix={prefix} gutter={gutter} maxWidth={maxWidth} side={side} />
   );
-}
-
-function isWorthIntraLine(
-  parts: ReturnType<typeof diffWordsWithSpace>,
-  oldText: string,
-  newText: string,
-): boolean {
-  const totalMax = Math.max(oldText.length, newText.length);
-  if (totalMax === 0) return false;
-  const unchanged = parts
-    .filter(p => !p.added && !p.removed)
-    .reduce((sum, p) => sum + p.value.length, 0);
-  return unchanged / totalMax >= INTRA_LINE_SIMILARITY_THRESHOLD;
-}
-
-// Merge consecutive segments with the same added/removed kind. jsdiff often
-// splits e.g. ", Pi" into two segments (", " + "Pi"); coalescing them lets the
-// inverse highlight render as one contiguous block.
-function coalesceParts(
-  parts: ReturnType<typeof diffWordsWithSpace>,
-): ReturnType<typeof diffWordsWithSpace> {
-  const out: typeof parts = [];
-  for (const p of parts) {
-    const last = out[out.length - 1];
-    if (last && !!last.added === !!p.added && !!last.removed === !!p.removed) {
-      out[out.length - 1] = { ...last, value: last.value + p.value };
-    } else {
-      out.push(p);
-    }
-  }
-  return out;
-}
-
-function detectLanguage(path: string): string {
-  const dot = path.lastIndexOf('.');
-  const ext = dot >= 0 ? path.slice(dot + 1).toLowerCase() : '';
-  switch (ext) {
-    case 'ts':
-    case 'tsx':
-    case 'mts':
-    case 'cts':
-      return 'typescript';
-    case 'js':
-    case 'jsx':
-    case 'mjs':
-    case 'cjs':
-      return 'javascript';
-    case 'py':
-      return 'python';
-    case 'rs':
-      return 'rust';
-    case 'go':
-      return 'go';
-    case 'rb':
-      return 'ruby';
-    case 'json':
-      return 'json';
-    case 'md':
-      return 'markdown';
-    case 'css':
-      return 'css';
-    case 'scss':
-      return 'scss';
-    case 'html':
-    case 'htm':
-      return 'html';
-    case 'yml':
-    case 'yaml':
-      return 'yaml';
-    case 'sh':
-    case 'bash':
-      return 'bash';
-    case 'toml':
-      return 'ini';
-    default:
-      return 'plaintext';
-  }
 }
 
 export function diffStats(diff: string): { added: number; removed: number } {
