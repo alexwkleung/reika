@@ -144,7 +144,7 @@ h2.md-heading {
 .hljs-attribute,
 .hljs-code,
 .hljs-addition {
-  color: var(--reika-success);
+  color: var(--reika-mode-shell);
 }
 .hljs-title,
 .hljs-section,

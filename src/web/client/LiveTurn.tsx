@@ -112,7 +112,7 @@ export function sweepGradient(tone: string, chars: number): string {
   return `linear-gradient(90deg, ${stops.join(', ')})`;
 }
 
-// The state's colour as app.css defines it; null outside a browser (a render test), where the
+// The state's colour as the root carries it (palettevars.ts); null outside a browser (a render test), where the
 // stylesheet's own gradient stands.
 function toneHex(tone: string): string | null {
   if (typeof getComputedStyle !== 'function' || !document.documentElement) return null;

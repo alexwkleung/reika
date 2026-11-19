@@ -8,6 +8,7 @@ import { openEventStream } from './eventstream.js';
 import { frameOrTimer } from './framebatch.js';
 import { createHolder } from './holder.js';
 import { browserTokenStore, signIn } from './link.js';
+import { applyPalette } from './palettevars.js';
 import { sendMessage, uploadImage, type SendResult, type UploadResult } from './send.js';
 import { foldEvent, initialClientState, type ClientState } from './store.js';
 
@@ -55,6 +56,7 @@ async function start(): Promise<void> {
   });
 }
 
+applyPalette(document.documentElement.style);
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App state={state} connection={connection} schedule={schedule} send={send} upload={upload} />

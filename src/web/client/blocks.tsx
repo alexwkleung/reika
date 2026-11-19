@@ -1,19 +1,22 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { turnEndLabel } from '../../display/format.js';
+import { unicodeGlyphs } from '../../display/glyphs.js';
 import type { PlanChecks } from '../../types.js';
 import { Markdown } from './Markdown.js';
 
 // Blocks that both a committed row and the live turn draw, so a streamed block and the row it
 // commits as look the same.
 
-// The TUI's markers (ui/glyphs.ts). Text, so they read and copy as the terminal's do.
+// The TUI's markers, always the unicode set: a browser has the fonts. Text, so they read and copy
+// as the terminal's do. `dialogCall` is the bare mark; the TUI's `call` adds a selector a terminal
+// needs to keep it one column.
 export const GLYPH = {
-  call: '⏺',
-  toolResult: '↳',
-  notice: '❯',
-  noticeWarn: '⟳',
-  check: '✓',
-  next: '▸',
+  call: unicodeGlyphs.dialogCall,
+  toolResult: unicodeGlyphs.toolResult,
+  notice: unicodeGlyphs.notice,
+  noticeWarn: unicodeGlyphs.noticeWarn,
+  check: unicodeGlyphs.check,
+  next: unicodeGlyphs.next,
   shell: '$',
 } as const;
 
