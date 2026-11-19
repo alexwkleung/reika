@@ -32,7 +32,7 @@ if (process.argv[2] === 'web') {
   }
 }
 if (web) {
-  const { runWeb, WEB_USAGE } = await import('./web/command.js');
+  const { runWeb, terminalLink, WEB_USAGE } = await import('./web/command.js');
   if (web.help) {
     process.stdout.write(`${WEB_USAGE}\n`);
     process.exit(0);
@@ -62,7 +62,7 @@ if (web) {
   // Enter prints a fresh link: the first one works once, and a second tab needs its own.
   if (process.stdin.isTTY) {
     process.stdin.on('data', () => {
-      process.stdout.write(`\n  ${run.newLink()}\n\n`);
+      process.stdout.write(`\n  ${terminalLink(run.newLink())}\n\n`);
     });
     // Not a reason to stay alive once the server has shut down.
     process.stdin.unref();

@@ -6,7 +6,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { createSession, Session, SessionOptions, SubmitOptions } from '../session.js';
 import type { Config, Message } from '../types.js';
-import { parseWebArgs, runWeb, WINDOW_TIMINGS, type WebHandle, type WebIo } from './command.js';
+import {
+  parseWebArgs,
+  runWeb,
+  terminalLink,
+  WINDOW_TIMINGS,
+  type WebHandle,
+  type WebIo,
+} from './command.js';
 import { MAX_BACKOFF_MS } from './client/eventstream.js';
 import { PROTOCOL_VERSION, type ServerEvent } from './protocol.js';
 
@@ -63,6 +70,28 @@ describe('import graph', () => {
       f.imports.filter(i => i.external).map(i => i.path),
     );
     expect(externals.filter(p => /^(ink|react)(\/|$)/.test(p))).toEqual([]);
+  });
+});
+
+describe('terminalLink', () => {
+  const url = 'http://127.0.0.1:4000/#code=abc-DEF_123';
+  const visible = (s: string) =>
+    s.replace(/\x1b\]8;;[^\x07]*\x07/g, '').replace(/\x1b\[[\d;]*m/g, '');
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('wraps the URL in an OSC 8 hyperlink that opens the same URL, where the terminal takes one', () => {
+    vi.stubEnv('FORCE_HYPERLINK', '1');
+    const out = terminalLink(url);
+    expect(out.startsWith(`\x1b]8;;${url}\x07`)).toBe(true);
+    expect(out.endsWith('\x1b]8;;\x07')).toBe(true);
+    expect(visible(out)).toBe(url);
+  });
+
+  it('prints only the URL, with no hyperlink, where the terminal takes none', () => {
+    vi.stubEnv('FORCE_HYPERLINK', '0');
+    const out = terminalLink(url);
+    expect(out).not.toContain('\x1b]8;');
+    expect(visible(out)).toBe(url);
   });
 });
 

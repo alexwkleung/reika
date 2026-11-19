@@ -1,9 +1,11 @@
 import { join } from 'node:path';
+import { supportsHyperlink } from 'supports-hyperlinks';
 import { resolveDefaultMode } from '../config.js';
 import { createController } from '../controller.js';
 import { startMode, type LastState } from '../laststate.js';
 import type { createSession } from '../session.js';
 import type { Config, Mode } from '../types.js';
+import { theme, themeChalk } from '../ui/theme.js';
 import { PACKAGE_ROOT } from '../version.js';
 import { clientAssets } from './assets.js';
 import { createWebBridge } from './bridge.js';
@@ -48,6 +50,18 @@ export function parseWebArgs(argv: string[]): WebArgs | null {
     }
   }
   return args;
+}
+
+// The sign-in link as the terminal prints it, in the TUI's link color: an OSC 8 hyperlink where the
+// terminal takes one, underlined because it clicks (renderLink's rule, ui/markdown.ts), and plain
+// colored text elsewhere. chalk drops the color in a pipe or under NO_COLOR, so a script that reads
+// the link off stdout gets the bare URL.
+export function terminalLink(url: string): string {
+  const paint = themeChalk(theme.link);
+  if (supportsHyperlink(process.stdout)) {
+    return `\x1b]8;;${url}\x07${paint.underline(url)}\x1b]8;;\x07`;
+  }
+  return paint(url);
 }
 
 export type WebIo = {
@@ -214,7 +228,7 @@ export async function runWeb(args: WebArgs, io: WebIo): Promise<WebHandle | numb
     'It works once, within ten minutes. Press Enter for a new link, ctrl-c to stop.',
   ];
   if (!args.window) {
-    io.stdout([header, '', `  ${server.url}`, '', ...linkNote, ''].join('\n'));
+    io.stdout([header, '', `  ${terminalLink(server.url)}`, '', ...linkNote, ''].join('\n'));
   } else {
     // The window takes the first link and the terminal never prints it: one code, one sign-in.
     try {
@@ -224,7 +238,9 @@ export async function runWeb(args: WebArgs, io: WebIo): Promise<WebHandle | numb
     }
     const listening = server;
     const offerLink = (why: string): void =>
-      io.stdout([why, '', `  ${listening.newLink()}`, '', ...linkNote, ''].join('\n'));
+      io.stdout(
+        [why, '', `  ${terminalLink(listening.newLink())}`, '', ...linkNote, ''].join('\n'),
+      );
     if (win?.kind === 'app') {
       io.stdout(
         [
@@ -260,7 +276,9 @@ export async function runWeb(args: WebArgs, io: WebIo): Promise<WebHandle | numb
         ].join('\n'),
       );
     } else {
-      io.stdout([header, '', `  ${listening.newLink()}`, '', ...linkNote, ''].join('\n'));
+      io.stdout(
+        [header, '', `  ${terminalLink(listening.newLink())}`, '', ...linkNote, ''].join('\n'),
+      );
     }
     if (win) {
       // A window that opened but cannot sign in (an error page, a browser that cannot read the
