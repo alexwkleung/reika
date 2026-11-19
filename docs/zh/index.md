@@ -78,7 +78,7 @@ docs:
   terminal-alt="Reika 使用本地模型修复重试辅助函数及其测试"
   terminal-caption="通过 llama.cpp 运行 Qwen3.6 35B A3B（Unsloth UD-IQ2_M）的一次真实本地运行，播放速度加快 3 倍。模型的第一次测试失败后，根据错误进行了修复。"
   web-alt="在 reika web 中完成同一任务：Reika 使用本地模型修复重试辅助函数及其测试"
-  web-caption="TODO: the web take's caption, translated."
+  web-caption="通过 llama.cpp 运行 Qwen3.6 35B A3B（Unsloth UD-IQ2_M）的一次真实本地运行，播放速度加快 3 倍。模型完成修改，为延迟编写了五个测试，第一次运行就全部通过。"
 />
 
 ## 安装
