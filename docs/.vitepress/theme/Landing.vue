@@ -114,7 +114,7 @@ const external = (link: string) => /^https?:/.test(link);
 .heading {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 12px;
   margin: 0;
 }
 
