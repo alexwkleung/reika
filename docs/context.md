@@ -8,14 +8,14 @@ decision went the way it did, with measurements, see [Findings](findings.md). Fo
 
 ## The window comes from the engine or from you
 
-Most of this page needs a known context window. Reika takes the first of these that answers:
+Most of this page needs a known context window. Reika uses the first of these that has one:
 
 1. `REIKA_CONTEXT_WINDOW`, globally or per profile.
 2. The endpoint's `/v1/models` listing: llama.cpp's `n_ctx` for the slot, vLLM's `max_model_len`.
 3. The [models.dev](https://models.dev) catalog, for hosted endpoints only. Loopback and private hosts
    are never looked up.
 
-If none of them answers, a startup warning says so. See [With no known window](#with-no-known-window)
+If none of them does, a startup warning says so. See [With no known window](#with-no-known-window)
 for what that turns off.
 
 ## How the window is divided
@@ -54,7 +54,8 @@ In tokens, with the default reserve unless noted:
 <sup>A 24k window at two reserves. The fixed system prompt and bootstrap context sit at the left of every bar, so what is left for history is smaller than the colored span.</sup>
 
 A larger reserve gives the model more room to think, and the shed point moves down to pay for it. The
-reserve caps nothing: `max_tokens` is whatever the window has left, so it only binds on a spiral. It is
+reserve doesn't cap the reply: `max_tokens` is whatever the window has left, so it only binds on a
+spiral. It is
 also held under the model's output limit when the catalog lists one, and under `REIKA_MAX_TOKENS` when
 that is set.
 
@@ -79,9 +80,9 @@ keeps that across turns. Code, JSON and CJK text tokenize denser than four chara
 **Below the shed point, requests only grow.** Tool results stay in full and each request is the
 previous one plus the new round. On a local engine this is what keeps prefill cheap: the engine reuses
 its cache up to the first byte that differs, so a request that only appends reprocesses only the
-append. One edit to mid-history on a 27B cost 8453 tokens and 7.9 minutes of prefill, against 25 tokens
+append. One edit in the middle of the history on a 27B cost 8453 tokens and 7.9 minutes of prefill, against 25 tokens
 and 3.5 seconds for an append ([measured](findings.md#the-harnesss-own-context-management-cost-more-than-anything-the-model-did)).
-Reika's job between shrink events is therefore not to touch what it already sent.
+So between shrink events, Reika leaves what it already sent alone.
 
 **A single large result is cut, not the history.** A new tool result can only take the room left after
 everything else, shared between the results of that round. The task definition goes first, then the
@@ -89,9 +90,10 @@ newest read, then small results, and the rest split what remains. A cut keeps th
 the result with a marker between them saying it hit the context limit. A long `bash`, `grep`, `glob` or
 `fetch_url` result is also saved to a temp file the model can page through.
 
-**At the shed point, the model writes a note first.** If the shrink coming up would fold something, one
-extra round with tool calls forbidden asks the model what it has established, while it can still see
-the full history. Reasoning does not survive a fold, so otherwise its conclusions go with it. A failed
+**At the shed point, the model writes a note first.** If the coming shrink would fold something, one
+extra round, with tool calls forbidden, asks the model what it has established while it can still see
+the full history. Reasoning does not survive a fold, so without the note its conclusions would go with
+it. A failed
 or empty note folds without one, and a request already too large for the window skips the round. The
 note costs one generation per fold.
 
@@ -107,8 +109,8 @@ ones, and old reasoning goes along with them. A shed result collapses to its sum
 The current round is never shed, and neither is the payload that defined the task. When anything has
 been shed, the next request tells the model that those results are gone and can be run again.
 
-**If that is not enough, the oldest turns fold.** Shedding can stop short, since it cannot touch the
-current round. The fold then lands in the same request, so one event costs one cache invalidation. The
+**If that is not enough, the oldest turns fold.** Shedding can stop short of the target, since it cannot
+touch the current round. The fold then lands in the same request, so one event costs one cache invalidation. The
 oldest turns become one recap, which leads with the model's note and carries:
 
 - the task definition, verbatim
@@ -119,15 +121,15 @@ oldest turns become one recap, which leads with the model's note and carries:
 Recaps replace each other rather than stacking. A fold changes only what the model sees: the scrollback
 and `/save` keep the whole conversation, and a fold persists across turns.
 
-Each event rewrites requests from wherever it changed them, so it pays roughly one full prefill. Shedding
-to well below the shed point is what makes it infrequent. That is the trade at the 0.7 target: a lower
-target means fewer events, and a smaller set of results in front of the model between them.
+Each event rewrites the request from the first point it changed, so it costs roughly one full prefill.
+Shedding to well below the shed point is what keeps events rare. That is the trade behind the 0.7
+target: a lower target means fewer events, but fewer results in front of the model between them.
 
 ## What you see
 
 The status line's `ctx` chip reads `ctx 16k/24k (81% of 20k)`: the current size, the window, and how far
-along you are to the shed point rather than to the window. It changes to the warning color at 80%. At 100%, expect a
-shed.
+you are toward the shed point (not toward the window). It turns the warning color at 80%, and at 100%
+expect a shed.
 
 A fold prints a line in the scrollback with the size of the recap, and the note appears above it as its
 own block. `/compact` runs the note and the fold on demand, and says so when there is nothing to fold.

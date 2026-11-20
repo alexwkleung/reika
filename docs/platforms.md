@@ -12,41 +12,41 @@ Node.js 22 or newer. Node sets the operating-system floor, not Reika:
 | Linux   | glibc 2.28 or newer — most distributions from 2018 on |
 | Windows | 10, through WSL (see [Windows](#windows))             |
 
-Reika itself is light: it is a terminal UI that sends requests to a model server, so its own CPU and
-memory use is small next to the model's. What a machine needs to run a _model_ is the model server's
-question, not Reika's.
+Reika itself is light: it's a terminal UI that sends requests to a model server, so its own CPU and
+memory use is small next to the model's. What a machine needs to run a _model_ depends on the model
+server, not on Reika.
 
 ## Running on a weak machine
 
-Because Reika only talks to an OpenAI-compatible endpoint, the model does not have to run on the
-machine Reika runs on. An old laptop can run Reika against:
+Because Reika only talks to an OpenAI-compatible endpoint, the model doesn't have to run on the same
+machine as Reika. An old laptop can run Reika against:
 
-- a model server on a stronger machine on the same network (llama.cpp, Ollama, vLLM, LM Studio —
-  anything that serves `/v1/chat/completions`)
+- a model server on a stronger machine on the same network (llama.cpp, Ollama, vLLM, LM Studio, or
+  anything else that serves `/v1/chat/completions`)
 - a hosted API
 
-Point `REIKA_BASE_URL` at it (see [Configuration](configuration.md)). Everything Reika does locally —
-reading and editing files, running commands, the context bookkeeping — stays on the machine you are
-sitting at, and only the requests cross the network.
+Point `REIKA_BASE_URL` at it (see [Configuration](configuration.md)). Everything Reika does itself
+(reading and editing files, running commands, managing the context) stays on the machine you're
+sitting at, and only the model requests cross the network.
 
-**Ollama.** It works, but Reika cannot read the context window from it, so set
-`REIKA_CONTEXT_WINDOW` to the `num_ctx` the model actually runs with. Without a window Reika does no
-compaction and caps nothing, and Ollama's own default context is small and cuts a long prompt
-without an error, so a session can lose its earlier turns with nothing on screen saying so. The loop
-recovery's logit bias also has no effect there. llama.cpp and vLLM report their window, so neither
-needs this.
+**Ollama.** It works, but Reika can't read the context window from it, so set `REIKA_CONTEXT_WINDOW`
+to the `num_ctx` the model actually runs with. Without a window, Reika doesn't compact or cap
+anything. Ollama's own default context is small and cuts off a long prompt without an error, so a
+session can lose its earlier turns with nothing on screen saying so. The logit bias Reika uses as a
+last attempt to break a loop also has no effect there. llama.cpp and vLLM report their window, so
+neither needs this.
 
 **Thinking models on Ollama, MLX and some templates.** Once a context window is known, Reika puts its
 per-round notes in a short message at the end of each request so the prompt cache stays valid. Many
 thinking models' chat templates hide all earlier reasoning behind such a message, so the model can't
 see its own earlier thinking and keeps working it out again. Reika asks the template to keep it
 (`preserve_thinking`), which works on llama.cpp, vLLM and SGLang on your own machine or network with a
-template that supports it, such as LFM2.5 and Qwen3.6. Where it doesn't — an engine that ignores the
-request (mlx-vlm, and very likely Ollama), or a template with no such switch (Mellum2.1 Thinking,
-Ornith 1.5, Gemma 4 E4B) — Reika moves its notes onto the last tool result instead, where they hide
-nothing. It finds out which case it is in with a few tiny requests to a local server before the first
-turn, remembered for a week, and keeps an eye on it during the session. `REIKA_NOTE_SLOT=tool` or
-`user` overrides it.
+template that supports it, such as LFM2.5 and Qwen3.6. Where that doesn't work, because the engine
+ignores the request (mlx-vlm, and very likely Ollama) or the template has no such switch (Mellum2.1
+Thinking, Ornith 1.5, Gemma 4 E4B), Reika moves its notes onto the last tool result instead, where they
+hide nothing. It works out which case applies with a few tiny requests to a local server before the
+first turn, remembers the answer for a week, and keeps checking during the session.
+`REIKA_NOTE_SLOT=tool` or `user` overrides it.
 
 ## What differs by platform
 
@@ -59,8 +59,8 @@ Everything outside this table works the same everywhere.
 | Pasting an image from the clipboard (ctrl-v) | yes                         | no                                                 | no                                                 |
 | Images attached by path (`@shot.png`)        | yes (system OCR by default) | with `REIKA_VISION_MODEL` or `REIKA_VISION=native` | with `REIKA_VISION_MODEL` or `REIKA_VISION=native` |
 
-**Sandbox.** It uses macOS's own `sandbox-exec`. On Linux the tool that would do the same job cannot let
-a sandboxed command reach a model server on the same machine, so there is no sandbox there yet.
+**Sandbox.** It uses macOS's own `sandbox-exec`. On Linux, the tool that would do the same job can't let
+a sandboxed command reach a model server on the same machine, so there's no sandbox there yet.
 Approval prompts work the same everywhere, so under the default `REIKA_AUTO_APPROVE=safe` a dangerous
 command still asks first. See `REIKA_SANDBOX` in [Configuration](configuration.md).
 
@@ -68,17 +68,17 @@ command still asks first. See `REIKA_SANDBOX` in [Configuration](configuration.m
 you to opt in. Reika looks for Chrome or Chromium in the usual install paths; `REIKA_CHROME_PATH` points
 it at another binary.
 
-**Images.** Reika reads the clipboard itself, and only has a reader for macOS and Windows; WSL counts as
-Linux. An image attached by path works everywhere, as long as something can read it: the built-in OCR
-ships for macOS only among these, and on Linux the image needs `REIKA_VISION_MODEL` (a vision model
-describes it as text) or `REIKA_VISION=native` (for a main model that can see images). See
-[Configuration](configuration.md).
+**Images.** Reika reads the clipboard itself, and only has a clipboard reader for macOS and Windows;
+WSL counts as Linux. An image attached by path works everywhere, as long as something can read it. Of
+these platforms, the built-in OCR only ships for macOS, so on Linux the image needs
+`REIKA_VISION_MODEL` (a vision model describes it as text) or `REIKA_VISION=native` (for a main model
+that can see images). See [Configuration](configuration.md).
 
 ## Windows
 
-Run Reika inside WSL. The `bash` tool runs commands through `/bin/sh`, and it stops a command that hangs
-by signalling its whole process group — both Unix mechanisms, so running Reika directly on Windows is
-not supported.
+Run Reika inside WSL. The `bash` tool runs commands through `/bin/sh` and stops a hung command by
+signalling its whole process group. Both are Unix mechanisms, so running Reika directly on Windows
+isn't supported.
 
 ## Terminals
 
@@ -92,7 +92,7 @@ Any terminal that runs a full-screen program works. A few things to know on olde
   braille spinner, rounded box corners). Under `TERM=linux` or `vt*` it draws simpler ones those fonts
   carry instead. `REIKA_BASIC_GLYPHS=1` forces that for a terminal it doesn't detect, such as an old
   Windows console font, and `0` turns it off (see [Configuration](configuration.md)).
-- **Flicker.** Reika asks the terminal to draw each frame at once. A terminal that does not support that
-  ignores the request; if one misbehaves instead, `REIKA_SYNC_OUTPUT=0` turns it off.
+- **Flicker.** Reika asks the terminal to draw each frame all at once. A terminal that doesn't support
+  that ignores the request; if one misbehaves instead, `REIKA_SYNC_OUTPUT=0` turns it off.
 - **No terminal at all.** For scripts, CI and pipes, use headless mode (`reika -p`, see
   [Usage](usage.md#headless-mode)).

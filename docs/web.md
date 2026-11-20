@@ -2,9 +2,9 @@
 
 [← README](../README.md)
 
-`reika web` serves the same agent to a browser tab on this machine. It is the same session as the
-terminal UI: the same modes, tools, approvals, context handling and auto-save, drawn in a browser
-instead of a terminal. It is **experimental**.
+`reika web` serves the same agent to a browser tab on this machine. It runs the same session as the
+terminal UI, with the same modes, tools, approvals, context handling and auto-save, just drawn in a
+browser. It is **experimental**.
 
 ![Reika's web front end in its own window: the history pane, a diff from an edit, and the input box](web.png)
 
@@ -15,19 +15,19 @@ cd your-project && reika web
 ```
 
 Reika prints a link. Open it in a browser on the same machine. The link works once, within ten
-minutes, and signs in that one tab. Press Enter in the terminal for a fresh link: for a second tab,
-or after the first one expired. ctrl-c stops the server, saving the conversation first.
+minutes, and signs in that one tab. Press Enter in the terminal for a fresh link, for a second tab
+or after the first one expires. ctrl-c stops the server, saving the conversation first.
 
 ```sh
 reika web --window
 ```
 
-Opens the page in an app window instead: no tabs and no address bar (on macOS, its own Dock icon). It
-uses Chrome, Edge, Brave or Chromium, whichever it finds first (`REIKA_CHROME_PATH` points it at
-another). Without any of those it opens a tab in your default browser and says so.
+This opens the page in an app window instead, with no tabs or address bar (and on macOS, its own Dock
+icon). It uses whichever of Chrome, Edge, Brave or Chromium it finds first; `REIKA_CHROME_PATH`
+points it at another. Without any of those it opens a tab in your default browser and says so.
 
-- **Closing the window stops Reika**, the same way ctrl-c does. A reload does not, and a tab you
-  opened from the terminal's Enter link keeps Reika running until it closes too.
+- **Closing the window stops Reika**, the same way ctrl-c does. A reload does not, and if you also
+  opened a tab from the terminal's Enter link, Reika keeps running until that tab closes too.
 - **The window has its own browser profile**, under `~/.config/reika/window/`, so it never touches
   your everyday browser's tabs or sign-ins.
 - **If the window shows an error** or never signs in, the terminal prints a fresh link after about
@@ -38,41 +38,41 @@ another). Without any of those it opens a tab in your default browser and says s
 ## The page
 
 - **The transcript** draws the turn as the terminal does: tool calls and their results, diffs,
-  command output, Thinking blocks (the end of the thought in view, the whole of it behind the
-  `· N lines` toggle), the plan checklist and the busy line with its spinner.
-- **The input box** takes what the terminal's does: `/` for commands and `@` for files, both with
-  completion; ↑ and ↓ for the lines you sent; Shift+Enter, or a line ending in `\`, continues on
-  the next line instead of sending. A large paste is parked behind a marker, as in the terminal. While a turn runs, Enter
-  queues the line and Esc in an empty box stops the turn.
+  command output, Thinking blocks (the end of the thought in view, the rest behind the `· N lines`
+  toggle), the plan checklist, and the busy line with its spinner.
+- **The input box** works like the terminal's: `/` for commands and `@` for files, both with
+  completion, and ↑ and ↓ for the lines you sent. Shift+Enter, or a line ending in `\`, starts a new
+  line instead of sending. A large paste is parked behind a marker, as in the terminal. While a turn
+  runs, Enter queues the line, and Esc in an empty box stops the turn.
 - **Images** go in by pasting (⌘V or Ctrl+V) or dropping a PNG, JPEG, WebP or GIF of up to 32 MB
-  on the box, up to 8 per message. Each lands as an `[Image N]` marker in the text and a chip under
-  it, and is read straight away, the same way the terminal reads a pasted one: described by your
-  vision model or system OCR, or sent as it is to a model that can see (see
+  on the box, up to 8 per message. Each one lands as an `[Image N]` marker in the text with a chip
+  under it, and is read straight away, the same way the terminal reads a pasted image: described by
+  your vision model or system OCR, or sent as-is to a model that can see (see
   [Images](configuration.md#images)). The chip shows how many characters came out, or why the
-  image could not be read; click its thumbnail to see the image full size, and × to remove it.
+  image could not be read. Click its thumbnail to see the image full size, or × to remove it.
   Enter waits until every image is read. Once sent, a line under your prompt says what was read
   from each image.
-- **Two pills in the input box** switch the mode and the model. They are off while a prompt runs or
-  waits, since a switch then would change what the waiting line was typed for. The project
+- **Two pills in the input box** switch the mode and the model. They are disabled while a prompt runs or
+  waits, since switching then would change what the waiting line was typed for. The project
   folder's name sits beside Send, with its full path on hover; on a narrow screen it gives way to
   the pills.
 - **The status line** shows the approval mode, how full the context is, the token counts, decode
   speed, cache hits and the branch's PR.
 - **Approvals and questions** open as a card above the input. A number key moves to that option
-  and Enter answers, so a stray key never answers for you; on an approval, `y` and `n` move to Yes
-  and No; the arrow keys step through the options, and so does the pointer. An approval takes a
-  reason to send with No. A question takes your own answer instead of an option, or a note to send
-  with the option you pick. Esc cancels a model or session picker and a question asked before
-  sending; on an approval or the model's question it stops the turn, declining or dropping it, as
-  the stop button does.
+  and Enter answers, so a stray key never answers for you. On an approval, `y` and `n` move to Yes
+  and No. The arrow keys and the pointer also step through the options. An approval can take a
+  reason to send with No. A question can take your own answer instead of an option, or a note to
+  send with the option you pick. Esc cancels a model or session picker, or a question asked before
+  sending. On an approval or a question from the model, Esc stops the turn and declines or drops it,
+  as the stop button does.
 - **History** lists this project's saved sessions, newest first, with a filter and a switch for
   your `/save` transcripts. Opening one replaces the conversation in place, as `/resume` does, and
-  New conversation is `/new`. Both wait until no prompt is running. On a wide window history is a
-  pane beside the chat that you can collapse; on a narrow one it opens over the page.
+  New conversation is `/new`. Both wait until no prompt is running. On a wide window, history is a
+  collapsible pane beside the chat; on a narrow one it opens over the page.
 
 ## Not yet
 
-- **More than one session per server.** The page drives one conversation. Opening a saved one
+- **More than one session per server.** The page drives one conversation, and opening a saved one
   replaces it rather than opening a second.
 - **Joining a terminal session.** A browser tab cannot attach to a `reika` already running in a
   terminal. Each `reika web` is its own session.
@@ -85,21 +85,21 @@ link:
 - It listens on `127.0.0.1` only, and refuses any request whose `Host` or `Origin` is not that
   address, which stops another site or a DNS-rebinding trick from reaching it.
 - The link carries a one-time code in the part of the URL a browser never sends (after the `#`). A
-  tab trades it for a token it keeps for that tab alone (session storage), and every request after
-  that carries the token. There are no cookies.
+  tab trades it for a token that only that tab keeps (in session storage), and every later request
+  carries the token. There are no cookies.
 - `--window` never puts the link on a command line, where other users on the machine could read it
   from the process list. The browser opens a private redirect file instead, deleted as soon as the
   code is used.
-- An image goes up with the same token, as the image's own bytes, and the server checks that they
-  are the image type they claim to be. What was read from it stays on the server; the thumbnail is
+- An image is uploaded as its raw bytes with the same token, and the server checks that the bytes
+  match the image type they claim to be. What was read from it stays on the server; the thumbnail is
   drawn from the browser's own copy of the file.
 - Everything the page sends goes through the same approval gate and shell sandbox as the terminal.
 
 ## Configuration
 
-| Key                   | Default | What                                                                      |
-| --------------------- | ------- | ------------------------------------------------------------------------- |
-| `REIKA_CHROME_PATH`   | _unset_ | The browser `--window` opens (and web search drives), instead of a search |
-| `REIKA_WORKING_WORDS` | `1`     | `0` shows "Working" on the busy line instead of rotating verbs            |
+| Key                   | Default | What                                                                               |
+| --------------------- | ------- | ---------------------------------------------------------------------------------- |
+| `REIKA_CHROME_PATH`   | _unset_ | The browser `--window` opens (and web search drives), instead of searching for one |
+| `REIKA_WORKING_WORDS` | `1`     | `0` shows "Working" on the busy line instead of rotating verbs                     |
 
 Everything else is shared with the terminal; see [Configuration](configuration.md).

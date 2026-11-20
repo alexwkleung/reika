@@ -22,41 +22,41 @@
 
 <sup>A real local run of Qwen3.6 35B A3B (Unsloth UD-IQ2_M) via llama.cpp, sped up 3×. The model fixes its own indentation, adds a test for the delays, and the tests pass on the first run.</sup>
 
-Reika is a coding agent CLI for local and hosted models. It was designed around small local models first (8B–35B, often at Q2–Q4, on a 16–32k context window), so it is careful with context, fails more gracefully, and says when it's stuck.
+Reika is a coding agent CLI for local and hosted models. It was designed around small local models first (8B–35B, often at Q2–Q4, on a 16–32k context window), so it is careful with context, fails gracefully, and tells you when it's stuck.
 
-It doesn't make a small model smarter. It makes working with one less frustrating: less of the window wasted, fewer loops on the same read, and less chance of the task quietly getting lost.
+It doesn't make a small model smarter. It makes working with one less frustrating: less of the window wasted, fewer loops over the same read, and less chance of the task quietly getting lost.
 
-Day to day it runs on large hosted models, and small local ones are where it gets tested. At the small end, expect a better experience rather than frontier results. In testing, 14–35B models handled multi-file tasks most reliably, 8–9B models managed simple, well-scoped ones, and 4B-class models ran end to end but rarely got past short tasks.
+It gets used and tested on both: small local models through llama.cpp, and large hosted ones through their APIs. At the small end, expect a better experience rather than frontier results. In testing, 14–35B models handled multi-file tasks most reliably, 8–9B models managed simple, well-scoped ones, and 4B-class models ran end to end but rarely got past short tasks.
 
 Reika is pre-1.0, so commands, settings and behavior can still change between releases.
 
 ## What the measurements say
 
-The harness's design choices were measured rather than assumed, and the record is published. It measures what a harness can and can't do about the problems small models run into, not how good the models become. The short version, with the runs and the numbers behind it in [docs/findings.md](docs/findings.md):
+Reika's design choices were measured rather than assumed, and the results are published. They show what a harness can and can't do about the problems small models run into, not how much better the models get. The short version is below; the runs and numbers behind it are in [docs/findings.md](docs/findings.md).
 
-- **The harness's own context management cost more than the model did.** One mid-context rewrite re-processed 8,453 tokens of prompt — 7.9 minutes of prefill — where an append in the same session cost 25 tokens and 3.5 seconds.
+- **The harness's own context management cost more than the model did.** One rewrite in the middle of the context re-processed 8,453 tokens of prompt (7.9 minutes of prefill), where an append in the same session cost 25 tokens and 3.5 seconds.
 - **Ask the model for its findings before a fold drops them.** In the A/B behind this, the arm whose findings were dropped folded five times, re-read files it had already read, and never answered; the arm that was asked answered from the digest.
-- **A small model takes tool output literally.** A grep that said "0 matches" for a call it couldn't serve sent a model rewording a correct pattern for five rounds; a loop blamed on a 35B at Q2 was reika feeding the model its own tool-call markup back.
-- **Prompt wording is the weakest lever.** On a vague task at Q2 a model converges or spirals about 50/50, and the harness cannot move that rate — only what the failing half costs.
-- **The loop detectors separate cleanly.** Healthy reasoning rounds measure 0.2–0.3 on cross-round similarity; locked loops sit at 1.00, and a 38-round productive turn never fired the detector.
+- **A small model takes tool output literally.** A grep that said "0 matches" for a call it couldn't serve sent a model rewording a correct pattern for five rounds. A loop blamed on a 35B at Q2 turned out to be Reika feeding the model its own tool-call markup.
+- **Prompt wording is the weakest lever.** On a vague task at Q2, a model converges or spirals about half the time each. The harness can't move that rate, only what the failing half costs.
+- **The loop detectors separate cleanly.** Healthy reasoning rounds measure 0.2–0.3 on cross-round similarity, locked loops sit at 1.00, and a productive 38-round turn never set the detector off.
 
 ## Highlights
 
-- **Context discipline.** Old tool output collapses to one-line summaries, requests stay append-only between shrink events so the engine's prompt cache survives, and when the window fills the model writes its own findings note before older turns fold into a recap.
-- **Loop and spiral breaking.** Repeated reads, re-derived reasoning, and runaway thinking blocks are detected and answered with an escalating ladder (nudge, pinned ledger, tool withdrawal, honest stop) rather than a 30-minute spiral.
-- **Checks on what the model does.** Blind edits are bounced to a read first, TypeScript edits are typechecked against a pre-edit baseline, and a written plan is tracked step by step from what the harness observes, not what the model claims.
-- **A mode for the job.** Agent mode is the default and does the work directly. The others are there when a task calls for them: plan mode explores read-only and ends in a numbered, file-specific plan you can refine before running it, grind puts a harder change through define done, test and review, minimal keeps a small window lean, and chat answers without the repo.
+- **Context discipline.** Old tool output collapses to one-line summaries. Requests only grow by appending until the context has to shrink, so the engine's prompt cache survives. When the window fills, the model writes a note of its findings before older turns fold into a recap.
+- **Loop and spiral breaking.** Repeated reads, reasoning that goes over the same ground, and runaway thinking blocks are caught and answered in escalating steps (a nudge, a pinned reminder, pausing the read tools, then an honest stop) instead of a 30-minute spiral.
+- **Checks on what the model does.** An edit to a file the model hasn't read is sent back for a read first, TypeScript edits are typechecked against the state before the edit, and a written plan is tracked step by step from what actually happened, not from what the model claims.
+- **A mode for the job.** Agent mode is the default and does the work directly. The others are there when a task calls for them: plan mode explores read-only and ends in a numbered, file-specific plan you can refine before running it; grind takes a harder change through defining done, testing and review; minimal keeps a small window lean; and chat answers without the repo.
 - **Safe by default.** Ordinary edits run, dangerous commands still prompt, and on macOS model-chosen shell commands run under a kernel sandbox (writes confined to the project, network denied).
-- **Extensible.** Stdio MCP servers add tools, and each tool also becomes a slash command. Markdown skills become slash commands too; `/issue` and `/review` ship with Reika and appear wherever `gh` and a GitHub remote are.
-- **No telemetry.** Your code goes to the model server you configure and nowhere else: with a local server it never leaves your machine, and with a cloud API it goes to that provider. The only other requests are the web tools, when a web tool is used or you paste a link, a download of the public models.dev catalog to look up context limits (only for hosted endpoints, and never with your data), and whatever the MCP servers you configure do on their own.
-- **Built for slow local engines.** Tolerates long prefills, handles tool-call dialects from models without a native template, and shows decode speed, context fill, and cache hit rate in the status bar.
+- **Extensible.** Stdio MCP servers add tools, and each tool also becomes a slash command. Markdown skills become slash commands too. `/issue` and `/review` ship with Reika and show up in any repo with `gh` installed and a GitHub remote.
+- **No telemetry.** Your code goes to the model server you configure and nowhere else: with a local server it never leaves your machine, and with a cloud API it goes to that provider. The only other requests are the web tools (when the model uses one or you paste a link), a download of the public models.dev catalog to look up context limits (hosted endpoints only, and never with your data), and whatever the MCP servers you configure do on their own.
+- **Built for slow local engines.** It waits out long prefills, understands the tool-call formats that models without a native template fall back to, and shows decode speed, context fill and cache hit rate in the status bar.
 
 ## Requirements
 
 - Node.js 22 or newer (macOS 11+ or glibc 2.28+ Linux — see [Platforms](docs/platforms.md)).
 - An OpenAI-compatible model server: llama.cpp, MLX, vLLM, or a cloud API.
 - macOS is the primary platform. Linux works, but without the shell sandbox or image-paste OCR (set `REIKA_VISION_MODEL` to read pasted images with a vision model instead). Windows may work under WSL2.
-- A modern terminal (iTerm2, Ghostty, Kitty, etc). Recommended for proper TUI rendering.
+- A modern terminal such as iTerm2, Ghostty or Kitty, so the TUI renders properly.
 
 ## Quick start
 
@@ -68,7 +68,7 @@ pnpm add -g @alexwkleung/reika
 brew install alexwkleung/tap/reika
 ```
 
-Serve a model. Example below with llama.cpp:
+Serve a model, for example with llama.cpp:
 
 ```sh
 llama-server -m <model.gguf> -c 24576 --jinja <other-launch-args>
@@ -85,9 +85,9 @@ Using a hosted API instead? Skip the server and set `REIKA_BASE_URL`, `REIKA_API
 
 `REIKA_BASE_URL` defaults to `http://localhost:9931/v1`, llama-server's default since llama.cpp v0.7.0 (older builds and its Docker images use 8080). The context window is read from the server when it reports one, and for hosted endpoints from the models.dev catalog; set `REIKA_CONTEXT_WINDOW` when neither has it. Reika sends no sampling parameters of its own, so your server's flags are what apply.
 
-To run from a checkout instead — `git clone https://github.com/alexwkleung/reika.git && cd reika`, then `pnpm install` (npm users: `npm i -g pnpm`) and `pnpm run install:global` to build and install the `reika` binary, or `cp .env.example .env` and `pnpm run dev` to run without installing. `pnpm run uninstall:global` removes the global binary.
+To run from a checkout instead, `git clone https://github.com/alexwkleung/reika.git && cd reika`, then `pnpm install` (npm users: `npm i -g pnpm` first). From there, `pnpm run install:global` builds and installs the `reika` binary, or `cp .env.example .env` and `pnpm run dev` runs it without installing. `pnpm run uninstall:global` removes the global binary.
 
-Prefer a window to a terminal? `reika web` serves the same agent to a browser tab on this machine, and `reika web --window` opens it in its own app window. It is experimental; [docs/web.md](docs/web.md) covers what it does and what it doesn't yet.
+Prefer a window to a terminal? `reika web` serves the same agent to a browser tab on this machine, and `reika web --window` opens it in its own app window. It's experimental; [docs/web.md](docs/web.md) covers what it does and what it doesn't do yet.
 
 ![Reika's web front end in its own window: the history pane, a diff from an edit, and the input box](docs/web.png)
 
@@ -106,7 +106,7 @@ Set these in your shell, a project `.env`, or `~/.config/reika/.env` (in that or
 
 ## Modes
 
-`Shift+Tab` cycles modes, or switch with a slash command. The mode and model you end a session in are the ones the next session opens in.
+`Shift+Tab` cycles through the modes, or switch with a slash command. The next session opens in the mode and model you ended the last one in.
 
 | Mode      | What it does                                                                 |
 | --------- | ---------------------------------------------------------------------------- |
@@ -122,7 +122,7 @@ Set these in your shell, a project `.env`, or `~/.config/reika/.env` (in that or
 
 ## Safety
 
-- **Approvals** default to `safe`: ordinary edits and commands run on their own, but anything matching a dangerous pattern (`rm -rf`, force pushes, package installs, `curl`, …) and any write outside the project still asks you first. `bypass` can only be set at launch, never mid-session.
+- **Approvals** default to `safe`: ordinary edits and commands run on their own, but a dangerous command (`rm -rf`, a force push, a package install, `curl`) or a write outside the project still asks you first. `bypass` can only be set at launch, never mid-session.
 - **Sandbox** (macOS, on by default): model-chosen shell commands can write only inside the project, temp, and cache directories, and have no network apart from loopback and read-only `git`/`gh`. A command you explicitly approve runs unsandboxed. `REIKA_SANDBOX=0` turns it off.
 
 Found a way around one of these? Report it privately; see [SECURITY.md](SECURITY.md).
