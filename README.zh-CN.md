@@ -56,7 +56,7 @@ Reika 还处于 1.0 之前，命令、设置和行为在不同版本之间仍可
 - Node.js 22 或更新版本（macOS 11+，或 glibc 2.28+ 的 Linux —— 见[平台](docs/zh/platforms.md)）。
 - 一个 OpenAI 兼容的模型服务器：llama.cpp、MLX、vLLM 或云端 API。
 - macOS 是主要平台。Linux 可用，但没有 shell 沙箱和图片粘贴 OCR（可以设置 `REIKA_VISION_MODEL`，改用视觉模型读取粘贴的图片）。Windows 或许能在 WSL2 下运行。
-- 现代终端（iTerm2、Ghostty、Kitty 等）。想要正确的 TUI 渲染，建议使用它们。
+- 现代终端，例如 iTerm2、Ghostty 或 Kitty，以便 TUI 正确渲染。
 
 ## 快速开始
 
