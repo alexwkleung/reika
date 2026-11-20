@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defineConfigWithTheme } from 'vitepress';
+import { defineConfigWithTheme, type HeadConfig } from 'vitepress';
 import { reikaCodeTheme } from './codetheme';
 import { buildAtomFeed, withBlogSection } from './feed';
 import { brokenLinks, githubLinks, githubSlugify, untranslatedSource } from './links';
@@ -26,6 +26,18 @@ const translatedPair = (relativePath: string) => {
 const zhPages = readdirSync(`${DOCS_DIR}zh`, { withFileTypes: true })
   .filter(entry => entry.isFile() && entry.name.endsWith('.md'))
   .map(entry => entry.name);
+
+// The Latin faces are otherwise found only once the stylesheet is parsed, after the first paint, so the
+// page drew in the fallback and reflowed when Geist arrived. The fontless theme entry dropped the
+// default theme's own preload along with Inter.
+function fontPreloads(assets: string[]): HeadConfig[] {
+  return assets
+    .filter(file => /\/geist(-mono)?-latin-wght-normal\.[\w-]+\.woff2$/.test(file))
+    .map(href => [
+      'link',
+      { rel: 'preload', href, as: 'font', type: 'font/woff2', crossorigin: '' },
+    ]);
+}
 
 export default defineConfigWithTheme<TranslationTheme>({
   title: 'Reika - A coding agent CLI for local and hosted models',
@@ -134,10 +146,11 @@ export default defineConfigWithTheme<TranslationTheme>({
       if (pageData.frontmatter.summary) pageData.description = pageData.frontmatter.summary;
     }
   },
-  transformHead({ pageData, title, description }) {
+  transformHead({ pageData, title, description, assets }) {
     if (pageData.isNotFound) return [];
     const pair = translatedPair(pageData.relativePath);
     return [
+      ...fontPreloads(assets),
       ...socialHead(
         { ...pageData, relativePath: englishPath(pageData.relativePath) },
         title,
