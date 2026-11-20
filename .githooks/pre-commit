@@ -1,0 +1,16 @@
+#!/bin/sh
+# Format and lint only the staged files; typecheck and tests stay in `pnpm run check` and CI.
+# Installed by the `prepare` script (core.hooksPath, this repo only).
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+[ -z "$staged" ] && exit 0
+
+git diff --cached --name-only -z --diff-filter=ACMR \
+  | xargs -0 pnpm exec oxfmt --check --no-error-on-unmatched-pattern \
+  || { echo 'pre-commit: formatting is off; run `pnpm run format` and re-stage.' >&2; exit 1; }
+
+code=$(git diff --cached --name-only --diff-filter=ACMR -- '*.ts' '*.tsx' '*.js' '*.mjs' '*.cjs')
+[ -z "$code" ] && exit 0
+git diff --cached --name-only -z --diff-filter=ACMR -- '*.ts' '*.tsx' '*.js' '*.mjs' '*.cjs' \
+  | xargs -0 pnpm exec oxlint \
+  || { echo 'pre-commit: lint failed; `pnpm run lint:fix` handles most of it.' >&2; exit 1; }
