@@ -839,6 +839,8 @@ export function createController(opts: {
   const attachSession = (attached: Session, own: string): void => {
     session = attached;
     ownProfile = own;
+    // A session opens on the agent side; one launched in chat must hold the chat side instead.
+    if (modeSide(snapshot.mode) === 'chat') attached.switchSide('chat');
     startPrPoll();
   };
   const createSession = opts.createSession ?? createRealSession;

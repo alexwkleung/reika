@@ -493,12 +493,12 @@ export type VisionRoute = 'describe' | 'native';
 // messages carry it (see Message['user'].mode); ui/commands.ts re-exports it.
 export type Mode = 'agent' | 'shell' | 'chat' | 'plan' | 'vibe' | 'minimal' | 'grind';
 
-// Which mode a session starts in (REIKA_DEFAULT_MODE). Only the model-driven work modes are
-// eligible — chat isolates history and shell bypasses the model entirely, so neither makes
-// sense as a launch default. `minimal` is eligible and is the one people are most likely to
+// Which mode a session starts in (REIKA_DEFAULT_MODE, or the last session's). Every mode but
+// shell: a launch that types straight into bash with no model in the loop would surprise. Chat
+// is eligible because a user who left on chat reopening on agent reads as a bug. `minimal` is eligible and is the one people are most likely to
 // LAUNCH in rather than switch to: its whole point is skipping the upfront context load, and a
 // session that starts in agent mode has already paid for it (#391).
-export type DefaultMode = Extract<Mode, 'agent' | 'plan' | 'vibe' | 'minimal' | 'grind'>;
+export type DefaultMode = Extract<Mode, 'agent' | 'plan' | 'vibe' | 'minimal' | 'grind' | 'chat'>;
 
 // The modes whose turns reach the model: every mode but shell, which runs the command itself.
 // Per-mode models (REIKA_MODE_MODELS, #616) cover these and only these — a model for shell would be

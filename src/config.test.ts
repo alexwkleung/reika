@@ -668,9 +668,9 @@ describe('resolveDefaultMode', () => {
     expect(resolveDefaultMode()).toBe('agent');
   });
 
-  it('excludes chat and shell — not launchable modes', () => {
+  it('accepts chat and excludes shell, which is not a launchable mode', () => {
     process.env.REIKA_DEFAULT_MODE = 'chat';
-    expect(resolveDefaultMode()).toBe('agent');
+    expect(resolveDefaultMode()).toBe('chat');
     process.env.REIKA_DEFAULT_MODE = 'shell';
     expect(resolveDefaultMode()).toBe('agent');
   });
