@@ -445,6 +445,9 @@ export type Controller = {
   loadConversation(sides: SessionSides, from: { title?: string; path: string }): Message[];
   // Both sides' scrollbacks, whichever one is on screen.
   sides(): Record<Side, Message[]>;
+  // The side not on screen, and how many prompts it holds: a resumed chat seen from agent mode is
+  // an empty screen that is not an empty session.
+  offScreen(): { side: Side; turns: number };
   // The file this conversation auto-saves to (#1), or null before its first save and after a
   // `newConversation`. Fixed once set, so a conversation is one entry in the resume list.
   readonly sessionPath: string | null;
@@ -1731,6 +1734,10 @@ export function createController(opts: {
       ];
     },
     sides: bothSides,
+    offScreen: () => {
+      const side: Side = modeSide(snapshot.mode) === 'chat' ? 'agent' : 'chat';
+      return { side, turns: countRealTurns(stashed[side] ?? []) };
+    },
     get sessionPath() {
       return sessionPath;
     },
@@ -1832,6 +1839,9 @@ export function createController(opts: {
       };
     },
     sessionList: async scope => {
+      // A turn ending schedules a save and tells the front ends in the same tick, so a list asked
+      // for on that news (the web drawer) would read the directory before the write landed.
+      await saveChain;
       if (scope === 'root') return session ? listSessions(historyRoot, true) : [];
       const dir = projectDir();
       return dir ? listSessions(dir) : [];

@@ -117,6 +117,9 @@ export type WireState = {
   modelPinned: boolean;
   // The current session's id (its file name), null before its first save and after a `/new`.
   session: string | null;
+  // The other side of this conversation, when it holds prompts: the page says where they are
+  // rather than showing an empty screen as an empty session. Null when that side is empty.
+  offScreen: { side: 'agent' | 'chat'; turns: number } | null;
   // The busy line rotates the TUI's working verbs (REIKA_WORKING_WORDS, default on).
   workingWords: boolean;
   // The PR the checked-out branch is attached to, as the TUI's status bar shows it.
@@ -141,6 +144,7 @@ export function wireState(
   const cfg = session?.getSnapshot().config;
   // The fallback transcriptMeta uses, so the gauge and a saved header name the same window.
   const profile = session && cfg ? (cfg.profiles[session.profile] ?? cfg.profiles.default) : null;
+  const offScreen = controller.offScreen();
   return {
     mode: snap.mode,
     status: snap.status,
@@ -163,6 +167,7 @@ export function wireState(
     stage,
     modelPinned: controller.modelPinned,
     session: controller.sessionPath === null ? null : sessionId(controller.sessionPath),
+    offScreen: offScreen.turns > 0 ? { ...offScreen } : null,
     workingWords: cfg?.workingWords === true,
     pr: snap.pr ? { ...snap.pr } : null,
   };

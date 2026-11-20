@@ -312,6 +312,17 @@ describe('controller.transition', () => {
     expect(controller.messages).toEqual([task, banner]);
   });
 
+  it('counts the prompts on the side not on screen', () => {
+    const { controller } = controllerIn('agent');
+    expect(controller.offScreen()).toEqual({ side: 'chat', turns: 0 });
+    controller.append(user('agent task'));
+    controller.transition('chat');
+    expect(controller.offScreen()).toEqual({ side: 'agent', turns: 1 });
+    controller.append(user('what is a monad'), { role: 'user', content: '/stats', meta: true });
+    controller.transition('plan');
+    expect(controller.offScreen()).toEqual({ side: 'chat', turns: 1 });
+  });
+
   it('puts the agent side away on the way into chat, and brings it back on the way out', () => {
     const { controller, switchSide } = controllerIn('agent');
     const task = user('agent task');
@@ -998,6 +1009,18 @@ describe('controller auto-save', () => {
     await Promise.resolve();
     await controller.saveNow();
   };
+
+  it.each(['agent', 'chat'] as const)(
+    'lists a %s session once its save is scheduled, before the write lands',
+    async mode => {
+      const { controller } = saving(mode);
+      controller.setStatus('idle');
+      controller.append(user('fix the parser'));
+      await Promise.resolve();
+      const listed = await controller.sessionList('project');
+      expect(listed.map(e => e.path)).toEqual([controller.sessionPath]);
+    },
+  );
 
   it('writes nothing when the config does not ask for it', async () => {
     const { controller } = controllerIn('agent', {}, 'default', root);
