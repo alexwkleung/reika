@@ -231,6 +231,28 @@ export function changeLabel(f: {
   }
 }
 
+export type StatRun = { text: string; side?: 'added' | 'removed' };
+
+// The stat at the end of a text — an edit's `(+3 -1)`, a write's `(+12)`, `changeLabel`'s
+// `(new, +12)` / `(deleted, -40)` — so a front end can draw its counts in the diff's own colors.
+// Whitespace inside the parentheses may be a wrap break: the TUI splits after wrapping.
+const TRAILING_STAT = /\((?:(?:new|deleted),\s+)?(?:\+\d+)?(?:\s*-\d+)?\)$/;
+
+export function diffStatRuns(text: string): StatRun[] {
+  const m = TRAILING_STAT.exec(text);
+  if (!m || !/[+-]\d/.test(m[0])) return [{ text }];
+  const runs: StatRun[] = [{ text: text.slice(0, m.index) }];
+  for (const piece of m[0].split(/([+-]\d+)/)) {
+    if (!piece) continue;
+    // A zero count names no change, so it stays in the surrounding color.
+    const counted = /^[+-]\d+$/.test(piece) && Number(piece.slice(1)) > 0;
+    runs.push(
+      counted ? { text: piece, side: piece[0] === '+' ? 'added' : 'removed' } : { text: piece },
+    );
+  }
+  return runs.filter(r => r.text);
+}
+
 // `ctx 16k/24k (100% of 16k)` when the window and its usable ceiling are known — the ratio is
 // the raw window (what REIKA_CONTEXT_WINDOW was set to, worth a sanity check at a glance) and the
 // percent is of the usable ceiling, which is the number that says how close the next shed is.

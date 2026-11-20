@@ -1,5 +1,11 @@
 import { memo, type ReactNode } from 'react';
-import { changeLabel, displayProse, toolLabel, toolTimer } from '../../display/format.js';
+import {
+  changeLabel,
+  diffStatRuns,
+  displayProse,
+  toolLabel,
+  toolTimer,
+} from '../../display/format.js';
 import { foldedAssistantFields } from '../../display/reasoningfold.js';
 import { elidedReadSummary, noticeLead } from '../../display/scrollbackrules.js';
 import type { WireMessage } from '../protocol.js';
@@ -42,7 +48,10 @@ function Parts({ parts }: { parts: Part[] }) {
         {p.text}
       </code>
     ) : (
-      <span key={i} className={p.muted ? 'tool-detail' : undefined}>
+      <span
+        key={i}
+        className={p.side ? `tool-detail stat-${p.side}` : p.muted ? 'tool-detail' : undefined}
+      >
         {p.text}
       </span>
     ),
@@ -152,7 +161,13 @@ function Changes({ changes }: { changes: NonNullable<Of<'tool'>['changes']> }) {
         <div key={f.path} className="change">
           <div className="change-head">
             <span className="change-path">{f.path}</span>
-            <span className="change-label">{` ${changeLabel(f)}`}</span>
+            <span className="change-label">
+              {diffStatRuns(` ${changeLabel(f)}`).map((r, i) => (
+                <span key={i} className={r.side ? `stat-${r.side}` : undefined}>
+                  {r.text}
+                </span>
+              ))}
+            </span>
           </div>
           {f.hunks.map((h, i) => (
             <DiffView

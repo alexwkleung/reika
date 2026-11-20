@@ -404,6 +404,12 @@
 .change-path {
   color: var(--reika-tool);
 }
+.stat-added {
+  color: var(--reika-diff-added-fg);
+}
+.stat-removed {
+  color: var(--reika-diff-removed-fg);
+}
 .change-label,
 .change-more {
   color: var(--reika-muted);

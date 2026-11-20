@@ -167,6 +167,8 @@ const MARKER_FG: Record<Side, string> = { added: '#6fdc8c', removed: '#f28b8b' }
 // color and the changed word's background, the shape of `git diff` at 16 colors.
 const ANSI16_MARKER_FG: Record<Side, string> = { added: 'green', removed: 'red' };
 const markerFg = (side: Side) => (chalk.level === 1 ? ANSI16_MARKER_FG : MARKER_FG)[side];
+// A summary's `(+3 -1)` reads in the same pair, so the counts match the rows they count.
+export const diffStatFg = markerFg;
 const rowBg = (side: Side) => (chalk.level === 1 ? undefined : ROW_BG[side]);
 // Continuation rows sit under the code, past where the `+`/`-` prefix ended, so a wrapped line
 // reads as one line and the prefix column stays scannable.

@@ -14,9 +14,10 @@ import { glyphs } from './glyphs.js';
 import { theme, themeChalk } from './theme.js';
 import { scrubGeneration } from './identity.js';
 import { holdPartialPath, scrubDisplay, scrubLines, scrubOutput } from './scrub.js';
-import { DiffView } from './DiffView.js';
+import { DiffView, diffStatFg } from './DiffView.js';
 import {
   changeLabel,
+  diffStatRuns,
   displayProse,
   toolLabel,
   toolTimer,
@@ -734,6 +735,20 @@ export function markProse(rendered: string, withMarker = true): string {
 // marginLeft on a tool result's command/output block; it pays for that out of the row's width.
 const COMMAND_MARGIN = 4;
 
+// Nested in the row's own Text, so the counts override its color and the rest inherits it.
+function StatText({ text, stat }: { text: string; stat: boolean }) {
+  if (!stat) return <>{text}</>;
+  return diffStatRuns(text).map((r, i) =>
+    r.side ? (
+      <Text key={i} color={diffStatFg(r.side)}>
+        {r.text}
+      </Text>
+    ) : (
+      r.text
+    ),
+  );
+}
+
 function WorkedRow({ durationMs, interrupted }: { durationMs: number; interrupted?: boolean }) {
   return (
     <Box marginTop={1}>
@@ -993,7 +1008,14 @@ function renderMessage(
               command, an edit's non-matching line — so it can carry the same tabs and control
               characters raw output does, on a row that must stay one row. */}
           <Text color={theme.secondary}>
-            {hangingWrap(summary, contentWidth(indent) - duration.length, TOOL_MARKER.length)}
+            <StatText
+              text={hangingWrap(
+                summary,
+                contentWidth(indent) - duration.length,
+                TOOL_MARKER.length,
+              )}
+              stat={!!msg.diff}
+            />
           </Text>
           <Text color={theme.muted}>{duration}</Text>
         </Text>
@@ -1049,7 +1071,9 @@ function renderMessage(
               <Box key={f.path} flexDirection="column" marginTop={fi > 0 ? 1 : 0}>
                 <Text>
                   <Text color={theme.tool}>{scrubDisplay(f.path)}</Text>
-                  <Text color={theme.muted}>{` ${changeLabel(f)}`}</Text>
+                  <Text color={theme.muted}>
+                    <StatText text={` ${changeLabel(f)}`} stat />
+                  </Text>
                 </Text>
                 {f.hunks.map((h, hi) => (
                   <Box key={hi} flexDirection="column" marginTop={hi > 0 ? 1 : 0}>

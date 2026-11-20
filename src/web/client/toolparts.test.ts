@@ -63,3 +63,13 @@ describe('summaryParts', () => {
     ]);
   });
 });
+
+describe('summaryParts stat', () => {
+  it('colors an edit summary counts by side', () => {
+    const parts = summaryParts('Edited src/a.ts at line 3 (+2 -1)');
+    expect(parts.filter(p => p.side).map(p => [p.text, p.side])).toEqual([
+      ['+2', 'added'],
+      ['-1', 'removed'],
+    ]);
+  });
+});
