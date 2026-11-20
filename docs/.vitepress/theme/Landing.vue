@@ -150,6 +150,7 @@ const external = (link: string) => /^https?:/.test(link);
 .text {
   max-width: 720px;
   text-wrap: balance;
+  white-space: pre-line;
   font-size: 34px;
   line-height: 1.12;
   font-weight: 600;
@@ -163,10 +164,9 @@ const external = (link: string) => /^https?:/.test(link);
   }
 }
 
-/* Balancing breaks Chinese between any two characters, splitting words (模 / 型); the zh headline
-   fits one line at desktop size instead. */
+/* Balancing breaks Chinese between any two characters, splitting words (模 / 型), so the zh headline
+   carries its own line break in the frontmatter (pre-line above) instead. */
 :lang(zh) .text {
-  max-width: 800px;
   text-wrap: wrap;
 }
 

@@ -6,7 +6,9 @@ titleTemplate: false
 
 hero:
   name: Reika
-  text: 面向本地和托管模型的编程智能体 CLI
+  # The line break is the headline's own: Chinese can break between any two characters, so the
+  # landing sets this break rather than letting the browser split a word.
+  text: "面向本地和托管模型的\n编程智能体 CLI"
   tagline: 优先围绕小型本地模型设计，更谨慎地使用上下文，失败时更从容，卡住时会明确告知。它不会让小模型更聪明，而是减少使用小模型时的挫折。
   actions:
     - theme: brand
