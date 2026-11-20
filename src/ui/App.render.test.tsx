@@ -438,7 +438,7 @@ describe('last session state (#365)', () => {
     app.unmount();
   });
 
-  it('saves a switch to plan mode but not one to chat', async () => {
+  it('saves a switch to plan mode and one to chat', async () => {
     const app = await mountApp();
     savedState.mockClear();
     await submit(app, '/plan');
@@ -447,7 +447,7 @@ describe('last session state (#365)', () => {
     // Chat's prompt is '? ', so the row-scoped echo check can't drive a command after this one.
     await submit(app, '/chat');
     expect(plain(app.lastFrame())).toContain('? ');
-    expect(savedState).not.toHaveBeenCalled();
+    expect(savedState).toHaveBeenCalledWith({ mode: 'chat' });
     app.unmount();
   });
 });

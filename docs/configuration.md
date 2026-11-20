@@ -30,7 +30,7 @@ window.
 | `REIKA_API_KEY`      | `no-key`                   | Cloud API key (any non-empty for local)                                                                                                                                         |
 | `REIKA_PROFILES`     | _unset_                    | Comma-separated names of extra profiles, each defined by `REIKA_<NAME>_MODEL` / `_BASE_URL` / `_API_KEY` (plus optional `_MAX_TOKENS` / `_CONTEXT_WINDOW` / `_MIN_GEN_TOKENS`). |
 | `REIKA_MODE_MODELS`  | _unset_                    | Model each mode runs on, as `<mode>=<model\|profile>` pairs: `plan=kimi,grind=qwen3-coder`.                                                                                     |
-| `REIKA_DEFAULT_MODE` | `agent`                    | Mode the session starts in: `agent`, `plan`, `vibe`, `minimal`, or `grind` (chat/shell aren't launchable defaults).                                                             |
+| `REIKA_DEFAULT_MODE` | `agent`                    | Mode the session starts in: `agent`, `plan`, `vibe`, `minimal`, `grind`, or `chat` (shell isn't a launchable default).                                                          |
 
 - **`REIKA_MODEL`** — First is the default; switch with `/model <name>`
 - **`REIKA_PROFILES`** — For a model behind a different endpoint or key. See [Multiple
@@ -543,7 +543,8 @@ What it does, in order:
 ## Last session state
 
 Reika remembers the mode and profile you last used in `~/.config/reika/state.json` and opens the
-next session on them, so a `/model kimi` or `/plan` carries over without touching `.env`. When it
+next session on them, so a `/model kimi`, `/plan` or chat mode carries over without touching `.env` (shell mode is
+not remembered: the next session opens in the mode before it). When it
 does, the scrollback says so (`Resumed plan mode and profile 'kimi' (kimi-k2) from the last
 session.`). The precedence is:
 

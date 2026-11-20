@@ -288,6 +288,11 @@ describe('createController', () => {
 });
 
 describe('controller.transition', () => {
+  it('puts a session launched in chat on the chat side', () => {
+    expect(controllerIn('chat').switchSide).toHaveBeenLastCalledWith('chat');
+    expect(controllerIn('agent').switchSide).not.toHaveBeenCalled();
+  });
+
   it('changes mode within a side without touching the scrollback or the session', () => {
     const { controller, switchSide } = controllerIn('agent');
     controller.append(user('task'));
@@ -675,9 +680,11 @@ describe('controller modes and the saved state', () => {
     expect(remember.mock.calls).toEqual([[{ mode: 'plan' }], [{ mode: 'grind' }]]);
   });
 
-  it('leaves the last work mode saved across chat and shell, which no session opens in', () => {
+  it('saves a switch to chat, and leaves the last mode saved across shell', () => {
     const { controller, remember } = controllerIn('plan');
     controller.transition('chat');
+    expect(remember).toHaveBeenLastCalledWith({ mode: 'chat' });
+    remember.mockClear();
     controller.transition('shell');
     expect(remember).not.toHaveBeenCalled();
   });

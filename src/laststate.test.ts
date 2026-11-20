@@ -52,7 +52,7 @@ describe('loadLastState', () => {
 
   it('drops a mode that is not a launchable one and a blank profile', () => {
     writeFileSync(file, JSON.stringify({ mode: 'chat', profile: '  ' }));
-    expect(loadLastState(file)).toEqual({});
+    expect(loadLastState(file)).toEqual({ mode: 'chat' });
     writeFileSync(file, JSON.stringify({ mode: 'shell', profile: 'kimi' }));
     expect(loadLastState(file)).toEqual({ profile: 'kimi' });
   });
@@ -92,12 +92,12 @@ describe('saveLastState', () => {
 });
 
 describe('persistableMode', () => {
-  it('keeps the launchable modes and drops chat/shell', () => {
+  it('keeps the launchable modes and drops shell', () => {
     expect(persistableMode('agent')).toBe('agent');
     expect(persistableMode('plan')).toBe('plan');
     expect(persistableMode('vibe')).toBe('vibe');
     expect(persistableMode('minimal')).toBe('minimal');
-    expect(persistableMode('chat')).toBeNull();
+    expect(persistableMode('chat')).toBe('chat');
     expect(persistableMode('shell')).toBeNull();
   });
 });
