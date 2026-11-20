@@ -8,11 +8,11 @@
   /* Geist for everything a reader reads, Geist Mono only for what they type. Self-hosted, so a page
      view makes no request to a font CDN. */
   --vp-font-family-base:
-    'Geist Variable', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
-    'Segoe UI Symbol', 'Noto Color Emoji';
+    'Geist Variable', 'Geist Fallback', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji',
+    'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
   --vp-font-family-mono:
-    'Geist Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono',
-    monospace;
+    'Geist Mono Variable', 'Geist Mono Fallback', ui-monospace, SFMono-Regular, Menlo, Consolas,
+    'DejaVu Sans Mono', monospace;
 
   /* Greys tinted toward the plum background, and text-3 lifted to pass 4.5:1 on it (the default's
      #6a6a71 does not). */
@@ -39,6 +39,28 @@
   --vp-button-brand-bg: #a13d93;
   --vp-button-brand-hover-bg: #b04ea2;
   --vp-button-brand-active-bg: #8e3482;
+}
+
+/* What draws until Geist arrives (a slow first load; it is preloaded): a local face scaled to Geist's
+   width and line metrics, so the swap barely moves the text. Liberation is Arial's and Courier New's
+   metric twin on Linux. Numbers from the font tables: Geist is 4.4% wider than Arial over a prose
+   sample, Geist Mono's advance equals Courier New's; ascent 1005 / descent 295 per 1000 in both. */
+@font-face {
+  font-family: 'Geist Fallback';
+  src: local('Arial'), local('ArialMT'), local('Liberation Sans');
+  size-adjust: 104.4%;
+  ascent-override: 96.3%;
+  descent-override: 28.3%;
+  line-gap-override: 0%;
+}
+
+@font-face {
+  font-family: 'Geist Mono Fallback';
+  src: local('Courier New'), local('CourierNewPSMT'), local('Liberation Mono');
+  size-adjust: 100%;
+  ascent-override: 100.5%;
+  descent-override: 29.5%;
+  line-gap-override: 0%;
 }
 
 /* Landing body: section headings match the component's own, without the doc pages' top rule. */
@@ -91,9 +113,9 @@
 
 :root:where(:lang(zh)) {
   --vp-font-family-base:
-    'Punctuation SC', 'Geist Variable', ui-sans-serif, system-ui, 'PingFang SC', 'Hiragino Sans GB',
-    'Microsoft YaHei', 'Noto Sans SC', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
-    'Segoe UI Symbol', 'Noto Color Emoji';
+    'Punctuation SC', 'Geist Variable', 'Geist Fallback', ui-sans-serif, system-ui, 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans SC', sans-serif, 'Apple Color Emoji',
+    'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
 }
 
 /* The wordmark is a name, not a nav item: a step larger than the links beside it. */
