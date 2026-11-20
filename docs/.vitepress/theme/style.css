@@ -171,10 +171,7 @@ body:has(.post-meta) {
 }
 
 .vp-doc .blog-item {
-  margin: 0 0 28px;
-  padding-left: 14px;
-  border-left: 2px solid transparent;
-  border-image: var(--reika-ramp) 1;
+  margin: 0 0 32px;
 }
 
 .blog-meta {
@@ -233,6 +230,14 @@ body:has(.post-meta) {
 
 .post-meta {
   margin-bottom: 16px;
+}
+
+/* A post is read top to bottom, so its sections are set apart by space alone; the rule above each
+   section heading is for the docs, where a reader jumps between sections. */
+body:has(.post-meta) .vp-doc h2 {
+  margin-top: 40px;
+  padding-top: 0;
+  border-top: none;
 }
 
 .post-meta .post-back {
