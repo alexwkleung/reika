@@ -117,15 +117,16 @@
 
 /* On the landing the nav narrows to the page's own column (Landing.vue's .LandingBody: 960px less
    its 48px gutters), so the wordmark sits above the hero rather than at the window's edge. Docs
-   pages keep the full width, where the nav lines up with the sidebar instead. English only: the
-   Chinese labels carry an（英文）suffix and do not fit the column. */
-@media (min-width: 768px) {
-  html[lang='en'] body:has(.Landing) .VPNavBar .wrapper {
-    padding: 0 48px;
+   pages keep the full width, where the nav lines up with the sidebar instead. Below 960px the column
+   is nearly the whole window and the full nav no longer fits it, so the nav keeps its own width. */
+@media (min-width: 960px) {
+  body:has(.Landing) .VPNavBar .container {
+    max-width: 864px;
   }
 
-  html[lang='en'] body:has(.Landing) .VPNavBar .container {
-    max-width: 864px;
+  /* The Chinese labels carry an（英文）suffix; tighter spacing is what fits them in the column. */
+  html[lang='zh-CN'] body:has(.Landing) .VPNavBarMenuLink {
+    padding: 0 2px;
   }
 }
 

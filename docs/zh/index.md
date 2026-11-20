@@ -18,6 +18,9 @@ hero:
     - theme: alt
       text: 阅读研究结果（英文）
       link: /zh/findings
+    - theme: alt
+      text: 博客（英文）
+      link: /blog/
 
 install:
   - label: npm
