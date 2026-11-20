@@ -13,6 +13,11 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   output was repeating. Text that merely repeats its shape, such as a long table, generated
   fixtures or switch-heavy code, is left alone. `REIKA_CONTENT_SPIN=0` turns it off (#949).
 
+### Changed
+
+- The `(+2 -1)` line counts after an edit, a write or a file a shell command changed are drawn in
+  the diff's green and red, in the terminal and in `reika web`, instead of the row's grey (#1089).
+
 ## [0.13.0] - 2026-11-18
 
 ### Added

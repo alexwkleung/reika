@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  diffStatRuns,
   changeLabel,
   formatElapsed,
   formatDurationMs,
@@ -250,5 +251,32 @@ describe('prefillLabel (#912)', () => {
   it('survives a fully cached prompt and a processed count behind the cache', () => {
     expect(at(28156, 0, 28156)).toBeUndefined();
     expect(at(1000, 500, 2000, 8000)).toBe('Processing context 0%');
+  });
+});
+
+describe('diffStatRuns', () => {
+  it('tags the counts of an edit summary', () => {
+    expect(diffStatRuns('Edited a.ts at line 3 (+2 -1)')).toEqual([
+      { text: 'Edited a.ts at line 3 ' },
+      { text: '(' },
+      { text: '+2', side: 'added' },
+      { text: ' ' },
+      { text: '-1', side: 'removed' },
+      { text: ')' },
+    ]);
+  });
+  it('reads a stat split by a wrap and the change labels', () => {
+    expect(diffStatRuns('Edited a.ts (+2\n    -1)').filter(r => r.side)).toHaveLength(2);
+    expect(diffStatRuns(' (new, +12)').filter(r => r.side)).toEqual([
+      { text: '+12', side: 'added' },
+    ]);
+    expect(diffStatRuns(' (deleted, -4)').filter(r => r.side)).toEqual([
+      { text: '-4', side: 'removed' },
+    ]);
+  });
+  it('leaves zero counts and other text alone', () => {
+    expect(diffStatRuns('Edited a.ts at line 3 (+2 -0)').filter(r => r.side)).toHaveLength(1);
+    expect(diffStatRuns('(binary)')).toEqual([{ text: '(binary)' }]);
+    expect(diffStatRuns('Ran: x (5 bytes output)')).toEqual([{ text: 'Ran: x (5 bytes output)' }]);
   });
 });
