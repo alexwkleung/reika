@@ -2,15 +2,15 @@
 
 [← README](../README.md)
 
-Models Reika has been run against, in daily use and in evaluations. Local models are what Reika was
-designed around, and where the behavior work is tested. Day-to-day use is mostly on API models,
-which also serve as the comparison for what a local quant can and cannot hold.
+Models Reika has been run against, in daily use and in evaluations. Reika was designed around local
+models, and both kinds get used and tested: local quants are where most of the behavior work is
+measured, and API models also show what a local quant can and can't hold by comparison.
 
-Quantization is the one in parentheses. Where a note names modes, that is where the model was used
-rather than the only thing it can do.
+The quantization is in parentheses. Where a note names modes, those are the modes the model was used
+in, not the only ones it can handle.
 
-The 4B-class models at the bottom of the local list run end to end, but are weak on anything past
-a few steps. Use them for short, well-scoped tasks.
+The 4B-class models at the bottom of the local list run end to end, but struggle with anything past a
+few steps. Use them for short, well-scoped tasks.
 
 ## Local
 

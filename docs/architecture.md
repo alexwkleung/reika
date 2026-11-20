@@ -8,28 +8,28 @@
 startup and held stable for the session, which is what lets the engine's prompt-prefix cache survive
 turn after turn. `/cd` is the only thing that re-runs bootstrap.
 
-**Repo map.** One line per source file, naming the definitions it exports and ranked so that the files
-the rest of the repo reaches for fit inside `REIKA_REPO_MAP_BUDGET` first. It is regex-per-language
+**Repo map.** One line per source file, naming the definitions it exports, ranked so the files the rest of
+the repo depends on most are the first to fit inside `REIKA_REPO_MAP_BUDGET`. It is regex-per-language
 rather than a parser, and covers TypeScript/JavaScript (exports), Python, Go, Rust, Java/C#, Kotlin,
 Swift, C/C++/Objective-C, Ruby, PHP, Lua and shell.
 
 **Payload aging.** A tool result carries a `summary` and a `payload`. With a known context window,
-payloads stay in the request until it nears the limit, then the oldest are shed together in one event,
-so requests stay append-only and the engine's prefix cache holds between events. With no known window,
+payloads stay in the request until it nears the limit. Then the oldest are shed together in one
+event, so requests stay append-only and the engine's prefix cache holds between events. With no known window,
 only the newest contiguous block of results sends its payload. [Context
 management](context.md) covers the budgets and what survives.
 
 **One system-prompt builder**, parameterized per mode, so no mode's prompt drifts from another's.
-**One `AbortController`** carries streaming, abort, approval and subagent. Everything speaks
+**One `AbortController`** is shared by streaming, abort, approval and subagents. Everything speaks
 OpenAI-compatible HTTP, so local engines and hosted APIs take the same path.
 
 ## Context and indexing
 
 - **Startup crawls are bounded**, breadth-first: the repo map reads at most 3,000 source files across
   4,000 directories, the file index keeps 10,000 paths, and nested `.gitignore` discovery stops at
-  2,000 directories. A tree past those caps — a home directory, a monorepo — starts in about a second
-  with a shallow-first map rather than a complete one, so run Reika from the project root for full
-  coverage.
+  2,000 directories. A tree past those caps, such as a home directory or a large monorepo, still starts
+  in about a second, but with a shallow-first map rather than a complete one. Run Reika from the
+  project root for full coverage.
 - **Nothing re-indexes itself.** The file index, the repo map, `list`, `glob` and `grep` skip
   ignored paths (see [Tools](tools.md#gitignore-is-respected)), but a file changed outside Reika stays
   invisible until `/cd .` re-indexes.
@@ -38,18 +38,18 @@ OpenAI-compatible HTTP, so local engines and hosted APIs take the same path.
 
 Approvals default to `safe`: ordinary edits and commands run on their own, while commands matching a
 danger pattern (`rm -rf`, `rm -f`, a force push, `git reset --hard` / `checkout --` / `stash drop`, any
-package install or uninstall, `npx`, `curl`/`wget`, `pkill`/`killall`, …) and any write landing outside
-the project force a prompt. It is yolo mode with a seatbelt, and everything it lets through is
-recoverable from git. `/approvals off` (or `REIKA_AUTO_APPROVE=off`) confirms every action; for truly
-no prompts, `REIKA_AUTO_APPROVE=bypass` (or `yolo`) runs dangerous commands without asking.
+package install or uninstall, `npx`, `curl`/`wget`, `pkill`/`killall`, and similar) and any write
+outside the project still prompt. It is yolo mode with a seatbelt, and everything it lets through is
+recoverable from git. `/approvals off` (or `REIKA_AUTO_APPROVE=off`) confirms every action. For no
+prompts at all, `REIKA_AUTO_APPROVE=bypass` (or `yolo`) runs dangerous commands without asking.
 
 ## Subagents
 
 A subagent buys **context, not speed**: its reads arrive in the parent as one report instead of N
-payloads, with the cost that the server re-prefills the parent's context when the subagent returns.
+payloads, at the cost of the server re-prefilling the parent's context when the subagent returns.
 Quality depends on the model, and three rules keep a weak one useful:
 
-- It always returns something — its last budgeted round is a forced report.
+- It always returns something: its last budgeted round is a forced report.
 - The report ends with a note naming any file the task listed that it never read, so the parent can
   hand the remainder to a second subagent rather than reading it.
 - A turn dispatches at most 3 subagent rounds, up to 4 subagents per round. An aged report keeps its
@@ -79,15 +79,15 @@ Two ways to do better than OCR:
 
 Two things to know about native: the image is sent once, and history keeps a short "not transcribed"
 note where the description would go, so the model can ask you to re-paste but cannot look again later.
-`@file.png` mentions still go through the reader — only the clipboard path carries bytes — and image
-tokens are invisible to the context budget, so each one is charged a fixed allowance when the prompt is
-sized.
+`@file.png` mentions still go through the reader, since only the clipboard path carries bytes. And
+image tokens are invisible to the context budget, so each image is charged a fixed allowance when the
+prompt is sized.
 
 ## Tool calling
 
 Tool calling is most reliable when the model is served with its **native function-calling chat
-template**. Without one, models emit tool calls as text, and Reika parses the common dialects as a
-best-effort fallback — `<tool_call>{json}</tool_call>`, Hermes `<function=…>`, pythonic `fn(k=v)`, and
-calls leaked into the reasoning channel — which exist to catch the malformed, looping and leaked calls
-the native path avoids. If a local model misbehaves on tool use, first check that your server
+template**. Without one, models emit tool calls as text. Reika parses the common dialects as a
+best-effort fallback (`<tool_call>{json}</tool_call>`, Hermes `<function=…>`, pythonic `fn(k=v)`, and
+calls leaked into the reasoning channel), but these are there to catch the malformed, looping and
+leaked calls the native path avoids in the first place. If a local model misbehaves on tool use, first check that your server
 (llama.cpp, Ollama, vLLM, MLX) loads a tools-enabled template for it.

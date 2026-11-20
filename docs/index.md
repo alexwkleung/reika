@@ -11,7 +11,7 @@ titleTemplate: false
 hero:
   name: Reika
   text: A coding agent CLI for local and hosted models
-  tagline: Designed around small local models first, so it is careful with context, fails more gracefully, and says when it's stuck. It doesn't make a small model smarter. It makes working with one less frustrating.
+  tagline: Designed around small local models first, so it is careful with context, fails gracefully, and tells you when it's stuck. It doesn't make a small model smarter. It makes working with one less frustrating.
   actions:
     - theme: brand
       text: Get started
@@ -43,11 +43,11 @@ features:
   - title: Checks on the model's work
     details: Blind edits go back for a read first, TypeScript edits are typechecked, and plan progress is tracked from what actually happened.
   - title: A mode for the job
-    details: Agent mode does the work by default. Switch to plan read-only first, run a test-and-review pass, keep a small window lean, or just chat. Shift+Tab cycles.
+    details: Agent mode does the work by default. Switch modes to plan read-only first, run a test-and-review pass, keep a small window lean, or just chat. Shift+Tab cycles through them.
   - title: Safe by default
     details: Dangerous commands still prompt, and on macOS shell commands run in a kernel sandbox. No telemetry.
   - title: Measured
-    details: Default-on features keep an off switch for A/B runs, and what they did and didn't fix is published.
+    details: Features that are on by default keep an off switch for A/B runs, and what they did and didn't fix is published.
 
 docsTitle: Documentation
 docs:

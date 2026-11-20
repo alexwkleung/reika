@@ -45,11 +45,11 @@ this is most of the wait a user feels.
 What changed: **prefix-stable mode** (`REIKA_PREFIX_STABLE`, on by default with a known window) keeps
 requests append-only between shrink events. Payload renders are byte-frozen until the estimate crosses
 the compaction threshold, and are then shed oldest-first to a 0.7 watermark in the same request
-compaction fires in, so one cache invalidation is amortized across an event instead of paid every
+where compaction fires, so one cache invalidation is amortized across an event instead of paid every
 round. How deep that watermark should be is still open, and `evals/prefixcost-report.ts` measures it
 rather than arguing it.
 
-Two follow-on findings came out of the same accounting:
+Three follow-on findings came out of the same accounting:
 
 - **Write the compaction note before the shed.** Written after it, one event paid two full re-prefills —
   measured at the first live fold, 9k + 9.3k tokens, 416 s + 431 s on a 24k window. Written first, the
@@ -136,7 +136,7 @@ is actually being shown. Several of these failures were harness bugs, not capabi
 ## Prompt wording is the weakest lever, and the one hardest to bound
 
 At Q2, on a vague task, the model converges or spirals about 50/50 — and no amount of intervention code
-moves that rate. What the harness can move is what the failing half _costs_: a clean honest stop in
+moves that rate. What the harness can move is what the failing half _costs_: a clean, honest stop in
 minutes instead of a 30-minute spiral or a committed garbage plan. The levers that move the rate sit
 outside the loop: input clarity and plan grounding.
 
@@ -151,7 +151,7 @@ Two measured prompt-level attempts, both instructive:
 - The subagent nudge ("this looks trace-shaped, delegate it") measured over-eager at round 0 and lost its
   A/B to the compaction note alone, so it stays off. Its mid-session successor is triggered by a harness
   fact instead of a wording, and even then the single live run had the model hear the suggestion, weigh
-  it, and decline it for trust — uptake 0/1. It is on for its bounded cost, not for a measured win.
+  it, and decline it, preferring to read the files itself — uptake 0/1. It is on for its bounded cost, not for a measured win.
 
 What replaced wording is harness enforcement, on facts the harness can see:
 
