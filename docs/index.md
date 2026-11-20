@@ -1,7 +1,7 @@
 ---
 # Site-only page: GitHub renders this frontmatter as a table. The repo's landing page is the README.
 # `Landing` is the site's own layout (theme/Landing.vue); it reads this frontmatter and the body
-# below in this order: hero, body, features, docs. `sidebar: false` because this page has no sidebar.
+# below in this order: hero (with `install`), body, features, docs. `sidebar: false` because this page has no sidebar.
 layout: Landing
 sidebar: false
 # Opt out of the site `titleTemplate` in config.ts, so the landing keeps the full
@@ -26,6 +26,14 @@ hero:
       text: Blog
       link: /blog/
 
+install:
+  - label: npm
+    command: npm i -g @alexwkleung/reika
+  - label: pnpm
+    command: pnpm add -g @alexwkleung/reika
+  - label: brew
+    command: brew install alexwkleung/tap/reika
+
 featuresTitle: What it does
 features:
   - title: Context discipline
@@ -35,7 +43,7 @@ features:
   - title: Checks on the model's work
     details: Blind edits go back for a read first, TypeScript edits are typechecked, and plan progress is tracked from what actually happened.
   - title: A mode for the job
-    details: Plan before anything changes, put a harder change through a test-and-review procedure, keep a small window lean, or just chat. Shift+Tab switches.
+    details: Agent mode does the work by default. Switch to plan read-only first, run a test-and-review pass, keep a small window lean, or just chat. Shift+Tab cycles.
   - title: Safe by default
     details: Dangerous commands still prompt, and on macOS shell commands run in a kernel sandbox. No telemetry.
   - title: Measured
@@ -49,6 +57,9 @@ docs:
   - title: Usage
     details: Modes, commands and keys
     link: /usage
+  - title: Web front end
+    details: The same agent in a browser tab
+    link: /web
   - title: Configuration
     details: Every setting
     link: /configuration
@@ -67,6 +78,9 @@ docs:
   - title: Architecture
     details: How a turn is put together
     link: /architecture
+  - title: Building on Reika
+    details: For your own coding harness
+    link: /building-on-reika
   - title: Findings
     details: What broke and what held
     link: /findings
@@ -81,14 +95,3 @@ docs:
   web-alt="The same task in reika web: Reika fixing a retry helper and its test with a local model"
   web-caption="A real local run of Qwen3.6 35B A3B (Unsloth UD-IQ2_M) via llama.cpp, sped up 3×. The model makes the change, writes five tests for the delays, and they pass on the first run."
 />
-
-## Install
-
-```sh
-npm i -g @alexwkleung/reika
-pnpm add -g @alexwkleung/reika
-brew install alexwkleung/tap/reika
-```
-
-Then point it at a model server and run `reika` in a project, or `reika web` for the
-[browser view](web.md). [Install and first run](getting-started.md) covers requirements and setup.

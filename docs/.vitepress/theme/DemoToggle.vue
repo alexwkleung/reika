@@ -127,19 +127,20 @@ function onKey(e: KeyboardEvent, i: number): void {
 
 <style scoped>
 .DemoTabs {
-  display: inline-flex;
-  gap: 2px;
-  margin-bottom: 12px;
-  padding: 3px;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 8px;
-  background: var(--vp-c-bg-soft);
+  display: flex;
+  gap: 4px;
+  margin: 0 0 12px -10px;
 }
 
+/* Text tabs marked the way the install box above marks its own: the selected one underlined in
+   orchid, the other lifting on hover, so the pair reads as a control rather than a caption. Each
+   keeps a button-sized hit area; the row's negative margin takes the first tab's padding back so
+   its text sits on the column edge. */
 .DemoTab {
-  padding: 4px 14px;
+  position: relative;
+  padding: 5px 10px;
   border-radius: 6px;
-  color: var(--vp-c-text-2);
+  color: var(--vp-c-text-3);
   font-size: 14px;
   font-weight: 500;
   line-height: 22px;
@@ -149,15 +150,24 @@ function onKey(e: KeyboardEvent, i: number): void {
 }
 
 .DemoTab:hover {
+  background: rgba(255, 255, 255, 0.04);
   color: var(--vp-c-text-1);
 }
 
-/* The page and the track are nearly the same plum, so a bg-colored pill vanished into it: the
-   selected tab takes the orchid instead. */
 .DemoTab[aria-selected='true'] {
-  background: rgba(214, 140, 214, 0.2);
-  color: var(--vp-c-brand-1);
-  box-shadow: inset 0 0 0 1px rgba(214, 140, 214, 0.45);
+  background: transparent;
+  color: var(--vp-c-text-1);
+}
+
+.DemoTab[aria-selected='true']::after {
+  content: '';
+  position: absolute;
+  right: 10px;
+  bottom: 0;
+  left: 10px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--vp-c-brand-1);
 }
 
 .DemoTab:focus-visible {
@@ -165,10 +175,15 @@ function onKey(e: KeyboardEvent, i: number): void {
   outline-offset: 1px;
 }
 
+/* The recordings sit in a quiet frame rather than floating on the page. Matched on the element, not
+   the src: a restart swaps the src for a blob: URL. */
 img {
   display: block;
   width: 100%;
   height: auto;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
 }
 
 .DemoCaption {

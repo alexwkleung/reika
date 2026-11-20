@@ -118,11 +118,42 @@ function adaptImageSrc(src: string, fromFile: string): string {
   return relative(dirname(fromFile), target).split(sep).join('/');
 }
 
+type BackLinkToken = {
+  type: string;
+  content?: string;
+  attrGet?: (name: string) => string | null;
+  children?: BackLinkToken[] | null;
+};
+
+// Every docs page opens with `[← README](../README.md)` so a reader on GitHub can get back to the
+// README. On the site the nav wordmark and sidebar already do that, so the line is dropped there:
+// a paragraph holding nothing but that one link.
+export function dropReadmeBackLink(tokens: BackLinkToken[]): void {
+  for (let i = 0; i + 2 < tokens.length; i++) {
+    const children = tokens[i + 1].children ?? [];
+    const isBackLink =
+      tokens[i].type === 'paragraph_open' &&
+      tokens[i + 1].type === 'inline' &&
+      tokens[i + 2].type === 'paragraph_close' &&
+      children.length === 3 &&
+      children[0].type === 'link_open' &&
+      /(^|\/)README\.md$/.test(children[0].attrGet?.('href') ?? '') &&
+      children[1].type === 'text' &&
+      children[1].content === '← README' &&
+      children[2].type === 'link_close';
+    if (isBackLink) {
+      tokens.splice(i, 3);
+      return;
+    }
+  }
+}
+
 export function githubLinks(md: MarkdownIt): void {
   md.core.ruler.push('github_links', state => {
     const relativePath: string | undefined = state.env?.relativePath;
     if (!relativePath) return;
     const fromFile = resolve(DOCS_DIR, relativePath);
+    dropReadmeBackLink(state.tokens);
     for (const block of state.tokens) {
       for (const token of block.children ?? []) {
         if (token.type === 'image') {
