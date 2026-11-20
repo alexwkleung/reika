@@ -21,6 +21,13 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 - The `(+2 -1)` line counts after an edit, a write or a file a shell command changed are drawn in
   the diff's green and red, in the terminal and in `reika web`, instead of the row's grey (#1089).
 
+### Fixed
+
+- In `reika web`, a new session now appears in the session list as soon as its first turn ends,
+  instead of after the next refresh (#1098).
+- In `reika web`, switching to a mode whose side of the open session is empty no longer shows a
+  blank screen: a line says which mode holds the conversation (#1098).
+
 ## [0.13.0] - 2026-11-18
 
 ### Added
