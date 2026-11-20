@@ -347,6 +347,19 @@ body:has(.post-meta) .vp-doc h2 {
   font-size: 11px;
 }
 
+/* A tight list's text is no paragraph, so it took the body's 24px line height, where inline code
+   (3px padding a side) left its backgrounds touching from line to line. Items get the paragraphs'
+   28px, code a slimmer pad, and a span that wraps its own padding and corners on each line. */
+.vp-doc li {
+  line-height: 28px;
+}
+
+.vp-doc :not(pre) > code {
+  padding: 2px 5px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
 /* Below 640px the default theme runs code blocks edge to edge, where side borders would be cut off. */
 @media (min-width: 640px) {
   .vp-doc div[class*='language-'] {
