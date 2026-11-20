@@ -265,6 +265,14 @@ body:has(.post-meta) {
   }
 }
 
+/* A section heading straight under the page title opens the page's content rather than dividing
+   it from a previous section, so it drops the rule and the space above it. */
+.vp-doc h1 + h2 {
+  margin-top: 32px;
+  padding-top: 0;
+  border-top: none;
+}
+
 #VPSidebarNav .VPSidebarItem.level-0 > .item > .text {
   font-size: 13px;
   font-weight: 600;
