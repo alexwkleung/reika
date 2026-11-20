@@ -130,7 +130,7 @@ async function copy() {
   height: 36px;
   margin-bottom: -1px;
   padding: 0 8px;
-  border-bottom: 1px solid transparent;
+  border-bottom: 2px solid transparent;
   color: var(--vp-c-text-3);
   font-size: 12px;
   transition: color 0.2s;

@@ -132,24 +132,42 @@ function onKey(e: KeyboardEvent, i: number): void {
   margin: 0 0 12px -10px;
 }
 
-/* Plain text tabs, as the install box above draws them. Each keeps a button-sized hit area; the
-   row's negative margin takes the first tab's padding back so its text sits on the column edge. */
+/* Text tabs marked the way the install box above marks its own: the selected one underlined in
+   orchid, the other lifting on hover, so the pair reads as a control rather than a caption. Each
+   keeps a button-sized hit area; the row's negative margin takes the first tab's padding back so
+   its text sits on the column edge. */
 .DemoTab {
+  position: relative;
   padding: 5px 10px;
   border-radius: 6px;
   color: var(--vp-c-text-3);
   font-size: 14px;
   font-weight: 500;
   line-height: 22px;
-  transition: color 0.2s;
+  transition:
+    color 0.2s,
+    background-color 0.2s;
 }
 
 .DemoTab:hover {
+  background: rgba(255, 255, 255, 0.04);
   color: var(--vp-c-text-1);
 }
 
 .DemoTab[aria-selected='true'] {
+  background: transparent;
   color: var(--vp-c-text-1);
+}
+
+.DemoTab[aria-selected='true']::after {
+  content: '';
+  position: absolute;
+  right: 10px;
+  bottom: 0;
+  left: 10px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--vp-c-brand-1);
 }
 
 .DemoTab:focus-visible {
