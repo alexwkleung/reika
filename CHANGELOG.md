@@ -15,6 +15,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Changed
 
+- A session left in chat mode reopens in chat mode instead of agent, and `REIKA_DEFAULT_MODE=chat`
+  now works. Shell mode is still not remembered: the next session opens in the mode before it
+  (#1097).
 - The `(+2 -1)` line counts after an edit, a write or a file a shell command changed are drawn in
   the diff's green and red, in the terminal and in `reika web`, instead of the row's grey (#1089).
 
