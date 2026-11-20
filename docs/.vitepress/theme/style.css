@@ -50,14 +50,6 @@
   font-weight: 600;
 }
 
-/* The demo is a terminal recording, so it sits in a quiet frame rather than floating on the page. */
-.vp-doc img[src*='demo'] {
-  display: block;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 10px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
-}
-
 /* The demo caption is a `<sup>` so GitHub renders it small; as superscript it also inherits a raised
    baseline that spreads its wrapped lines apart, so on the site it is set as a plain small line. */
 .Landing .vp-doc sup {

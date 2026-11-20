@@ -175,10 +175,15 @@ function onKey(e: KeyboardEvent, i: number): void {
   outline-offset: 1px;
 }
 
+/* The recordings sit in a quiet frame rather than floating on the page. Matched on the element, not
+   the src: a restart swaps the src for a blob: URL. */
 img {
   display: block;
   width: 100%;
   height: auto;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
 }
 
 .DemoCaption {
