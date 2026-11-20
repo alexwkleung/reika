@@ -71,6 +71,10 @@ cd your-project && reika
 
 托管 API、默认端口、上下文窗口以及从检出目录运行，见[安装与首次运行](docs/zh/getting-started.md)。
 
+更喜欢窗口而不是终端？`reika web` 把同一个代理提供给本机的浏览器标签页，`reika web --window` 则在独立的应用窗口中打开它。这一功能仍是实验性的；它能做什么、暂时还做不到什么，见 [docs/web.md](docs/zh/web.md)。
+
+![Reika 的网页前端运行在独立窗口中：历史面板、一次编辑的 diff，以及输入框](docs/web.png)
+
 ## 常用配置
 
 这些可以设在你的 shell、项目 `.env` 或 `~/.config/reika/.env` 中（优先级即此顺序）。完整列表、实验性开关和多模型 profile 见[配置文档](docs/configuration.md)。
