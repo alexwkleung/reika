@@ -217,6 +217,7 @@ describe('wireState', () => {
       stage: null,
       modelPinned: false,
       session: null,
+      offScreen: null,
       workingWords: false,
       pr: null,
     });

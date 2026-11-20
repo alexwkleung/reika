@@ -174,7 +174,7 @@ export function App({
         aria-label="Transcript"
       >
         <div className="app-column app-main">
-          <Transcript messages={s.messages} idle={!busy} />
+          <Transcript messages={s.messages} idle={!busy} offScreen={s.session?.offScreen} />
           {s.live ? (
             <LiveTurn
               live={s.live}

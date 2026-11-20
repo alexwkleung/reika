@@ -38,6 +38,7 @@ const session = (over: Partial<WireState> = {}): WireState => ({
   stage: null,
   modelPinned: false,
   session: 'b.jsonl',
+  offScreen: null,
   workingWords: false,
   pr: null,
   ...over,

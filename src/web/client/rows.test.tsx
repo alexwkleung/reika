@@ -354,3 +354,19 @@ describe('the transcript', () => {
     expect(text(transcript(messages, false))).not.toContain('1m 05s');
   });
 });
+
+describe('the other side of the conversation', () => {
+  const offScreen = { side: 'chat' as const, turns: 2 };
+  const draw = (messages: WireMessage[]) =>
+    text(renderToStaticMarkup(<Transcript messages={messages} idle offScreen={offScreen} />));
+
+  it('says where the conversation is when this side holds no prompt', () => {
+    expect(draw([])).toContain('This conversation is in chat mode. Switch to chat to see it');
+    expect(draw([{ role: 'system', content: 'Agent mode' }])).toContain('in chat mode');
+  });
+
+  it('says nothing once this side has a prompt, or when the other side is empty', () => {
+    expect(draw([{ role: 'user', content: 'fix the parser' }])).not.toContain('in chat mode');
+    expect(text(transcript([]))).not.toContain('This conversation is in');
+  });
+});
