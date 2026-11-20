@@ -57,6 +57,9 @@ docs:
   - title: Usage
     details: Modes, commands and keys
     link: /usage
+  - title: Web front end
+    details: The same agent in a browser tab
+    link: /web
   - title: Configuration
     details: Every setting
     link: /configuration
@@ -75,6 +78,9 @@ docs:
   - title: Architecture
     details: How a turn is put together
     link: /architecture
+  - title: Building on Reika
+    details: For your own coding harness
+    link: /building-on-reika
   - title: Findings
     details: What broke and what held
     link: /findings

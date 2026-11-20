@@ -59,6 +59,9 @@ docs:
   - title: 使用（英文）
     details: 模式、命令与快捷键
     link: /zh/usage
+  - title: 网页界面（英文）
+    details: 在浏览器标签页中使用同一个智能体
+    link: /zh/web
   - title: 配置（英文）
     details: 所有设置
     link: /zh/configuration
@@ -77,6 +80,9 @@ docs:
   - title: 架构
     details: 一轮交互如何组织
     link: /zh/architecture
+  - title: 基于 Reika 构建（英文）
+    details: 构建自己的编程智能体框架
+    link: /zh/building-on-reika
   - title: 研究结果（英文）
     details: 哪些失效、哪些有效
     link: /zh/findings
