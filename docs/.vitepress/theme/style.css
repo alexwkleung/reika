@@ -331,3 +331,86 @@ body:has(.post-meta) {
 .post-meta .post-back:hover {
   color: var(--vp-c-brand-1);
 }
+
+/* Docs pages: the sidebar shares the page's background and marks the current page with a soft orchid
+   pill, the pager is two plain links rather than cards, tables keep only row rules, and code blocks
+   sit in a hairline frame. The id outranks the default theme's scoped sidebar rules. */
+:root {
+  --vp-sidebar-bg-color: var(--vp-c-bg);
+  --vp-code-color: var(--vp-c-text-1);
+}
+
+#VPSidebarNav .VPSidebarItem.level-0 > .item > .text {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* The pill reaches 10px past the text on both sides, so the text stays on the group heading's edge. */
+#VPSidebarNav .VPSidebarItem.level-1 > .item {
+  margin: 0 -10px;
+  padding: 0 10px;
+  border-radius: 6px;
+  transition: background-color 0.2s;
+}
+
+/* The current page keeps its pill under the pointer: this rule outranks the active one below. */
+#VPSidebarNav .VPSidebarItem.level-1.is-link:not(.is-active) > .item:hover {
+  background-color: rgba(255, 255, 255, 0.03);
+}
+
+#VPSidebarNav .VPSidebarItem.level-1.is-active > .item {
+  background-color: var(--vp-c-brand-soft);
+}
+
+#VPSidebarNav .VPSidebarItem.level-1.is-active > .item .link > .text {
+  color: var(--vp-c-text-1);
+}
+
+.VPDocFooter .pager-link {
+  border: none;
+  border-radius: 0;
+  padding: 4px 0;
+}
+
+.VPDocFooter .pager-link .desc {
+  color: var(--vp-c-text-3);
+}
+
+.VPDocFooter .pager-link .title {
+  font-size: 15px;
+  color: var(--vp-c-text-1);
+}
+
+.VPDocFooter .pager-link:hover .title {
+  color: var(--vp-c-brand-1);
+}
+
+.vp-doc tr,
+.vp-doc tr:nth-child(2n) {
+  border-top: none;
+  background-color: transparent;
+}
+
+.vp-doc th,
+.vp-doc td {
+  border: none;
+  border-bottom: 1px solid var(--vp-c-divider);
+  padding: 10px 16px 10px 0;
+}
+
+.vp-doc th {
+  font-size: 13px;
+  background-color: transparent;
+}
+
+.vp-doc [class*='language-'] > span.lang {
+  font-family: var(--vp-font-family-mono);
+  font-size: 11px;
+}
+
+/* Below 640px the default theme runs code blocks edge to edge, where side borders would be cut off. */
+@media (min-width: 640px) {
+  .vp-doc div[class*='language-'] {
+    border: 1px solid var(--vp-c-divider);
+  }
+}
