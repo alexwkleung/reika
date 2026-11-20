@@ -269,6 +269,13 @@ const external = (link: string) => /^https?:/.test(link);
   background: var(--vp-c-divider);
 }
 
+/* Flex centers the rule on the line box, which is the capitals' middle; a lowercase heading's
+   letters sit lower (x-height middle ~1.7px down at 20px Geist), so the rule reads high. A whole
+   pixel keeps the hairline crisp. */
+.LandingSection h2:not(:lang(zh))::after {
+  transform: translateY(2px);
+}
+
 .LandingFeatures {
   display: grid;
   gap: 32px 40px;
