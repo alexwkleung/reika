@@ -258,30 +258,12 @@ const external = (link: string) => /^https?:/.test(link);
   margin-top: 96px;
 }
 
-/* A section heading runs into a hairline to the column's edge. */
 .LandingSection h2 {
-  display: flex;
-  align-items: center;
-  gap: 16px;
   margin: 0 0 28px;
   font-size: 20px;
   font-weight: 600;
   letter-spacing: -0.01em;
   color: var(--vp-c-text-1);
-}
-
-.LandingSection h2::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: var(--vp-c-divider);
-}
-
-/* Flex centers the rule on the line box, which is the capitals' middle; a lowercase heading's
-   letters sit lower (x-height middle ~1.7px down at 20px Geist), so the rule reads high. A whole
-   pixel keeps the hairline crisp. */
-.LandingSection h2:not(:lang(zh))::after {
-  transform: translateY(2px);
 }
 
 .LandingFeatures {
@@ -326,16 +308,21 @@ const external = (link: string) => /^https?:/.test(link);
   }
 }
 
+/* An index: each description follows its title, so a row reads as one entry rather than a label
+   at each end of a gap. */
 .LandingDoc {
   display: flex;
-  justify-content: space-between;
-  gap: 16px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 14px;
   padding: 12px 0;
   border-bottom: 1px solid var(--vp-c-divider);
   text-decoration: none;
 }
 
+/* A title never wraps; a description with no room beside it moves under it instead. */
 .LandingDoc .title {
+  flex: none;
   font-size: 14px;
   font-weight: 500;
   color: var(--vp-c-text-1);
@@ -345,7 +332,6 @@ const external = (link: string) => /^https?:/.test(link);
 .LandingDoc .details {
   font-size: 13px;
   color: var(--vp-c-text-3);
-  text-align: right;
 }
 
 .LandingDoc:hover .title {
