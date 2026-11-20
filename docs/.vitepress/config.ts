@@ -57,13 +57,13 @@ export default defineConfigWithTheme<TranslationTheme>({
       description: '面向本地和托管模型的编程智能体 CLI，优先围绕小型本地模型设计。',
       themeConfig: {
         nav: [
-          { text: '安装（英文）', link: '/zh/getting-started' },
-          { text: '使用（英文）', link: '/zh/usage' },
-          { text: '配置（英文）', link: '/zh/configuration' },
-          { text: '研究结果（英文）', link: '/zh/findings' },
-          { text: '支持项目（英文）', link: '/zh/support' },
+          { text: '安装', link: '/zh/getting-started' },
+          { text: '使用', link: '/zh/usage' },
+          { text: '配置', link: '/zh/configuration' },
+          { text: '研究结果', link: '/zh/findings' },
+          { text: '支持项目', link: '/zh/support' },
           {
-            text: '更新日志（英文）',
+            text: '更新日志',
             link: 'https://github.com/alexwkleung/reika/blob/main/CHANGELOG.md',
           },
         ],
@@ -163,6 +163,30 @@ export default defineConfigWithTheme<TranslationTheme>({
     siteTitle: 'Reika',
     // The pager is two plain links, so its labels carry the direction the default cards showed by position.
     docFooter: { prev: '← Previous', next: 'Next →' },
+    // Built into VitePress: the index is made at build time and searched in the browser, per locale.
+    search: {
+      provider: 'local',
+      options: {
+        locales: {
+          zh: {
+            translations: {
+              button: { buttonText: '搜索', buttonAriaLabel: '搜索' },
+              modal: {
+                displayDetails: '显示详细列表',
+                resetButtonTitle: '清除查询',
+                backButtonTitle: '关闭搜索',
+                noResultsText: '没有结果',
+                footer: {
+                  selectText: '选择',
+                  navigateText: '切换',
+                  closeText: '关闭',
+                },
+              },
+            },
+          },
+        },
+      },
+    },
     nav: [
       { text: 'Install', link: '/getting-started' },
       { text: 'Usage', link: '/usage' },
