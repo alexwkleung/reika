@@ -43,7 +43,7 @@ features:
   - title: Checks on the model's work
     details: Blind edits go back for a read first, TypeScript edits are typechecked, and plan progress is tracked from what actually happened.
   - title: A mode for the job
-    details: Plan before anything changes, put a harder change through a test-and-review procedure, keep a small window lean, or just chat. Shift+Tab switches.
+    details: Agent mode does the work by default. Switch to plan read-only first, run a test-and-review pass, keep a small window lean, or just chat. Shift+Tab cycles.
   - title: Safe by default
     details: Dangerous commands still prompt, and on macOS shell commands run in a kernel sandbox. No telemetry.
   - title: Measured
