@@ -271,6 +271,26 @@ body:has(.post-meta) .vp-doc h2 {
   }
 }
 
+/* The rule above a section heading sits midway between the text around it. The default theme puts
+   48px above it and 24px below; the 2px difference here is the paragraph's taller leading. */
+.vp-doc h2 {
+  margin-top: 36px;
+  padding-top: 38px;
+}
+
+.vp-doc h2 .header-anchor {
+  top: 38px;
+}
+
+/* The same for the rule between sidebar groups: the default theme has 24px above it and 10px below. */
+#VPSidebarNav .VPSidebarItem.level-0:not(.collapsed) {
+  padding-bottom: 18px;
+}
+
+#VPSidebarNav .group + .group {
+  padding-top: 18px;
+}
+
 /* A section heading straight under the page title opens the page's content rather than dividing
    it from a previous section, so it drops the rule and the space above it. */
 .vp-doc h1 + h2 {
