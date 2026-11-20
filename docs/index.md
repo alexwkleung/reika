@@ -1,7 +1,7 @@
 ---
 # Site-only page: GitHub renders this frontmatter as a table. The repo's landing page is the README.
 # `Landing` is the site's own layout (theme/Landing.vue); it reads this frontmatter and the body
-# below in this order: hero, body, features, docs. `sidebar: false` because this page has no sidebar.
+# below in this order: hero (with `install`), body, features, docs. `sidebar: false` because this page has no sidebar.
 layout: Landing
 sidebar: false
 # Opt out of the site `titleTemplate` in config.ts, so the landing keeps the full
@@ -25,6 +25,14 @@ hero:
     - theme: alt
       text: Blog
       link: /blog/
+
+install:
+  - label: npm
+    command: npm i -g @alexwkleung/reika
+  - label: pnpm
+    command: pnpm add -g @alexwkleung/reika
+  - label: brew
+    command: brew install alexwkleung/tap/reika
 
 featuresTitle: What it does
 features:
@@ -81,14 +89,3 @@ docs:
   web-alt="The same task in reika web: Reika fixing a retry helper and its test with a local model"
   web-caption="A real local run of Qwen3.6 35B A3B (Unsloth UD-IQ2_M) via llama.cpp, sped up 3×. The model makes the change, writes five tests for the delays, and they pass on the first run."
 />
-
-## Install
-
-```sh
-npm i -g @alexwkleung/reika
-pnpm add -g @alexwkleung/reika
-brew install alexwkleung/tap/reika
-```
-
-Then point it at a model server and run `reika` in a project, or `reika web` for the
-[browser view](web.md). [Install and first run](getting-started.md) covers requirements and setup.

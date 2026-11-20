@@ -19,6 +19,18 @@ hero:
       text: 阅读研究结果（英文）
       link: /zh/findings
 
+install:
+  - label: npm
+    command: npm i -g @alexwkleung/reika
+  - label: pnpm
+    command: pnpm add -g @alexwkleung/reika
+  - label: brew
+    command: brew install alexwkleung/tap/reika
+
+installLabel: 安装
+copyLabel: 复制命令
+copiedLabel: 已复制
+
 featuresTitle: 功能
 features:
   - title: 上下文管理
@@ -80,13 +92,3 @@ docs:
   web-alt="在 reika web 中完成同一任务：Reika 使用本地模型修复重试辅助函数及其测试"
   web-caption="通过 llama.cpp 运行 Qwen3.6 35B A3B（Unsloth UD-IQ2_M）的一次真实本地运行，播放速度加快 3 倍。模型完成修改，为延迟编写了五个测试，第一次运行就全部通过。"
 />
-
-## 安装
-
-```sh
-npm i -g @alexwkleung/reika
-pnpm add -g @alexwkleung/reika
-brew install alexwkleung/tap/reika
-```
-
-然后连接模型服务器，在项目中运行 `reika`，或运行 `reika web` 打开[浏览器界面](../web.md)。[安装与首次使用](../getting-started.md)介绍运行要求与设置步骤。

@@ -36,88 +36,9 @@
      heavy band on a tinted background; the soft divider makes them hairlines. */
   --vp-c-gutter: var(--vp-c-divider);
 
-  --vp-home-hero-name-color: var(--vp-c-brand-1);
   --vp-button-brand-bg: #a13d93;
   --vp-button-brand-hover-bg: #b04ea2;
   --vp-button-brand-active-bg: #8e3482;
-}
-
-/* Hero: the name is the accent and the headline sits under it, both smaller than the default
-   theme's 56px so the block reads as a heading and a line, not two headlines stacked. */
-.Landing .VPHero .name {
-  font-size: 28px;
-  line-height: 1.4;
-  font-weight: 600;
-  letter-spacing: 0;
-}
-
-.Landing .VPHero .text {
-  margin-top: 6px;
-  font-size: 32px;
-  line-height: 1.2;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-}
-
-.Landing .VPHero .tagline {
-  padding-top: 16px;
-  font-size: 17px;
-  line-height: 1.6;
-  color: var(--vp-c-text-2);
-}
-
-@media (min-width: 768px) {
-  .Landing .VPHero .text {
-    font-size: 40px;
-  }
-
-  .Landing .VPHero .tagline {
-    font-size: 18px;
-  }
-}
-
-/* The ramp as a bar beside the hero copy, as the splash draws it beside `✿ Reika`. The one place
-   the ramp appears on the page. */
-@media (min-width: 640px) {
-  .Landing .VPHero .main {
-    position: relative;
-    padding-left: 28px;
-  }
-
-  .Landing .VPHero .main::before {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 6px;
-    bottom: 6px;
-    width: 3px;
-    border-radius: 2px;
-    background: var(--reika-ramp);
-  }
-}
-
-/* The default row hangs 6px below the column on a negative margin, past where the hero bar ends. */
-.Landing .VPHero .actions {
-  margin: 0 -6px;
-  padding-top: 18px;
-}
-
-/* The default theme's button rule is scoped, so this needs the hero in the selector to win. */
-.Landing .VPHero .VPButton.medium {
-  border-radius: 8px;
-  padding: 0 18px;
-  line-height: 38px;
-  font-size: 14px;
-}
-
-.Landing .VPHero .VPButton.alt {
-  border-color: var(--vp-c-divider);
-  background: transparent;
-}
-
-.Landing .VPHero .VPButton.alt:hover {
-  border-color: var(--vp-c-brand-1);
-  color: var(--vp-c-brand-1);
 }
 
 /* Landing body: section headings match the component's own, without the doc pages' top rule. */
@@ -194,6 +115,20 @@
   background: rgba(214, 140, 214, 0.35);
 }
 
+/* On the landing the nav narrows to the page's own column (Landing.vue's .LandingBody: 960px less
+   its 48px gutters), so the wordmark sits above the hero rather than at the window's edge. Docs
+   pages keep the full width, where the nav lines up with the sidebar instead. English only: the
+   Chinese labels carry an（英文）suffix and do not fit the column. */
+@media (min-width: 768px) {
+  html[lang='en'] body:has(.Landing) .VPNavBar .wrapper {
+    padding: 0 48px;
+  }
+
+  html[lang='en'] body:has(.Landing) .VPNavBar .container {
+    max-width: 864px;
+  }
+}
+
 /* The landing page and the blog have no sidebar for a rule to separate, so their nav and footer carry
    none. Set on the variable rather than on the elements: the nav's own rules out-rank any selector
    here. */
@@ -233,22 +168,6 @@ body:has(.post-meta) {
 
 .VPFooter .message a:hover {
   color: var(--vp-c-brand-2);
-}
-
-/* The repo button carries the GitHub mark, drawn as a mask so it takes the button's text color. */
-.Landing .VPHero .VPButton[href*='github.com'] {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.Landing .VPHero .VPButton[href*='github.com']::before {
-  content: '';
-  width: 16px;
-  height: 16px;
-  background-color: currentColor;
-  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z'/%3E%3C/svg%3E")
-    center / contain no-repeat;
 }
 
 /* Blog: a plain dated list, its date and kind set as a byline in the body font. */

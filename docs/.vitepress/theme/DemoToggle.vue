@@ -127,37 +127,29 @@ function onKey(e: KeyboardEvent, i: number): void {
 
 <style scoped>
 .DemoTabs {
-  display: inline-flex;
-  gap: 2px;
-  margin-bottom: 12px;
-  padding: 3px;
-  border: 1px solid var(--vp-c-divider);
-  border-radius: 8px;
-  background: var(--vp-c-bg-soft);
+  display: flex;
+  gap: 4px;
+  margin: 0 0 12px -10px;
 }
 
+/* Plain text tabs, as the install box above draws them. Each keeps a button-sized hit area; the
+   row's negative margin takes the first tab's padding back so its text sits on the column edge. */
 .DemoTab {
-  padding: 4px 14px;
+  padding: 5px 10px;
   border-radius: 6px;
-  color: var(--vp-c-text-2);
+  color: var(--vp-c-text-3);
   font-size: 14px;
   font-weight: 500;
   line-height: 22px;
-  transition:
-    color 0.2s,
-    background-color 0.2s;
+  transition: color 0.2s;
 }
 
 .DemoTab:hover {
   color: var(--vp-c-text-1);
 }
 
-/* The page and the track are nearly the same plum, so a bg-colored pill vanished into it: the
-   selected tab takes the orchid instead. */
 .DemoTab[aria-selected='true'] {
-  background: rgba(214, 140, 214, 0.2);
-  color: var(--vp-c-brand-1);
-  box-shadow: inset 0 0 0 1px rgba(214, 140, 214, 0.45);
+  color: var(--vp-c-text-1);
 }
 
 .DemoTab:focus-visible {
