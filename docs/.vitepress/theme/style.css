@@ -1,10 +1,25 @@
-/* The site keeps the default theme's layout and type, and changes only what carries the brand: the
-   orchid ramp from the CLI's splash (#edc4e8 → #a13d93), used as one thin bar the way the TUI draws
-   it, and the logo's orchid as the accent. Everything else is left plain on purpose. */
+/* The site keeps the default theme's layout and changes what carries the brand: its own type (Geist),
+   greys tinted toward the background, the orchid ramp from the CLI's splash (#edc4e8 → #a13d93) used
+   as one thin bar the way the TUI draws it, and the logo's orchid as the accent. */
 
 :root {
   --reika-ramp: linear-gradient(180deg, #edc4e8 0%, #a13d93 100%);
-  --reika-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', monospace;
+
+  /* Geist for everything a reader reads, Geist Mono only for what they type. Self-hosted, so a page
+     view makes no request to a font CDN. */
+  --vp-font-family-base:
+    'Geist Variable', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
+    'Segoe UI Symbol', 'Noto Color Emoji';
+  --vp-font-family-mono:
+    'Geist Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono',
+    monospace;
+
+  /* Greys tinted toward the plum background, and text-3 lifted to pass 4.5:1 on it (the default's
+     #6a6a71 does not). */
+  --vp-c-text-1: #e9e4ec;
+  --vp-c-text-2: #a9a1ad;
+  --vp-c-text-3: #8a828f;
+  --vp-c-divider: #2a262e;
 
   --vp-c-brand-1: #d68cd6;
   --vp-c-brand-2: #c77bc6;
@@ -133,12 +148,50 @@
   color: var(--vp-c-text-3);
 }
 
-.VPNavBarTitle .title {
-  font-weight: 600;
+/* Chinese pages: the default theme's Punctuation SC, which the fontless entry leaves out, sets curly
+   quotes, dashes, the ellipsis and the middle dot in the system CJK face at full width. Local faces
+   only, so nothing downloads. Geist has no CJK glyphs, so the characters themselves fall through to
+   the CJK faces after it. */
+@font-face {
+  font-family: 'Punctuation SC';
+  font-weight: 400;
+  src: local('PingFang SC Regular'), local('Noto Sans CJK SC'), local('Microsoft YaHei');
+  unicode-range:
+    U+201C, U+201D, U+2018, U+2019, U+2E3A, U+2014, U+2013, U+2026, U+00B7, U+007E, U+002F;
 }
 
-.vp-doc code {
-  font-family: var(--reika-mono);
+@font-face {
+  font-family: 'Punctuation SC';
+  font-weight: 500;
+  src: local('PingFang SC Medium'), local('Noto Sans CJK SC'), local('Microsoft YaHei');
+  unicode-range:
+    U+201C, U+201D, U+2018, U+2019, U+2E3A, U+2014, U+2013, U+2026, U+00B7, U+007E, U+002F;
+}
+
+@font-face {
+  font-family: 'Punctuation SC';
+  font-weight: 600 700;
+  src: local('PingFang SC Semibold'), local('Noto Sans CJK SC Bold'), local('Microsoft YaHei Bold');
+  unicode-range:
+    U+201C, U+201D, U+2018, U+2019, U+2E3A, U+2014, U+2013, U+2026, U+00B7, U+007E, U+002F;
+}
+
+:root:where(:lang(zh)) {
+  --vp-font-family-base:
+    'Punctuation SC', 'Geist Variable', ui-sans-serif, system-ui, 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Noto Sans SC', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
+    'Segoe UI Symbol', 'Noto Color Emoji';
+}
+
+/* The wordmark is a name, not a nav item: a step larger than the links beside it. */
+.VPNavBarTitle .title {
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+::selection {
+  background: rgba(214, 140, 214, 0.35);
 }
 
 /* The landing page and the blog have no sidebar for a rule to separate, so their nav and footer carry

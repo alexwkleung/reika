@@ -1,5 +1,8 @@
 import type { Theme } from 'vitepress';
-import DefaultTheme from 'vitepress/theme';
+// The fontless entry drops the default theme's bundled Inter; the site's own faces load below.
+import DefaultTheme from 'vitepress/theme-without-fonts';
+import '@fontsource-variable/geist';
+import '@fontsource-variable/geist-mono';
 import { h } from 'vue';
 import BlogIndex from './BlogIndex.vue';
 import DemoToggle from './DemoToggle.vue';
