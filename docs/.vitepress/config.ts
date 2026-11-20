@@ -93,7 +93,7 @@ export default defineConfigWithTheme<TranslationTheme>({
           },
         ],
         outline: { label: '本页目录' },
-        docFooter: { prev: '上一篇', next: '下一篇' },
+        docFooter: { prev: '← 上一篇', next: '下一篇 →' },
         langMenuLabel: '切换语言',
         sidebarMenuLabel: '菜单',
         returnToTopLabel: '返回顶部',
@@ -159,6 +159,8 @@ export default defineConfigWithTheme<TranslationTheme>({
     // Shown in the nav bar next to the logo, instead of falling back to the full
     // site `title` above; the document/tab title still uses `title`.
     siteTitle: 'Reika',
+    // The pager is two plain links, so its labels carry the direction the default cards showed by position.
+    docFooter: { prev: '← Previous', next: 'Next →' },
     nav: [
       { text: 'Install', link: '/getting-started' },
       { text: 'Usage', link: '/usage' },
