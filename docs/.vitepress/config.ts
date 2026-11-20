@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfigWithTheme } from 'vitepress';
+import { reikaCodeTheme } from './codetheme';
 import { buildAtomFeed, withBlogSection } from './feed';
 import { brokenLinks, githubLinks, githubSlugify, untranslatedSource } from './links';
 import { SITE_URL, languageAlternates, pageDescriptions, siteNameHead, socialHead } from './seo';
@@ -148,6 +149,7 @@ export default defineConfigWithTheme<TranslationTheme>({
   },
   markdown: {
     math: true,
+    theme: reikaCodeTheme,
     anchor: { slugify: githubSlugify },
     config: md => md.use(githubLinks),
   },
