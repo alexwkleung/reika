@@ -252,6 +252,19 @@ body:has(.post-meta) {
   --vp-code-color: var(--vp-c-text-1);
 }
 
+/* With the sidebar on the page's background, the nav's rule runs the full width as one line. The
+   default theme draws two: a border under the wordmark, inset and a pixel higher, and the nav's own
+   divider starting at the sidebar's edge. */
+@media (min-width: 960px) {
+  .VPNav .VPNavBar .VPNavBarTitle.has-sidebar .title {
+    border-bottom-color: transparent;
+  }
+
+  body .VPNav .VPNavBar.has-sidebar .divider {
+    padding-left: 0;
+  }
+}
+
 #VPSidebarNav .VPSidebarItem.level-0 > .item > .text {
   font-size: 13px;
   font-weight: 600;
@@ -285,6 +298,7 @@ body:has(.post-meta) {
 }
 
 .VPDocFooter .pager-link .desc {
+  margin-bottom: 4px;
   color: var(--vp-c-text-3);
 }
 
