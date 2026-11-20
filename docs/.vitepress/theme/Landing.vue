@@ -47,7 +47,8 @@ const external = (link: string) => /^https?:/.test(link);
             :href="external(a.link) ? a.link : withBase(a.link)"
             :target="external(a.link) ? '_blank' : undefined"
             :rel="external(a.link) ? 'noreferrer' : undefined"
-            >{{ a.text }} <span aria-hidden="true">{{ external(a.link) ? '↗' : '→' }}</span></a
+            >{{ a.text }}
+            <span class="arrow" aria-hidden="true">{{ external(a.link) ? '↗' : '→' }}</span></a
           >
         </div>
       </section>
@@ -231,6 +232,13 @@ const external = (link: string) => /^https?:/.test(link);
 
 .textlink:hover {
   color: var(--vp-c-text-1);
+}
+
+/* Geist sets its arrows on the capitals' middle; these labels are mostly lowercase, whose middle sits
+   ~1.2px lower at 14px, so the arrow read high. A whole pixel keeps it crisp. */
+.arrow {
+  position: relative;
+  top: 1px;
 }
 
 .primary:focus-visible,
