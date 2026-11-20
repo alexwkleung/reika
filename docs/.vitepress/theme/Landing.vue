@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useData, withBase } from 'vitepress';
-import { VPHomeHero } from 'vitepress/theme';
+import { VPHomeHero } from 'vitepress/theme-without-fonts';
 import { computed } from 'vue';
 
 // The landing page, top to bottom: the default theme's hero, then the markdown body (demo and
