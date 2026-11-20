@@ -29,6 +29,8 @@ The docs site is a workspace member, so a plain `pnpm install` at the root insta
 - `pnpm run release:check` — pack, install and smoke-test the npm tarball before a publish
 - `pnpm run release:verify` — after a release, check that npm, the Homebrew tap and the GitHub release all serve the same tarball (see [RELEASING.md](RELEASING.md))
 
+`pnpm install` also points this checkout's `core.hooksPath` at `.githooks/` (repo-local, never global). Its pre-commit hook runs oxfmt and oxlint on the staged files only, in under a second; typecheck and tests stay in `check` and CI. `git config --unset core.hooksPath` turns it off.
+
 ## Docs site deploy
 
 The site at reikacode.com is a Cloudflare Worker serving the VitePress build as static assets, configured in `wrangler.jsonc`. Deploys go through Workers Builds, Cloudflare's Git integration: a push to `main` that touches the site builds it and deploys it, with no workflow or API token in this repo. The settings that live in the Cloudflare dashboard rather than in the file:
