@@ -115,11 +115,12 @@
   body:has(.Landing) .VPNavBar .container {
     max-width: 864px;
   }
+}
 
-  /* The Chinese labels carry an（英文）suffix; tighter spacing is what fits them in the column. */
-  html[lang='zh-CN'] body:has(.Landing) .VPNavBarMenuLink {
-    padding: 0 2px;
-  }
+/* The landing's job is the hero's "Get started", and its nav is one column wide, so search is left to
+   the docs pages. Hidden rather than removed: the component stays mounted, so ⌘K still opens it. */
+body:has(.Landing) .VPNavBarSearch {
+  display: none;
 }
 
 /* The landing page and the blog have no sidebar for a rule to separate, so their nav and footer carry
@@ -365,4 +366,105 @@ body:has(.post-meta) .vp-doc h2 {
   .vp-doc div[class*='language-'] {
     border: 1px solid var(--vp-c-divider);
   }
+}
+
+/* Search, like the web UI's input box: a card a step lighter than the page, a grey edge at rest and a
+   stronger grey (not the accent) on focus. The modal's input is focused for as long as it is open,
+   so an orchid edge there became the box's own colour. The greys are the web UI's #3a3a3a and
+   #4a4a4a tinted toward plum. Below 768px the nav button is a bare icon, so it is left alone there. */
+.VPLocalSearchBox .shell .search-bar {
+  background-color: var(--vp-c-bg-soft);
+  border-color: #3a3640;
+}
+
+@media (min-width: 768px) {
+  /* 36px rather than the default 40: the nav's links are bare text, and the taller box stood out. */
+  .DocSearch-Button {
+    border-color: #3a3640;
+    height: 36px;
+  }
+
+  .DocSearch-Button,
+  .DocSearch-Button:hover {
+    background-color: var(--vp-c-bg-soft);
+  }
+}
+
+.DocSearch-Button:hover,
+.VPLocalSearchBox .shell .search-bar:focus-within {
+  border-color: #4a4550;
+}
+
+/* Where the nav links need the room, the button keeps only its icon, as the default theme does below
+   768px, and the gap before it narrows. Measured: with the full button the nav overflowed below
+   1100px. */
+@media (min-width: 768px) and (max-width: 1099px) {
+  .VPNavBarSearch {
+    padding-left: 8px;
+  }
+
+  .DocSearch-Button {
+    justify-content: center;
+    padding: 0;
+    width: 36px;
+  }
+
+  .DocSearch-Button .DocSearch-Search-Icon {
+    margin-right: 0;
+  }
+
+  .DocSearch-Button .DocSearch-Button-Placeholder,
+  .DocSearch-Button .DocSearch-Button-Keys {
+    display: none;
+  }
+}
+
+/* The search modal in the web UI's terms: results are rows rather than boxed cards, the selected one a
+   lighter fill (the web UI's menu highlight) rather than an orchid edge, matches a faint orchid tint
+   rather than solid blocks, and the shell a hairline-edged card. */
+:root {
+  --vp-local-search-result-border: transparent;
+  --vp-local-search-result-selected-border: transparent;
+  --vp-local-search-result-selected-bg: color-mix(in oklab, var(--vp-c-text-1) 8%, var(--vp-c-bg));
+  --vp-local-search-highlight-bg: var(--vp-c-brand-soft);
+  --vp-local-search-highlight-text: var(--vp-c-brand-1);
+}
+
+.VPLocalSearchBox .shell {
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 14px;
+}
+
+.VPLocalSearchBox .shell .search-bar {
+  border-radius: 8px;
+}
+
+/* The box's own styles load with it when it opens, after these, so each rule here goes through
+   .shell to out-rank its scoped twin. */
+.VPLocalSearchBox .shell .results {
+  gap: 2px;
+}
+
+.VPLocalSearchBox .shell .result {
+  border-radius: 8px;
+}
+
+/* The default paints no row background (the variable only feeds the excerpt's fade), so the fill is
+   set here, and the variable with it so the fade matches. */
+.VPLocalSearchBox .shell .result.selected {
+  background-color: var(--vp-local-search-result-selected-bg);
+}
+
+.VPLocalSearchBox .shell .result > div {
+  margin: 8px 12px;
+}
+
+.VPLocalSearchBox .shell .title-icon {
+  color: var(--vp-c-text-3);
+}
+
+/* The default turns a selected row's titles orchid, which hid the orchid matches inside them. */
+.VPLocalSearchBox .shell .result.selected .titles,
+.VPLocalSearchBox .shell .result.selected .title-icon {
+  color: var(--vp-c-text-1) !important;
 }
