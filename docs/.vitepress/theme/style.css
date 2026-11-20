@@ -418,3 +418,53 @@ body:has(.post-meta) .vp-doc h2 {
     display: none;
   }
 }
+
+/* The search modal in the web UI's terms: results are rows rather than boxed cards, the selected one a
+   lighter fill (the web UI's menu highlight) rather than an orchid edge, matches a faint orchid tint
+   rather than solid blocks, and the shell a hairline-edged card. */
+:root {
+  --vp-local-search-result-border: transparent;
+  --vp-local-search-result-selected-border: transparent;
+  --vp-local-search-result-selected-bg: color-mix(in oklab, var(--vp-c-text-1) 8%, var(--vp-c-bg));
+  --vp-local-search-highlight-bg: var(--vp-c-brand-soft);
+  --vp-local-search-highlight-text: var(--vp-c-brand-1);
+}
+
+.VPLocalSearchBox .shell {
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 14px;
+}
+
+.VPLocalSearchBox .shell .search-bar {
+  border-radius: 8px;
+}
+
+/* The box's own styles load with it when it opens, after these, so each rule here goes through
+   .shell to out-rank its scoped twin. */
+.VPLocalSearchBox .shell .results {
+  gap: 2px;
+}
+
+.VPLocalSearchBox .shell .result {
+  border-radius: 8px;
+}
+
+/* The default paints no row background (the variable only feeds the excerpt's fade), so the fill is
+   set here, and the variable with it so the fade matches. */
+.VPLocalSearchBox .shell .result.selected {
+  background-color: var(--vp-local-search-result-selected-bg);
+}
+
+.VPLocalSearchBox .shell .result > div {
+  margin: 8px 12px;
+}
+
+.VPLocalSearchBox .shell .title-icon {
+  color: var(--vp-c-text-3);
+}
+
+/* The default turns a selected row's titles orchid, which hid the orchid matches inside them. */
+.VPLocalSearchBox .shell .result.selected .titles,
+.VPLocalSearchBox .shell .result.selected .title-icon {
+  color: var(--vp-c-text-1) !important;
+}

@@ -167,6 +167,12 @@ export default defineConfigWithTheme<TranslationTheme>({
     search: {
       provider: 'local',
       options: {
+        miniSearch: {
+          // The default allows one wrong letter even in a three-letter word, so a typo like "asd"
+          // matched "and", "as" and "ask" on every page. Typos are forgiven from five letters up.
+          // Sent to the page as source text, so it must not close over anything.
+          searchOptions: { fuzzy: (term: string) => (term.length >= 5 ? 0.2 : false) },
+        },
         locales: {
           zh: {
             translations: {
