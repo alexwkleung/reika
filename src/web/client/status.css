@@ -3,7 +3,7 @@
   padding: 0.5rem 0.25rem 0.75rem;
   font-family: var(--reika-prose);
   /* The page's small-text size, as the input box's controls and the sidebar's details use. */
-  font-size: 0.875rem;
+  font-size: var(--reika-text-md);
   color: var(--reika-secondary);
   font-variant-numeric: tabular-nums;
 }
@@ -38,7 +38,7 @@
 .status-track {
   width: 3.5rem;
   height: 4px;
-  border-radius: 2px;
+  border-radius: var(--reika-radius-2xs);
   background: var(--reika-control-border);
   overflow: hidden;
   /* Centred on the line box the bar sits at cap height, so the lowercase tag beside it reads low;

@@ -17,7 +17,7 @@
   align-items: center;
   gap: 0.5rem;
   min-width: 0;
-  font-size: 0.875rem;
+  font-size: var(--reika-text-md);
   color: var(--reika-text);
 }
 .composer-queued-text {
@@ -28,11 +28,11 @@
 }
 .composer-tag {
   flex-shrink: 0;
-  font-size: 0.6875rem;
+  font-size: var(--reika-text-2xs);
   font-weight: 600;
   line-height: 1.125rem;
   padding: 0 0.375rem;
-  border-radius: 5px;
+  border-radius: var(--reika-radius-sm);
   border: 1px solid currentColor;
 }
 .composer-tag-queued {
@@ -45,7 +45,7 @@
   align-items: center;
   gap: 0.5rem;
   margin: 0 0.25rem 0.5rem;
-  font-size: 0.875rem;
+  font-size: var(--reika-text-md);
 }
 .composer-stage {
   color: var(--reika-secondary);
@@ -90,8 +90,8 @@
   overflow-y: auto;
   background: var(--reika-code-bg);
   border: 1px solid var(--reika-rule);
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.45);
+  border-radius: var(--reika-radius-xl);
+  box-shadow: var(--reika-shadow-menu);
 }
 .composer-completion {
   display: flex;
@@ -99,9 +99,9 @@
   gap: 0.75rem;
   min-width: 0;
   padding: 0.3125rem 0.625rem;
-  border-radius: 6px;
+  border-radius: var(--reika-radius-md);
   cursor: pointer;
-  font-size: 0.875rem;
+  font-size: var(--reika-text-md);
 }
 /* One highlight for every menu (this list, the pills' menus): a fill a clear step off the popover,
    moved alike by the pointer and the arrow keys, marking what Enter picks. A dialog's choices keep
@@ -133,7 +133,7 @@
   padding: 0.75rem 0.75rem 0.625rem 1rem;
   background: var(--reika-code-bg);
   border: 1px solid var(--reika-rule);
-  border-radius: 14px;
+  border-radius: var(--reika-radius-2xl);
   cursor: text;
   transition: border-color 120ms ease;
 }
@@ -161,7 +161,7 @@
   white-space: pre-wrap;
   overflow-wrap: break-word;
   font: inherit;
-  font-size: 0.9375rem;
+  font-size: var(--reika-text-lg);
   line-height: 1.55;
   color: transparent;
 }
@@ -182,7 +182,7 @@
    glyph after it out from under the box's caret. Opaque tints of the card's own colour, so the
    chip is a lighter shade of the box rather than a wash over it. */
 .composer-token {
-  border-radius: 5px;
+  border-radius: var(--reika-radius-sm);
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
   --chip: color-mix(in oklab, var(--reika-accent) 16%, var(--reika-code-bg));
@@ -213,7 +213,7 @@
   background: none;
   color: var(--reika-text);
   font: inherit;
-  font-size: 0.9375rem;
+  font-size: var(--reika-text-lg);
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: break-word;
@@ -242,9 +242,9 @@
   height: 1.875rem;
   padding: 0 0.25rem 0 0.625rem;
   border: 1px solid var(--reika-control-border);
-  border-radius: 8px;
+  border-radius: var(--reika-radius-lg);
   background: var(--reika-control-bg);
-  font-size: 0.8125rem;
+  font-size: var(--reika-text-sm);
   cursor: default;
 }
 .composer-image-thumb {
@@ -256,7 +256,7 @@
   padding: 0;
   overflow: hidden;
   border: 1px solid var(--reika-rule);
-  border-radius: 4px;
+  border-radius: var(--reika-radius-xs);
   background: var(--reika-code-bg);
   cursor: zoom-in;
 }
@@ -318,7 +318,7 @@
   height: 1.5rem;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--reika-radius-md);
   background: none;
   cursor: pointer;
 }
@@ -358,13 +358,13 @@
   height: 1.875rem;
   padding: 0 0.625rem;
   box-sizing: border-box;
-  border-radius: 8px;
+  border-radius: var(--reika-radius-lg);
   /* A step stronger than the pills' old border, which all but vanished against the card. */
   border: 1px solid var(--reika-rule-strong);
   background: var(--reika-control-bg);
   color: var(--reika-control-fg);
   font: inherit;
-  font-size: 0.875rem;
+  font-size: var(--reika-text-md);
   cursor: pointer;
 }
 /* A fill as well as the border: a 1px line brightening alone was hard to see on a control this
@@ -434,8 +434,8 @@
   padding: 0.25rem;
   background: var(--reika-code-bg);
   border: 1px solid var(--reika-rule);
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.45);
+  border-radius: var(--reika-radius-xl);
+  box-shadow: var(--reika-shadow-menu);
 }
 /* An option scrolled to the edge keeps room for its focus ring, which reaches 3px past it. */
 .pill-popover,
@@ -453,11 +453,11 @@
   min-height: 2rem;
   padding: 0 0.5rem;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--reika-radius-md);
   background: none;
   color: var(--reika-text);
   font: inherit;
-  font-size: 0.875rem;
+  font-size: var(--reika-text-md);
   text-align: left;
   cursor: pointer;
 }
@@ -524,13 +524,13 @@
 .composer-stop-square {
   width: 0.625rem;
   height: 0.625rem;
-  border-radius: 2px;
+  border-radius: var(--reika-radius-2xs);
   background: currentColor;
 }
 
 .composer-error {
   margin: 0.375rem 0.25rem 0;
-  font-size: 0.875rem;
+  font-size: var(--reika-text-md);
   color: var(--reika-error);
   overflow-wrap: anywhere;
 }
@@ -546,7 +546,7 @@
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
-  font-size: 0.8125rem;
+  font-size: var(--reika-text-sm);
   color: var(--reika-muted);
 }
 .composer-folder svg {

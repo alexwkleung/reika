@@ -7,7 +7,7 @@
   background: var(--reika-code-bg);
   scrollbar-width: thin;
   scrollbar-color: var(--reika-rule) transparent;
-  border-radius: 4px;
+  border-radius: var(--reika-radius-xs);
   max-width: 100%;
 }
 .diff-rows {
@@ -53,7 +53,7 @@
 }
 .diff-word {
   color: var(--reika-diff-word-fg);
-  border-radius: 2px;
+  border-radius: var(--reika-radius-2xs);
 }
 .diff-row--added .diff-word {
   background: var(--reika-diff-added-word-bg);
