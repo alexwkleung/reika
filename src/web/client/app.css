@@ -31,6 +31,32 @@
   --reika-syntax-gray: #8b909a;
   --reika-prose: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
   --reika-mono: ui-monospace, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+
+  /* Theme tokens beyond colour (#1095): a theme sets these rather than restyling selectors. Named
+     by size, not role, since one value serves several roles; a circle (50%) stays a literal. */
+  --reika-font-size: 15px;
+  --reika-line-height: 1.6;
+  --reika-text-2xs: 0.6875rem;
+  --reika-text-xs: 0.75rem;
+  --reika-text-sm: 0.8125rem;
+  --reika-text-md: 0.875rem;
+  --reika-text-lg: 0.9375rem;
+  --reika-radius-2xs: 2px;
+  --reika-radius-xs: 4px;
+  --reika-radius-sm: 5px;
+  --reika-radius-md: 6px;
+  --reika-radius-lg: 8px;
+  --reika-radius-xl: 10px;
+  --reika-radius-2xl: 14px;
+  --reika-radius-pill: 999px;
+  /* Shadows and scrims are tuned for the dark page; a light theme lightens them. */
+  --reika-shadow-float: 0 4px 16px rgb(0 0 0 / 0.4);
+  --reika-shadow-tip: 0 4px 16px rgb(0 0 0 / 0.35);
+  --reika-shadow-menu: 0 8px 24px rgb(0 0 0 / 0.45);
+  --reika-shadow-drawer: 8px 0 32px rgb(0 0 0 / 0.4);
+  --reika-scrim: rgb(0 0 0 / 0.5);
+  --reika-scrim-strong: color-mix(in srgb, #000 72%, transparent);
+  --reika-user-text: #f4f4f4;
 }
 
 html,
@@ -43,8 +69,8 @@ body {
   background: var(--reika-page-bg);
   color: var(--reika-text);
   font-family: var(--reika-prose);
-  font-size: 15px;
-  line-height: 1.6;
+  font-size: var(--reika-font-size);
+  line-height: var(--reika-line-height);
   /* An app, not a document: chrome does not select. The text a user copies opts back in below. */
   -webkit-user-select: none;
   user-select: none;
@@ -183,12 +209,12 @@ textarea,
   height: 1.875rem;
   padding: 0 0.75rem;
   font: inherit;
-  font-size: 0.875rem;
+  font-size: var(--reika-text-md);
   color: var(--reika-control-fg);
   background: var(--reika-control-bg);
   border: 1px solid var(--reika-control-border);
-  border-radius: 999px;
-  box-shadow: 0 4px 16px rgb(0 0 0 / 0.4);
+  border-radius: var(--reika-radius-pill);
+  box-shadow: var(--reika-shadow-float);
   white-space: nowrap;
   cursor: pointer;
 }

@@ -6,7 +6,7 @@
   align-items: center;
   justify-content: center;
   padding: 3rem 1rem;
-  background: color-mix(in srgb, #000 72%, transparent);
+  background: var(--reika-scrim-strong);
   cursor: zoom-out;
 }
 .image-preview-figure {
@@ -25,11 +25,11 @@
   max-height: calc(100vh - 8rem);
   object-fit: contain;
   border: 1px solid var(--reika-rule);
-  border-radius: 8px;
+  border-radius: var(--reika-radius-lg);
   background: var(--reika-code-bg);
 }
 .image-preview-caption {
-  font-size: 0.8125rem;
+  font-size: var(--reika-text-sm);
   color: var(--reika-secondary);
   user-select: text;
 }
@@ -44,7 +44,7 @@
   height: 2rem;
   padding: 0;
   border: 1px solid var(--reika-control-border);
-  border-radius: 8px;
+  border-radius: var(--reika-radius-lg);
   background: var(--reika-control-bg);
   cursor: pointer;
 }
