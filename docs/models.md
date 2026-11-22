@@ -14,6 +14,7 @@ few steps. Use them for short, well-scoped tasks.
 
 ## Local
 
+- Inkling 2 Mini (UD-Q2_K_XL)
 - LFM2.5 24B A2B (UD-IQ3_XXS)
 - Mellum2.1 12B A2.5B Thinking (Q4_K_M)
 - Ling 3.0 Tiny (Q4_K_M)
@@ -38,6 +39,7 @@ few steps. Use them for short, well-scoped tasks.
 
 ## API
 
+- MiniMax M3.1 Flash (OpenCode Go)
 - MiMo V2.6 Pro (OpenCode Go)
 - MiMo V2.6 Flash (OpenCode Go)
 - GLM 5.3 Flash (OpenCode Go)
