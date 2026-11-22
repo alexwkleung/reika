@@ -234,13 +234,6 @@ const external = (link: string) => /^https?:/.test(link);
   color: var(--vp-c-text-1);
 }
 
-/* Geist sets its arrows on the capitals' middle; these labels are mostly lowercase, whose middle sits
-   ~1.2px lower at 14px, so the arrow read high. A whole pixel keeps it crisp. */
-.arrow {
-  position: relative;
-  top: 1px;
-}
-
 .primary:focus-visible,
 .textlink:focus-visible {
   outline: 2px solid var(--vp-c-brand-1);
