@@ -164,6 +164,17 @@ as the environment refusing and reran the command: 0 of 3 runs complied with the
 result, 0 of 3 with it reworded as "the user's own words", and 3 of 3 with it sent as a user message.
 For a per-round note, hidden reasoning is the bigger cost. For a single instruction, authority is.
 
+Both costs are a reason not to bend roles to fit an engine's cache. A model that can't roll its
+memory back (a hybrid or recurrent model, or SWA without `--swa-full`) can only resume from a
+checkpoint, and llama.cpp places those by role: at the start of the last user message, at earlier
+user messages at least `--checkpoint-min-step` tokens apart (8192 by default), and just before the
+end of the prompt. A divergence anywhere else re-prefills from the checkpoint before it. That makes
+it tempting to send tool results as user messages, which would apply both costs above on every
+round. An agent loop that keeps its requests append-only doesn't need it: each request extends the
+state the engine already holds, and a trailing note sent in the user role starts exactly at the
+last-user checkpoint. What falls between checkpoints is a context shed, which rewrites history
+further back. Checkpoint spacing is the engine's setting to tune; the roles stay the model's.
+
 ### Search Brave, not Google or Bing, when driving a browser
 
 On live results pages, Google and Bing launder every outbound link through a tracker
