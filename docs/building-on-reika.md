@@ -26,26 +26,69 @@ of that state.
 These modules depend on nothing model-specific. Each one solves a problem any harness that runs
 shell commands, talks to a local engine or draws a terminal UI will run into.
 
-| Module                                                      | What it does                                                                                                                                                                                      | Local imports                  |
-| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
-| [`tools/_heredoc.ts`](../src/tools/_heredoc.ts)             | A small shell lexer: which `<<` is an operator, where a heredoc body ends, which text is quoted. Reports what it cannot read exactly as uncertain so callers can fail closed                      | none                           |
-| [`tools/_carriers.ts`](../src/tools/_carriers.ts)           | A table of command wrappers (`sudo`, `env`, `timeout`, `nice`, …): their value-taking flags, and whether they change what the command means                                                       | none                           |
-| [`tools/_readonly.ts`](../src/tools/_readonly.ts)           | Two predicates: "provably read-only" (an allowlist that must under-allow) and "inspection escape" (catches a looping model reading through the shell). Why there are two is explained in the file | `_heredoc`, `_carriers`        |
-| [`tools/_danger.ts`](../src/tools/_danger.ts)               | Which bash commands need a human: destructive commands, publishing, package installs at any scope, network verbs in command position                                                              | the three above, `_markdown`   |
-| [`tools/_sandbox.ts`](../src/tools/_sandbox.ts)             | A macOS Seatbelt profile generator plus a per-command network classifier, with no proxy layer                                                                                                     | `_heredoc`, `_readonly`        |
-| [`tools/_treediff.ts`](../src/tools/_treediff.ts)           | Diffs for files a shell command changed, with git as the change detector instead of parsing the command                                                                                           | `_diff`, `_writetargets`       |
-| [`tools/_spill.ts`](../src/tools/_spill.ts)                 | Writes a capped tool result in full to a session temp file, and gives the model a short path it can page with `read`                                                                              | none                           |
-| [`tools/_hosts.ts`](../src/tools/_hosts.ts)                 | A private-address guard that runs at connect time, which closes DNS rebinding                                                                                                                     | `provider/dispatcher`          |
-| [`mcp/`](../src/mcp/)                                       | A stdio MCP client that speaks both the pre- and post-`2026-07-28` protocol, plus a bridge that narrows server schemas to what providers accept                                                   | `debug`, `version` (client)    |
-| [`provider/latches.ts`](../src/provider/latches.ts)         | Per-endpoint degrade latches, so one strict server's quirks don't follow you to the next                                                                                                          | none                           |
-| [`provider/dispatcher.ts`](../src/provider/dispatcher.ts)   | Lifts undici's 300s timeouts, which kill a turn mid-prefill, without adding a dependency                                                                                                          | `debug`                        |
-| [`agent/prefixtrace.ts`](../src/agent/prefixtrace.ts)       | Classifies why each request diverged from the previous one: append-only, trailing note, mid-history rewrite, tool list changed                                                                    | none                           |
-| [`agent/prefillcost.ts`](../src/agent/prefillcost.ts)       | Prices each cache divergence in tokens reprocessed and seconds, from a prefill rate learned off time-to-first-token                                                                               | `decoderate` (types otherwise) |
-| [`agent/decoderate.ts`](../src/agent/decoderate.ts)         | Decode tok/s: the engine's own timings where it reports them (llama.cpp), a derivation from the stream otherwise                                                                                  | types only                     |
-| [`agent/entropytrace.ts`](../src/agent/entropytrace.ts)     | Drift as numbers: per-round entropy (engine logprobs or the output's own) and smoothed KL against the previous and first round                                                                    | types only                     |
-| [`agent/reasoningtrace.ts`](../src/agent/reasoningtrace.ts) | Detects rumination from 8-gram similarity across rounds and within one block                                                                                                                      | none                           |
-| [`ui/syncframe.ts`](../src/ui/syncframe.ts)                 | Coalesces Ink's writes into one DEC 2026 synchronized frame, which stops flicker under memory pressure                                                                                            | `framedrops`                   |
-| [`search/_chrome.ts`](../src/search/_chrome.ts)             | A dependency-free CDP client and browser host: discovery, a hidden launch, reattach                                                                                                               | `debug`, `search/types`        |
+This is a selection, not an inventory. Most of `src/` is one concept per file, so a file with few
+local imports and a colocated test usually lifts out too; check its imports before you copy it.
+
+### Shell safety
+
+| Module                                            | What it does                                                                                                                                                                                      | Local imports                |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| [`tools/_heredoc.ts`](../src/tools/_heredoc.ts)   | A small shell lexer: which `<<` is an operator, where a heredoc body ends, which text is quoted. Reports what it cannot read exactly as uncertain so callers can fail closed                      | none                         |
+| [`tools/_carriers.ts`](../src/tools/_carriers.ts) | A table of command wrappers (`sudo`, `env`, `timeout`, `nice`, …): their value-taking flags, and whether they change what the command means                                                       | none                         |
+| [`tools/_readonly.ts`](../src/tools/_readonly.ts) | Two predicates: "provably read-only" (an allowlist that must under-allow) and "inspection escape" (catches a looping model reading through the shell). Why there are two is explained in the file | `_heredoc`, `_carriers`      |
+| [`tools/_danger.ts`](../src/tools/_danger.ts)     | Which bash commands need a human: destructive commands, publishing, package installs at any scope, network verbs in command position                                                              | the three above, `_markdown` |
+| [`tools/_sandbox.ts`](../src/tools/_sandbox.ts)   | A macOS Seatbelt profile generator plus a per-command network classifier, with no proxy layer                                                                                                     | `_heredoc`, `_readonly`      |
+| [`tools/_treediff.ts`](../src/tools/_treediff.ts) | Diffs for files a shell command changed, with git as the change detector instead of parsing the command                                                                                           | `_diff`, `_writetargets`     |
+| [`tools/_spill.ts`](../src/tools/_spill.ts)       | Writes a capped tool result in full to a session temp file, and gives the model a short path it can page with `read`                                                                              | none                         |
+
+### Network and engine
+
+| Module                                                          | What it does                                                                                                                                                                    | Local imports                        |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| [`tools/_hosts.ts`](../src/tools/_hosts.ts)                     | A private-address guard that runs at connect time, which closes DNS rebinding                                                                                                   | `provider/dispatcher`                |
+| [`tools/_net.ts`](../src/tools/_net.ts)                         | Digs the socket error code out of undici's `fetch failed` chain, so "the network is down" can be told apart from "one host is bad"                                              | none                                 |
+| [`mcp/`](../src/mcp/)                                           | A stdio MCP client that speaks both the pre- and post-`2026-07-28` protocol, plus a bridge that narrows server schemas to what providers accept                                 | `debug`, `version` (client)          |
+| [`provider/latches.ts`](../src/provider/latches.ts)             | Per-endpoint degrade latches, so one strict server's quirks don't follow you to the next                                                                                        | none                                 |
+| [`provider/dispatcher.ts`](../src/provider/dispatcher.ts)       | Lifts undici's 300s timeouts, which kill a turn mid-prefill, without adding a dependency                                                                                        | `debug`                              |
+| [`provider/contextwindow.ts`](../src/provider/contextwindow.ts) | Asks the engine for its context window: llama.cpp's per-slot `n_ctx` or vLLM's `max_model_len`, never the trained length, which claims 131k on a server started with `-c 24576` | `version`                            |
+| [`provider/modellimits.ts`](../src/provider/modellimits.ts)     | Falls back to the models.dev catalog for a hosted endpoint's window and output cap, matched by base URL rather than by model id alone                                           | `_hosts`, `version`, `contextwindow` |
+| [`search/_chrome.ts`](../src/search/_chrome.ts)                 | A dependency-free CDP client and browser host: discovery, a hidden launch, reattach                                                                                             | `debug`, `search/types`              |
+
+### Context and repo
+
+| Module                                                | What it does                                                                                                                   | Local imports |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ------------- |
+| [`context/repomap.ts`](../src/context/repomap.ts)     | A repo map from a per-language regex table, with no parser dependency                                                          | `limit`       |
+| [`context/gitignore.ts`](../src/context/gitignore.ts) | Loads nested `.gitignore` files re-rooted to their own directory, plus `.git/info/exclude`, into one matcher                   | `_walk`       |
+| [`tools/_deps.ts`](../src/tools/_deps.ts)             | Checks the packages an edit imports against what is installed, so a hallucinated dependency surfaces at edit time (JS/TS only) | none          |
+| [`check/typecheck.ts`](../src/check/typecheck.ts)     | Runs `tsc --noEmit` before and after a turn's edits and reports only the errors the edits introduced; fails open               | `_sandbox`    |
+
+### Loop instrumentation
+
+| Module                                                      | What it does                                                                                                                                                   | Local imports                  |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| [`agent/prefixtrace.ts`](../src/agent/prefixtrace.ts)       | Classifies why each request diverged from the previous one: append-only, trailing note, mid-history rewrite, tool list changed                                 | none                           |
+| [`agent/prefillcost.ts`](../src/agent/prefillcost.ts)       | Prices each cache divergence in tokens reprocessed and seconds, from a prefill rate learned off time-to-first-token                                            | `decoderate` (types otherwise) |
+| [`agent/decoderate.ts`](../src/agent/decoderate.ts)         | Decode tok/s: the engine's own timings where it reports them (llama.cpp), a derivation from the stream otherwise                                               | types only                     |
+| [`agent/entropytrace.ts`](../src/agent/entropytrace.ts)     | Drift as numbers: per-round entropy (engine logprobs or the output's own) and smoothed KL against the previous and first round                                 | types only                     |
+| [`agent/reasoningtrace.ts`](../src/agent/reasoningtrace.ts) | Detects rumination from 8-gram similarity across rounds and within one block                                                                                   | none                           |
+| [`agent/readtrace.ts`](../src/agent/readtrace.ts)           | Detects read loops by coverage depth (how many times one line of an unchanged file was fetched) rather than by read count, so paging a big file is not flagged | types only                     |
+| [`agent/continuation.ts`](../src/agent/continuation.ts)     | Resumes a thought cut off at the token limit instead of restarting it, gated on the block not being degenerate                                                 | `reasoningtrace`               |
+| [`agent/contentspin.ts`](../src/agent/contentspin.ts)       | Cuts a reply whose visible output has started repeating itself, with a much stricter bar than for reasoning                                                    | `reasoningtrace`               |
+
+### Terminal UI
+
+| Module                                        | What it does                                                                                                                    | Local imports |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| [`ui/syncframe.ts`](../src/ui/syncframe.ts)   | Coalesces Ink's writes into one DEC 2026 synchronized frame, which stops flicker under memory pressure                          | `framedrops`  |
+| [`ui/termtext.ts`](../src/ui/termtext.ts)     | Pads to the width a terminal actually draws, where `string-width` counts a text-presentation pictograph as two columns          | none          |
+| [`ui/statuspack.ts`](../src/ui/statuspack.ts) | Packs status chips into rows and holds the previous frame's breaks, so a ticking timer does not move the row count every second | none          |
+| [`ocr/system.ts`](../src/ocr/system.ts)       | Native OCR for pasted images in a child process, so a fault in the OS recognizer cannot kill the UI                             | types only    |
+
+One function worth taking on its own: `extractToolCallsFromContent` in
+[`provider/client.ts`](../src/provider/client.ts) parses tool calls a model wrote as text
+(`<tool_call>{json}`, Hermes `<function=…>`, pythonic `fn(k=v)`). The file around it is
+Reika-specific; the function isn't.
 
 Each module has a colocated `*.test.ts`. For the permission-boundary files (`_readonly`, `_danger`,
 `_sandbox`) the tests are worth taking as well, since they enumerate the bypasses that were found.
