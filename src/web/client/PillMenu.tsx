@@ -75,7 +75,9 @@ export function PillMenu({
     // Only on open; arrow keys after it scroll as focus moves.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
-  useEffect(() => {
+  // A layout effect too: focus is the highlight, so focused after the first paint, the menu opened
+  // with nothing selected for a frame.
+  useLayoutEffect(() => {
     const item = items.current[active];
     if (!open || !item) return;
     item.focus({ preventScroll: true });
@@ -170,7 +172,7 @@ export function PillMenu({
               role="menuitemradio"
               aria-checked={o.checked}
               tabIndex={i === active ? 0 : -1}
-              className="pill-option"
+              className={i === active ? 'pill-option pill-option--active' : 'pill-option'}
               onClick={() => pick(o.value)}
               onMouseEnter={() => {
                 byPointer.current = true;

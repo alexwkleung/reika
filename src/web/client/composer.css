@@ -461,8 +461,12 @@
   text-align: left;
   cursor: pointer;
 }
-/* The pointer focuses what it enters (PillMenu), so focus alone is the highlight, by key or not. */
+/* The active option, not :focus: the class lands in the render that opens the menu, where focus
+   arrived a frame later and the menu opened with nothing highlighted. */
 .pill-option:focus {
+  outline: none;
+}
+.pill-option--active {
   outline: none;
   background: var(--reika-menu-active);
 }
