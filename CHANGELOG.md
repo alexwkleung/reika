@@ -3,6 +3,13 @@
 User-facing changes in each release: fixes, changed behavior or defaults, new or renamed config
 keys, commands and tools. Reika is 0.x, so a minor version may change behavior and config.
 
+## [Unreleased]
+
+### Fixed
+
+- In `reika web`, the mode and model menus open with the current option already highlighted,
+  instead of showing nothing highlighted for a moment first (#1106).
+
 ## [0.14.0] - 2026-11-20
 
 ### Added
