@@ -245,7 +245,7 @@ window.
   writes its own log to `~/.config/reika/logs/`, named like its auto-save under `history/` so the
   two pair up (the log's `session file=` line names the transcript, including after `/new` and
   `/resume`). `~/.config/reika/logs/latest.log` always points at the current session's log. At
-  startup, logs older than 14 days are deleted, and then the oldest of the rest while the directory
+  startup, logs older than 60 days are deleted, and then the oldest of the rest while the directory
   holds more than 50MB; a running session's log is never deleted. To keep logs for every session,
   put `REIKA_DEBUG=1` in `~/.config/reika/.env`. The log quotes your task and includes the paths and
   commands the session ran, the same content as the auto-save
