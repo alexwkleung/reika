@@ -10,7 +10,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 - When older tool output is trimmed from the model's context to make room, the scrollback now
   says so: "Context trimmed (shed N) — 4 older tool outputs are now summary-only to the model".
   The output stays on screen, so a later re-read of the same file no longer looks like the model
-  ignoring something it already had (#TBD).
+  ignoring something it already had (#1108).
 
 ### Fixed
 
