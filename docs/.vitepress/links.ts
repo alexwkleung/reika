@@ -148,12 +148,48 @@ export function dropReadmeBackLink(tokens: BackLinkToken[]): void {
   }
 }
 
+const REPO_ISSUES = 'https://github.com/alexwkleung/reika/issues';
+// Shown on the site in place of a stub's own one-line notice (kept in the file, since GitHub renders
+// the stub too), so the reader who noticed the gap learns how to close it. It asks for a maintainer
+// rather than a translation of this page: CONTRIBUTING keeps some pages English until someone will
+// keep them current.
+export const UNTRANSLATED_NOTICE =
+  `<blockquote class="untranslated-notice"><p>本页尚未翻译，以下为英文原文。` +
+  `如果你愿意帮忙维护中文文档，请查看 <a href="${REPO_ISSUES}/781">#781</a>；` +
+  `翻译规则见<a href="${REPO_BLOB}/CONTRIBUTING.md#translations">贡献指南</a>。</p></blockquote>`;
+
+type NoticeToken = { type: string; content?: string };
+
+// Swaps the stub's leading blockquote for the site notice, or adds the notice when a stub has none,
+// so the wording lives here and a page drops it the moment it stops being an include.
+export function placeUntranslatedNotice<T extends NoticeToken>(
+  tokens: T[],
+  html: (content: string) => T,
+): void {
+  let end = 0;
+  if (tokens[0]?.type === 'blockquote_open') {
+    let depth = 0;
+    for (; end < tokens.length; end++) {
+      if (tokens[end].type === 'blockquote_open') depth++;
+      if (tokens[end].type === 'blockquote_close' && --depth === 0) break;
+    }
+    end++;
+  }
+  tokens.splice(0, end, html(UNTRANSLATED_NOTICE));
+}
+
 export function githubLinks(md: MarkdownIt): void {
   md.core.ruler.push('github_links', state => {
     const relativePath: string | undefined = state.env?.relativePath;
     if (!relativePath) return;
     const fromFile = resolve(DOCS_DIR, relativePath);
     dropReadmeBackLink(state.tokens);
+    if (untranslatedSource(fromFile))
+      placeUntranslatedNotice(state.tokens, content => {
+        const token = new state.Token('html_block', '', 0);
+        token.content = content;
+        return token;
+      });
     for (const block of state.tokens) {
       for (const token of block.children ?? []) {
         if (token.type === 'image') {
