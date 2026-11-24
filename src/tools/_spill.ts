@@ -195,7 +195,8 @@ export async function spillResult(name: string, content: string): Promise<SpillR
 }
 
 // The line appended to a capped payload. It lives in the payload rather than the summary on
-// purpose: the summary is what survives payload aging, and by then the locator is stale advice —
+// purpose: the summary is what survives payload aging, and by then the locator is stale advice (bash
+// excepted: agedCommandResidue in provider/toolcall.ts keeps an aged run's locator) —
 // the model needs it at the point of recency, alongside the results it can see. Spells out both
 // follow-up calls explicitly, since weak models don't infer paging from a bare path.
 // `total` is a string so a caller that stopped at its own ceiling can say "1000+" rather than

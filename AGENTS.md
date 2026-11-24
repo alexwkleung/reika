@@ -680,7 +680,7 @@ Deliberately **no new tool**: the locator points at `read` and `grep`, which the
 constantly, so following it needs no learned behavior beyond reading a path — the reason this is
 worth trying where an explicit recall tool wouldn't be. The footer lives in the payload, not the
 summary, for the same reason `read`'s "more below" marker does: the summary is what survives
-payload aging, and by then a locator is stale advice. Fail-open throughout (a failed write returns
+payload aging, and by then a locator is stale advice. `bash` is the exception: an aged run keeps its locator, plus the last three lines when it exited non-zero (`agedCommandResidue`, `toolcall.ts`), because the other way back to that output is running the command again. Fail-open throughout (a failed write returns
 the ordinary capped result with an honest "could not be saved" footer — a search must never become
 an error because a temp file didn't land), and a strict no-op when off, including `grep`'s
 collection ceiling: spilling raises the walk's stop from 100 to `SPILL_MAX_MATCHES` so there
