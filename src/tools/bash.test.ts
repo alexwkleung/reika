@@ -27,6 +27,10 @@ import { READ_ONLY_COMMAND_LIST } from './_readonly.js';
 import { planTools } from './index.js';
 import { resetSpillDir } from './_spill.js';
 
+// Tests run under a throwaway HOME inside temp, which the sandbox allows writing to; a refused
+// write needs the real one (vitest.globalsetup.ts).
+const realHome = (): string => process.env.REIKA_TEST_REAL_HOME ?? homedir();
+
 describe('execStream — timeout', () => {
   const cwd = process.cwd();
 
@@ -604,7 +608,7 @@ describe('bashTool — sandbox composition', { timeout: 20_000 }, () => {
         const second = await bashTool.run({ command: 'echo y > sub/g.txt' }, { cwd: dir });
         expect(second.notice?.content ?? '').not.toContain('sandboxed');
         // Temp is writable now, so "outside" has to be somewhere else — home.
-        const outside = join(homedir(), 'reika-bash-test-should-not-exist.txt');
+        const outside = join(realHome(), 'reika-bash-test-should-not-exist.txt');
         const third = await bashTool.run({ command: `echo x > ${outside}` }, { cwd: dir });
         expect(third.payload).toContain('Operation not permitted');
         await expect(readFile(outside, 'utf8')).rejects.toThrow();
@@ -632,7 +636,7 @@ describe('bashTool — sandbox composition', { timeout: 20_000 }, () => {
         );
         expect(r.exitCode).toBe(0);
         expect(r.payload).toContain('tmp-ok');
-        const home = join(homedir(), 'reika-sandbox-test-should-not-exist');
+        const home = join(realHome(), 'reika-sandbox-test-should-not-exist');
         const denied = await bashTool.run({ command: `echo x > ${home}` }, { cwd: dir });
         expect(denied.payload).toContain('Operation not permitted');
         await expect(readFile(home, 'utf8')).rejects.toThrow();
@@ -648,7 +652,7 @@ describe('bashTool — sandbox composition', { timeout: 20_000 }, () => {
   it.skipIf(!sandboxWorks)('reports a refused write printed after 64KB of output', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
     try {
-      const outside = join(homedir(), 'reika-bash-test-should-not-exist-tail.txt');
+      const outside = join(realHome(), 'reika-bash-test-should-not-exist-tail.txt');
       // ~109KB, comfortably past the payload cap, then the refusal: `seq` pushes it out of the head.
       const r = await bashTool.run({ command: `seq 1 20000; echo x > ${outside}` }, { cwd: dir });
       expect(r.payload).toContain('…(truncated)');
@@ -671,7 +675,7 @@ describe('bashTool — sandbox composition', { timeout: 20_000 }, () => {
     const dir = await mkdtemp(join(tmpdir(), 'bash-sandbox-'));
     process.env.REIKA_SPILL = '1';
     try {
-      const outside = join(homedir(), 'reika-bash-test-should-not-exist-mid.txt');
+      const outside = join(realHome(), 'reika-bash-test-should-not-exist-mid.txt');
       const r = await bashTool.run(
         { command: `seq 1 20000; echo x > ${outside}; seq 1 5000` },
         { cwd: dir },
@@ -1001,7 +1005,7 @@ describe('bash — a profile that fails to load is caught before the command (#7
     'runs a command that fakes a refusal exactly once, and still confined',
     async () => {
       const dir = await mkdtemp(join(tmpdir(), 'bash-spoof-'));
-      const outside = join(homedir(), 'reika-bash-spoof-should-not-exist.txt');
+      const outside = join(realHome(), 'reika-bash-spoof-should-not-exist.txt');
       try {
         const r = await bashTool.run(
           {
