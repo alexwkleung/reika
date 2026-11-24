@@ -108,6 +108,9 @@ ones, and old reasoning goes along with them. A shed result collapses to its sum
 
 The current round is never shed, and neither is the payload that defined the task. When anything has
 been shed, the next request tells the model that those results are gone and can be run again.
+The scrollback says so too (`Context trimmed (shed 2) — 4 older tool outputs are now summary-only to
+the model`): the output stays on screen, so without the line a later re-read looks like the model
+ignoring something it already had. A fold in the same request prints its own line instead.
 
 **If that is not enough, the oldest turns fold.** Shedding can stop short of the target, since it cannot
 touch the current round. The fold then lands in the same request, so one event costs one cache invalidation. The
