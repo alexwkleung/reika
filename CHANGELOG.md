@@ -16,7 +16,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 - A turn that only edits files TypeScript never reads (docs, styles, images, YAML) no longer
   runs the post-edit typecheck, so it finishes sooner and no longer reports a pass its edits
-  could not have earned (#PR).
+  could not have earned (#1116).
 - `REIKA_DEBUG` logs are now kept for 60 days instead of 14, still capped at 50MB in total, so a
   comparison across several weeks still has the logs of its earlier runs (#1111).
 
