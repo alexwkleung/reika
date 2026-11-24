@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { dropReadmeBackLink } from './links';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  dropReadmeBackLink,
+  placeUntranslatedNotice,
+  UNTRANSLATED_NOTICE,
+  untranslatedSource,
+} from './links';
 
 const link = (href: string, text: string) => [
   { type: 'paragraph_open' },
@@ -40,5 +48,46 @@ describe('dropReadmeBackLink', () => {
     const tokens = link('../CHANGELOG.md', '← README');
     dropReadmeBackLink(tokens);
     expect(tokens).toHaveLength(3);
+  });
+});
+
+describe('placeUntranslatedNotice', () => {
+  const html = (content: string) => ({ type: 'html_block', content });
+  const quote = [
+    { type: 'blockquote_open' },
+    { type: 'paragraph_open' },
+    { type: 'inline' },
+    { type: 'paragraph_close' },
+    { type: 'blockquote_close' },
+  ];
+
+  it("replaces the stub's own notice", () => {
+    const tokens = [...quote, ...heading];
+    placeUntranslatedNotice(tokens, html);
+    expect(types(tokens)).toEqual(['html_block', ...types(heading)]);
+    expect(tokens[0]).toMatchObject({ content: UNTRANSLATED_NOTICE });
+  });
+
+  it('adds the notice to a stub without one, keeping a later blockquote', () => {
+    const tokens = [...heading, ...quote];
+    placeUntranslatedNotice(tokens, html);
+    expect(types(tokens)).toEqual(['html_block', ...types(heading), ...types(quote)]);
+  });
+});
+
+describe('which zh pages get the notice', () => {
+  const zhDir = fileURLToPath(new URL('../zh/', import.meta.url));
+  const pages = readdirSync(zhDir).filter(name => name.endsWith('.md'));
+
+  it.each(pages)('zh/%s gets it exactly when it is an include stub', name => {
+    const file = join(zhDir, name);
+    const isStub = /^\s*(>[^\n]*\n\s*)?<!--\s*@include:[^>]*-->\s*$/.test(
+      readFileSync(file, 'utf8'),
+    );
+    expect(untranslatedSource(file) !== null).toBe(isStub);
+  });
+
+  it('never gets it on an English page', () => {
+    expect(untranslatedSource(fileURLToPath(new URL('../usage.md', import.meta.url)))).toBeNull();
   });
 });
