@@ -5,6 +5,11 @@
 staged=$(git diff --cached --name-only --diff-filter=ACMR)
 [ -z "$staged" ] && exit 0
 
+# Without this probe, pnpm failing to start the tools (e.g. a symlinked node_modules in a worktree)
+# was reported as unformatted files, which sent agents reformatting clean files or to --no-verify.
+pnpm exec oxfmt --version >/dev/null \
+  || { echo 'pre-commit: pnpm could not run oxfmt (see the error above); is node_modules a real install?' >&2; exit 1; }
+
 git diff --cached --name-only -z --diff-filter=ACMR \
   | xargs -0 pnpm exec oxfmt --check --no-error-on-unmatched-pattern \
   || { echo 'pre-commit: formatting is off; run `pnpm run format` and re-stage.' >&2; exit 1; }

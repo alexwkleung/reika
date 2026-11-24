@@ -82,11 +82,14 @@ export function debugLog(line: string): void {
 // --- Retention (#761) -----------------------------------------------------------------------
 //
 // Swept at startup, fire-and-forget, the way spill directories are (#224): oldest first, until
-// what is left is both younger than the age limit and under the size limit. Both numbers are a
-// first guess — the largest log measured was 238KB (a 1,380-round grind run), typical 20–100KB.
+// what is left is both younger than the age limit and under the size limit. The size cap is the
+// disk guard — the largest log measured was 238KB (a 1,380-round grind run), typical 20–100KB. Age
+// was 14 days, which cut A/Bs compared across weeks short of their logs: some measurements exist
+// only here (read-trace, prefix-cache, payload-cap). Measured real use ran ~3.4MB per 13 days, so
+// 60 days stays well under the cap.
 // Runs whether or not REIKA_DEBUG is set, so turning debug off does not strand the logs it wrote.
 // Only names this module writes are touched: latest.log, and any REIKA_DEBUG_FILE target, never.
-export const LOG_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+export const LOG_MAX_AGE_MS = 60 * 24 * 60 * 60 * 1000;
 export const LOG_MAX_TOTAL_BYTES = 50 * 1024 * 1024;
 
 const SESSION_LOG_RE = /^\d{4}-\d{2}-\d{2}T[\d-]+Z-[0-9a-f]{6}\.log$/;

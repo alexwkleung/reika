@@ -125,9 +125,9 @@ describe('sweepDebugLogs (#761)', () => {
   const DEAD_PID = 2 ** 22 + 12345;
 
   it('removes logs past the age limit and keeps younger ones', async () => {
-    const { sweepDebugLogs } = await freshDebug();
-    const old = log(15);
-    const young = log(13);
+    const { sweepDebugLogs, LOG_MAX_AGE_MS } = await freshDebug();
+    const old = log(LOG_MAX_AGE_MS / DAY + 1);
+    const young = log(LOG_MAX_AGE_MS / DAY - 1);
     expect(await sweepDebugLogs(logsDir(), NOW)).toEqual([old]);
     expect(readdirSync(logsDir())).toEqual([young.split('/').pop()]);
   });
