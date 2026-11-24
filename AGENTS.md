@@ -1062,6 +1062,8 @@ The boundaries that actually bite:
   model routes around the artifact and is _right_ to; the same prompt against a 90-second suite
   would not. Build the arm that removes the escape (`10-bash-spill-oneshot`) rather than reading a
   route-around as a failure.
+- **A replay reads one user's saved history.** A lost label is a regression anywhere, but "no
+  false positives" holds only for that workload, so say whose history it was.
 - **Q2–Q3 models have high run-to-run variance** — byte-identical inputs produce 52 / 16 / 6 tool
   calls. Judge any eval change over 3+ runs; a single run is an anecdote.
 
