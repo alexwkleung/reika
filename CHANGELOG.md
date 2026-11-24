@@ -8,7 +8,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 ### Changed
 
 - `REIKA_DEBUG` logs are now kept for 60 days instead of 14, still capped at 50MB in total, so a
-  comparison across several weeks still has the logs of its earlier runs (#TBD).
+  comparison across several weeks still has the logs of its earlier runs (#1111).
 
 ### Fixed
 
