@@ -1317,6 +1317,14 @@ export type ShrinkEvent =
 // Session-cumulative shrink counts, threaded across turns via `priorShrink`.
 export type ShrinkCounts = { sheds: number; folds: number };
 
+export function formatShedNotice(shed: number, outputs: number): string {
+  const noun = outputs === 1 ? 'tool output is' : 'tool outputs are';
+  return (
+    `Context trimmed (shed ${shed}) — ${outputs} older ${noun} now summary-only to the model ` +
+    `(still shown here; it re-reads what it needs).`
+  );
+}
+
 export async function runTurn(opts: {
   userInput: string;
   userDisplay?: string;
@@ -2679,6 +2687,7 @@ export async function runTurn(opts: {
     // it immediately before the compaction check so the two rewrites land in the SAME request (one
     // amortized prefix-cache invalidation, not two on consecutive rounds).
     let agedThisRound = false;
+    let agedOutputs = 0;
     if (prefixStable && window && !planForceWrite) {
       const aged = batchAgePayloads(
         opts.history,
@@ -2692,6 +2701,7 @@ export async function runTurn(opts: {
         !latchesFor(opts.config).reasoningRoundtrip,
       );
       agedThisRound = aged.marked > 0;
+      agedOutputs = aged.bulk + aged.crumbs;
       if (aged.marked > 0) {
         // bulk/crumbs/kept is the #257 sweep split: `kept` counts small payloads the size floor
         // spared, so a run can say whether the floor engaged at all rather than leaving "never
@@ -2764,6 +2774,17 @@ export async function runTurn(opts: {
           } into a ${(recapChars / 1000).toFixed(1)}k-char recap (older tool output still re-readable).`,
         });
       }
+    }
+    // A shed leaves every chip's output on screen while the model now sees only its summary line,
+    // so the re-reads that follow look redundant unless the scrollback says when that happened.
+    // A fold in the same event has its own line, which already says older output is re-readable.
+    if (agedOutputs > 0 && lastFoldRemoved === 0) {
+      opts.onMessage({
+        role: 'system',
+        tone: 'info',
+        emphasis: 'line',
+        content: formatShedNotice(shrink.sheds, agedOutputs),
+      });
     }
     // /compact ends the turn here (issue #481): no reply round follows the fold, so the note request
     // is the only model call and the fold's rewrite is what the next turn appends onto. A no-fold
