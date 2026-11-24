@@ -22,13 +22,17 @@
   margin-top: 0.9em;
 }
 
-/* A subagent's rows: one level in, with a faint guide line. */
+/* A subagent's rows: one level in, as the TUI indents them, and nothing else. Transcript groups a
+   run of them into one block so the rows inside keep their ordinary spacing. */
 .nest {
-  margin-left: 0.6em;
-  padding-left: 1em;
-  border-left: 1px solid var(--reika-rule);
+  margin-top: 0.4em;
+  padding-left: 1.6em;
 }
-.nest > .row:first-child {
+.transcript .nest > .row:first-child {
+  margin-top: 0;
+}
+/* The stream sits right under the committed block, and its first row keeps the gap it commits with. */
+.live.nest {
   margin-top: 0;
 }
 

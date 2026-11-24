@@ -34,7 +34,6 @@ describe('user rows', () => {
   it('marks a subagent task and a command echo', () => {
     const nested = row({ role: 'user', content: 'look at a.ts', nested: true });
     expect(nested).toContain('row-user--nested');
-    expect(nested).toContain('class="nest"');
     expect(text(nested)).toContain('Subagent task:');
     expect(row({ role: 'user', content: '/stats', meta: true })).toContain('row-user--meta');
   });
@@ -315,6 +314,20 @@ describe('the transcript', () => {
       { id: 'r2', name: 'read', args: { path: 'b.ts' } },
     ],
   };
+
+  it('draws a subagent’s run of rows as one nested block', () => {
+    const html = transcript([
+      { role: 'user', content: 'go' },
+      { role: 'user', content: 'look at a.ts', nested: true },
+      { role: 'assistant', content: '', reasoning: 'reading', nested: true, toolCalls: [] },
+      { role: 'tool', callId: 'c', summary: 'Read a.ts lines 1-9 of 9', nested: true },
+      { role: 'assistant', content: 'done', nested: true, durationMs: 4000 },
+      { role: 'tool', callId: 's', summary: 'Subagent completed (10 chars)' },
+    ]);
+    expect(html.match(/class="nest"/g)).toHaveLength(1);
+    const block = html.slice(html.indexOf('class="nest"'));
+    expect(text(block.slice(0, block.indexOf('Subagent completed')))).toContain('Worked for 4s');
+  });
 
   it('keeps the read verb on every row of a multi-read round', () => {
     const t = text(

@@ -1,8 +1,47 @@
-import { memo, useMemo } from 'react';
+import { memo, useMemo, type ReactNode } from 'react';
 import type { WireMessage, WireState } from '../protocol.js';
 import { WorkedRow } from './blocks.js';
 import { MessageRow } from './MessageRow.js';
-import { buildTranscriptLog } from './transcriptlog.js';
+import { buildTranscriptLog, type TranscriptItem } from './transcriptlog.js';
+
+function isNestedItem(item: TranscriptItem): boolean {
+  return item.kind === 'message' && 'nested' in item.message && !!item.message.nested;
+}
+
+function drawItem(item: TranscriptItem): ReactNode {
+  return item.kind === 'worked' ? (
+    <WorkedRow key={item.key} durationMs={item.durationMs} interrupted={item.interrupted} />
+  ) : (
+    <MessageRow
+      key={item.key}
+      message={item.message}
+      gap={item.ctx.gap}
+      groupedReads={item.ctx.groupedReads}
+    />
+  );
+}
+
+// A subagent's run of rows goes in one block, so the rows inside keep the spacing they have at top
+// level. Wrapped one by one, each row was its own block's first child, and the first-child margin
+// rule zeroed every gap between them.
+function drawItems(items: TranscriptItem[]): ReactNode[] {
+  const out: ReactNode[] = [];
+  for (let i = 0; i < items.length;) {
+    if (!isNestedItem(items[i]!)) {
+      out.push(drawItem(items[i]!));
+      i++;
+      continue;
+    }
+    const start = i;
+    while (i < items.length && isNestedItem(items[i]!)) i++;
+    out.push(
+      <div key={`n${items[start]!.key}`} className="nest">
+        {items.slice(start, i).map(drawItem)}
+      </div>,
+    );
+  }
+  return out;
+}
 
 // The committed rows. Memoised on the messages array, which the store keeps by identity on every
 // live-only event, so the live region streaming below never re-renders this.
@@ -22,18 +61,7 @@ export const Transcript = memo(function Transcript({
   );
   return (
     <div className="transcript">
-      {log.items.map(item =>
-        item.kind === 'worked' ? (
-          <WorkedRow key={item.key} durationMs={item.durationMs} interrupted={item.interrupted} />
-        ) : (
-          <MessageRow
-            key={item.key}
-            message={item.message}
-            gap={item.ctx.gap}
-            groupedReads={item.ctx.groupedReads}
-          />
-        ),
-      )}
+      {drawItems(log.items)}
       {idle && log.held !== null ? (
         <WorkedRow durationMs={log.held.ms} interrupted={log.held.interrupted} />
       ) : null}

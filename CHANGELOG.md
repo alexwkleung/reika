@@ -27,6 +27,8 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 - In `reika web`, the mode and model menus open with the current option already highlighted,
   instead of showing nothing highlighted for a moment first (#1106).
+- In `reika web`, a subagent's rows are now just indented, with the same spacing as the rest of
+  the conversation, instead of running into each other beside a broken guide line.
 
 ## [0.14.0] - 2026-11-20
 

@@ -309,14 +309,6 @@ export const MessageRow = memo(function MessageRow({
 }) {
   const inner = render(message, groupedReads);
   if (inner === null) return null;
-  const nested = 'nested' in message && !!message.nested;
-  const tool = message.role === 'tool';
-  if (!nested && !tool) return inner;
-  return (
-    <div
-      className={`${nested ? 'nest' : ''}${tool ? ' row row-tool' : ''}${tool && gap ? ' row--gap' : ''}`.trim()}
-    >
-      {inner}
-    </div>
-  );
+  if (message.role !== 'tool') return inner;
+  return <div className={`row row-tool${gap ? ' row--gap' : ''}`}>{inner}</div>;
 });
