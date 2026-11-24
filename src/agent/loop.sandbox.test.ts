@@ -8,6 +8,10 @@ import type { Config, ContextBundle, Message } from '../types.js';
 import { bashTool } from '../tools/bash.js';
 import { sandboxExecAvailable } from '../tools/_sandbox.js';
 
+// Tests run under a throwaway HOME inside temp, which the sandbox allows writing to; a refused
+// write needs the real one (vitest.globalsetup.ts).
+const realHome = (): string => process.env.REIKA_TEST_REAL_HOME ?? homedir();
+
 // Drive the real runTurn loop, in bypass, through the real bash tool (#163). The unit tests in
 // tools/bash.test.ts pin the decision; this pins that the DECISION reaches the process — a sandbox
 // the tool computes and the loop drops on the floor would pass every test in that file.
@@ -86,7 +90,7 @@ describe('sandbox reaches the process, through the real loop (#163)', () => {
     'confines an auto-approved command to cwd in bypass, and says it did',
     async () => {
       // Temp dirs are writable by design (a model's scratchpad), so the outside target is home.
-      const outside = join(homedir(), 'reika-should-not-exist.txt');
+      const outside = join(realHome(), 'reika-should-not-exist.txt');
       const messages = await run(cwd, true, `echo x > ${outside}; echo wrote`);
       const tool = toolMsg(messages);
       expect(tool?.payload).toContain('Operation not permitted');
