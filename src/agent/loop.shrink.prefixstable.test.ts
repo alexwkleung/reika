@@ -126,3 +126,66 @@ describe('prefix-stable is the default with a context window (#181)', () => {
     if (firstFold !== -1) expect(firstFold).toBeGreaterThan(0);
   });
 });
+
+// A shed leaves the chips' output on screen while the model sees only summaries, so the
+// scrollback has to say when it happened — or the re-reads that follow look redundant.
+describe('the shed notice', () => {
+  // Tool payloads carry the weight, so the shed alone reaches the watermark and no fold follows.
+  function sheddableHistory(): Message[] {
+    const out: Message[] = [];
+    for (let t = 0; t < 24; t++) {
+      out.push({ role: 'user', content: `task ${t}` });
+      out.push({
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: `c${t}`, name: 'read', args: { path: `src/file${t}.ts` } }],
+      });
+      out.push({
+        role: 'tool',
+        callId: `c${t}`,
+        summary: `Read src/file${t}.ts lines 1-90 of 90`,
+        payload: 'x'.repeat(3000),
+      });
+      out.push({ role: 'assistant', content: `finished ${t}.` });
+    }
+    return out;
+  }
+
+  async function run(history: Message[]) {
+    h.scripted.length = 0;
+    h.scripted.push({ content: 'final', toolCalls: undefined });
+    const notices: string[] = [];
+    const kinds: string[] = [];
+    await runTurn({
+      userInput: 'keep going',
+      history,
+      bundle: makeBundle(),
+      config: makeConfig(8192),
+      tools: [noopTool],
+      payloads: new PayloadStore(),
+      onMessage: m => {
+        if (m.role === 'system') notices.push(m.content);
+      },
+      onShrink: e => kinds.push(e.kind),
+    });
+    return { notices, kinds };
+  }
+
+  it('prints one line naming how many outputs went summary-only', async () => {
+    const history = sheddableHistory();
+    const { notices, kinds } = await run(history);
+    expect(kinds).toEqual(['age']);
+    const aged = history.filter(m => m.role === 'tool' && m.aged).length;
+    expect(notices.filter(n => n.startsWith('Context trimmed'))).toEqual([
+      `Context trimmed (shed 1) — ${aged} older tool outputs are now summary-only to the model ` +
+        `(still shown here; it re-reads what it needs).`,
+    ]);
+  });
+
+  it('leaves the event to the fold line when a fold lands in the same round', async () => {
+    const { notices, kinds } = await run(bigHistory());
+    expect(kinds).toContain('fold');
+    expect(notices.some(n => n.startsWith('Context compacted'))).toBe(true);
+    expect(notices.some(n => n.startsWith('Context trimmed'))).toBe(false);
+  });
+});
