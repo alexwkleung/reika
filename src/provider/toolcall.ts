@@ -255,7 +255,9 @@ export type CapStats = {
 // than it did.
 // `report` is a subagent's digest kept by its head (#354): a report is already compressed, and
 // its chain/"Established" section leads by construction of the report directive.
-type AgedKind = 'summary' | 'diff' | 'outline' | 'whole' | 'report';
+// `command` is an aged bash result that kept its spill locator and, for a non-zero exit, the last
+// lines of the run.
+type AgedKind = 'summary' | 'diff' | 'outline' | 'whole' | 'report' | 'command';
 type AgedContent = { content: string; kind: AgedKind };
 
 // What eviction did to this request, counted where it happens (#260). Aging is otherwise invisible
@@ -442,7 +444,14 @@ export function messagesToChatParams(
     }
     return capPayload(payload, cap);
   };
-  const agedStats: AgedStats = { summary: 0, diff: 0, outline: 0, whole: 0, report: 0 };
+  const agedStats: AgedStats = {
+    summary: 0,
+    diff: 0,
+    outline: 0,
+    whole: 0,
+    report: 0,
+    command: 0,
+  };
   // Same discipline as applyCap: count where the content is produced, so the line can never
   // describe a serialization that didn't happen.
   const serializeAged = (msg: Extract<Message, { role: 'tool' }>, i: number): string => {
@@ -1062,6 +1071,44 @@ function reportHead(payload: string, summary: string): string | null {
   return `${head}\n(… report continues — ${payload.length - head.length} chars aged out; the head above is the chain, the cut part was what the subagent did not cover.)`;
 }
 
+// What an aged bash result keeps beyond `Ran: cmd (exit N, …)`: the spill locator, and for a run
+// that did not exit 0 its last few lines. The locator is valid for the whole session (the spill dir
+// lives until exit), so dropping it with the payload turned "read the saved file" into "run it
+// again" — for a test suite, the most expensive re-fetch there is. The tail is the end of the run
+// (`command.outputTail`, the chip's window), not the payload's end, which on a capped run is the
+// middle. A clean exit keeps no tail: the summary already says it passed.
+const AGED_COMMAND_TAIL_LINES = 3;
+const AGED_COMMAND_TAIL_LINE_CHARS = 200;
+const SPILL_LOCATOR_RE = / saved to (\S+) — read that path/;
+
+function agedCommandResidue(msg: Extract<Message, { role: 'tool' }>): string | null {
+  if (!msg.summary.startsWith('Ran: ') || !msg.payload) return null;
+  const locator = msg.payload.match(SPILL_LOCATOR_RE)?.[1];
+  const failed = msg.exitCode !== undefined && msg.exitCode !== 0;
+  const tail = failed
+    ? (msg.command?.outputTail ?? '')
+        .split('\n')
+        .filter(l => l.trim())
+        .slice(-AGED_COMMAND_TAIL_LINES)
+        .map(l =>
+          l.length > AGED_COMMAND_TAIL_LINE_CHARS
+            ? `${l.slice(0, AGED_COMMAND_TAIL_LINE_CHARS)}…`
+            : l,
+        )
+    : [];
+  if (!locator && tail.length === 0) return null;
+  const parts = [
+    `[reika: this command's output is no longer in context — a context-size limit, not a tool error.` +
+      (tail.length > 0 ? ' The last lines of the run are kept below.' : '') +
+      (locator
+        ? ` The saved output is at ${locator}: read or grep that path instead of re-running the command.`
+        : '') +
+      ']',
+  ];
+  if (tail.length > 0) parts.push(tail.join('\n'));
+  return parts.join('\n\n');
+}
+
 function readSkeleton(payload: string, summary: string): string | null {
   const lines = payload.split('\n');
   const first = lines[0].match(READ_GUTTER_RE);
@@ -1200,7 +1247,11 @@ function agedToolContent(
   if (report) return { content: `${msg.summary}\n\n${report}`, kind: 'report' };
   const diff = diffSkeleton(msg.payload);
   const skeleton = diff ?? readSkeleton(msg.payload, msg.summary);
-  if (!skeleton) return { content: msg.summary, kind: 'summary' };
+  if (!skeleton) {
+    const residue = agedCommandResidue(msg);
+    if (residue) return { content: `${msg.summary}\n\n${residue}`, kind: 'command' };
+    return { content: msg.summary, kind: 'summary' };
+  }
   // Second floor, for payloads over the crumb floor whose skeleton still isn't smaller than the
   // bytes it replaces (a long file of near-all-structural lines, say). Keeping them is never worse
   // for the window — the cost is bounded by the skeleton it displaces — and strictly better for the

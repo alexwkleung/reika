@@ -3001,11 +3001,12 @@ export async function runTurn(opts: {
       // Silent when nothing is aged yet, so early rounds add no noise.
       onAgedStats: debugEnabled()
         ? a => {
-            const total = a.summary + a.diff + a.outline + a.whole + a.report;
+            const total = a.summary + a.diff + a.outline + a.whole + a.report + a.command;
             if (total === 0) return;
             debugLog(
               `[reika:debug] aged-payload round=${i} aged=${total} summary=${a.summary} ` +
-                `diff=${a.diff} outline=${a.outline} whole=${a.whole} report=${a.report}\n`,
+                `diff=${a.diff} outline=${a.outline} whole=${a.whole} report=${a.report} ` +
+                `command=${a.command}\n`,
             );
           }
         : undefined,
