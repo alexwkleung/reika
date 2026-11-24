@@ -185,6 +185,56 @@ export function willMutate(name: string, args: Record<string, unknown>, cwd: str
   return writeTargets(String(args.command ?? ''), cwd).length > 0;
 }
 
+// Extensions tsc never reads, so an edit to one cannot change the diagnostics. Short on purpose: a
+// wrong entry is a turn whose .ts edits go unchecked, where a missing one is only a wasted tsc run.
+// JSON stays out (resolveJsonModule types an imported .json, and tsconfig/package.json steer the
+// program), and so does anything extensionless.
+const TYPE_INERT_EXTENSIONS = new Set([
+  'md',
+  'mdx',
+  'markdown',
+  'txt',
+  'rst',
+  'css',
+  'scss',
+  'sass',
+  'less',
+  'html',
+  'svg',
+  'png',
+  'jpg',
+  'jpeg',
+  'gif',
+  'webp',
+  'ico',
+  'yml',
+  'yaml',
+  'toml',
+]);
+
+function isTypeInertPath(path: string): boolean {
+  const base = path.slice(path.lastIndexOf('/') + 1);
+  const dot = base.lastIndexOf('.');
+  return dot > 0 && TYPE_INERT_EXTENSIONS.has(base.slice(dot + 1).toLowerCase());
+}
+
+// The files a mutating call writes that could move tsc's output: the path for edit/write (a call
+// with no path counts, as willMutate counts it), and the parsed write targets for bash. The
+// baseline waits for the first call with one, so a turn that only edits docs runs no tsc at all,
+// and a docs edit ahead of a .ts edit leaves the baseline correct, since it changed no diagnostic.
+function typeRelevantTargets(name: string, args: Record<string, unknown>, cwd: string): string[] {
+  if (MUTATING_TOOLS.has(name)) {
+    const path = typeof args.path === 'string' ? args.path : '';
+    return isTypeInertPath(path) ? [] : [path];
+  }
+  if (name !== 'bash') return [];
+  return writeTargets(String(args.command ?? ''), cwd).filter(t => !isTypeInertPath(t));
+}
+
+export function mayAffectTypes(name: string, args: Record<string, unknown>, cwd: string): boolean {
+  return typeRelevantTargets(name, args, cwd).length > 0;
+}
+
 // The file a mutating call anchors its tsconfig walk-up on. For edit/write that is the path it was
 // given; for bash, the first file the command names, which is as good an anchor as any when one
 // command touches several (they are resolved against the same cwd, so a monorepo command editing
@@ -196,9 +246,7 @@ export function typecheckAnchor(
   args: Record<string, unknown>,
   cwd: string,
 ): string | undefined {
-  if (MUTATING_TOOLS.has(name)) return typeof args.path === 'string' ? args.path : undefined;
-  if (name !== 'bash') return undefined;
-  return writeTargets(String(args.command ?? ''), cwd)[0];
+  return typeRelevantTargets(name, args, cwd)[0] || undefined;
 }
 
 // Whether a call DID change the working tree, asked after dispatch. Inside a repo `changes` is
@@ -3904,7 +3952,9 @@ export async function runTurn(opts: {
       // local model is saturating the box) and only on turns that actually edit. Fail-open: a
       // non-TS project or an unrunnable checker leaves the baseline null, disabling the gate.
       // `willMutate`, not MUTATING_TOOLS: a shell edit is an edit, and a turn that does its writing
-      // through bash used to finish unverified. The baseline capture is the first thing
+      // through bash used to finish unverified. `mayAffectTypes`, not `willMutate`: an edit to a
+      // file tsc never reads (docs, styles) waits, so a docs-only turn runs no tsc and does not
+      // report a pass it did not earn. The baseline capture is the first thing
       // REIKA_TYPECHECK=0 (typecheckEnabled) switches off — with it off nothing downstream can
       // fire either, since the gate is null-baseline fail-open.
       if (
@@ -3913,7 +3963,7 @@ export async function runTurn(opts: {
         tool &&
         !refused &&
         !bouncedBlindEdit &&
-        willMutate(call.name, call.args, opts.bundle.cwd)
+        mayAffectTypes(call.name, call.args, opts.bundle.cwd)
       ) {
         typecheckBaselineAttempted = true;
         // Resolve the governing tsconfig from the file being edited (walk-up, bounded at cwd) so a

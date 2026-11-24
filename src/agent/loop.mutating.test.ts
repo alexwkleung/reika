@@ -12,7 +12,7 @@ import type { TreeChanges } from '../types.js';
 
 vi.mock('../provider/client.js', () => ({ callModel: vi.fn() }));
 
-const { willMutate, didMutate, typecheckAnchor } = await import('./loop.js');
+const { willMutate, didMutate, typecheckAnchor, mayAffectTypes } = await import('./loop.js');
 
 const CWD = '/repo';
 const changes = (...paths: string[]): TreeChanges => ({
@@ -82,6 +82,37 @@ describe('didMutate', () => {
   });
 });
 
+describe('mayAffectTypes', () => {
+  it('is false for an edit to a file tsc never reads', () => {
+    expect(mayAffectTypes('write', { path: 'README.md' }, CWD)).toBe(false);
+    expect(mayAffectTypes('edit', { path: 'docs/guide.MDX' }, CWD)).toBe(false);
+    expect(mayAffectTypes('edit', { path: 'src/app.css' }, CWD)).toBe(false);
+    expect(mayAffectTypes('bash', { command: 'echo x >> notes.md' }, CWD)).toBe(false);
+  });
+
+  it('is true for source, declarations and the JSON that steers the program', () => {
+    expect(mayAffectTypes('edit', { path: 'src/a.ts' }, CWD)).toBe(true);
+    expect(mayAffectTypes('edit', { path: 'src/a.d.ts' }, CWD)).toBe(true);
+    expect(mayAffectTypes('edit', { path: 'src/a.js' }, CWD)).toBe(true);
+    // resolveJsonModule types an imported .json; tsconfig and package.json shape the program.
+    expect(mayAffectTypes('edit', { path: 'src/data.json' }, CWD)).toBe(true);
+    expect(mayAffectTypes('edit', { path: 'tsconfig.json' }, CWD)).toBe(true);
+    expect(mayAffectTypes('write', { path: 'package.json' }, CWD)).toBe(true);
+  });
+
+  it('errs toward checking when it cannot tell', () => {
+    // A missed check is an unverified turn; a wrong check is only a wasted tsc run.
+    expect(mayAffectTypes('edit', {}, CWD)).toBe(true);
+    expect(mayAffectTypes('write', { path: 'Makefile' }, CWD)).toBe(true);
+    expect(mayAffectTypes('write', { path: '.gitignore' }, CWD)).toBe(true);
+  });
+
+  it('is true for a bash command when any one target is type-relevant', () => {
+    expect(mayAffectTypes('bash', { command: 'cp notes.md src/notes.ts' }, CWD)).toBe(true);
+    expect(mayAffectTypes('bash', { command: 'grep -rn foo src' }, CWD)).toBe(false);
+  });
+});
+
 describe('typecheckAnchor', () => {
   it('is the edited path for edit/write', () => {
     expect(typecheckAnchor('edit', { path: 'packages/web/src/a.ts' }, CWD)).toBe(
@@ -96,6 +127,12 @@ describe('typecheckAnchor', () => {
     expect(
       typecheckAnchor('bash', { command: "sed -i '' s/a/b/ packages/web/src/a.ts" }, CWD),
     ).toBe(join(CWD, 'packages/web/src/a.ts'));
+  });
+
+  it('skips a docs target so the walk-up starts from the code', () => {
+    expect(typecheckAnchor('bash', { command: 'touch README.md packages/web/src/a.ts' }, CWD)).toBe(
+      join(CWD, 'packages/web/src/a.ts'),
+    );
   });
 
   it('is undefined when there is nothing to anchor on', () => {

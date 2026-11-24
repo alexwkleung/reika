@@ -207,6 +207,38 @@ describe('post-edit typecheck gate (integration)', () => {
     expect(onDisk).not.toContain('BREAKME');
   });
 
+  it('runs no tsc on a turn that only edits files tsc never reads', async () => {
+    // A docs-only turn used to pay a baseline and a final check, then report a pass its edits
+    // could not have earned. Nothing type-relevant changed, so nothing is checked or reported.
+    await installTsc();
+    h.scripted.push(writeResponse('README.md', '# notes\n'), finalResponse('done'));
+
+    const { messages } = await run(cwd);
+
+    expect(vi.mocked(callModel)).toHaveBeenCalledTimes(2);
+    expect(messages.some(m => m.role === 'system' && m.content.includes('Typecheck'))).toBe(false);
+  });
+
+  it('still gates a .ts edit that follows a docs edit in the same turn', async () => {
+    // The reason the baseline is deferred rather than skipped: deciding at the first mutating call
+    // would leave the gate off for the whole turn, and this .ts edit would finish unchecked.
+    await installTsc();
+    h.scripted.push(
+      writeResponse('CHANGELOG.md', '- a line\n'),
+      writeResponse('src/app.ts', 'export const n = "BREAKME";\n'),
+      finalResponse('all done'),
+      editResponse('src/app.ts', '"BREAKME"', '0'),
+      finalResponse('fixed and done'),
+    );
+
+    const { history } = await run(cwd);
+
+    expect(vi.mocked(callModel)).toHaveBeenCalledTimes(5);
+    expect(
+      history.some(m => m.role === 'user' && m.content.includes('BREAKME sentinel present')),
+    ).toBe(true);
+  });
+
   it('leaves a read-only shell command alone', async () => {
     // The other half of the split: bash is inspection far more often than it is mutation, and a
     // `grep` must not put a tsc run in front of itself. Nothing ran, so nothing is reported.
