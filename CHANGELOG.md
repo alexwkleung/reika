@@ -11,6 +11,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   says so: "Context trimmed (shed N) — 4 older tool outputs are now summary-only to the model".
   The output stays on screen, so a later re-read of the same file no longer looks like the model
   ignoring something it already had (#1108).
+- When a long command's output is trimmed from the model's context, the model still gets the path
+  of its saved output and, if the command failed, its last three lines, so it can read the failure
+  instead of running the command again (#1112).
 
 ### Changed
 
