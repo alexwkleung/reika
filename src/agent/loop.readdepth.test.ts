@@ -36,7 +36,7 @@ const stubRead: Tool = {
   description: 'read a file',
   parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
   run: async args => ({
-    summary: `Read big.ts lines ${String(args.offset ?? 1)}-209 of 209`,
+    summary: `Read ${String(args.path)} lines ${String(args.offset ?? 1)}-209 of 209`,
     payload: `${String(args.offset ?? 1)}:`.padEnd(14000, 'x'),
     contentHash: 'same',
   }),
@@ -73,8 +73,10 @@ const config: Config = {
   sandbox: false,
 };
 
-// A step is a read [offset, limit] or 'edit'.
-async function summaries(steps: Array<[number, number | undefined] | 'edit'>): Promise<Message[]> {
+// A step is a read [offset, limit, path?] (big.ts by default) or 'edit'.
+async function summaries(
+  steps: Array<[number, number | undefined, string?] | 'edit'>,
+): Promise<Message[]> {
   h.scripted.length = 0;
   steps.forEach((step, n) =>
     h.scripted.push({
@@ -85,7 +87,7 @@ async function summaries(steps: Array<[number, number | undefined] | 'edit'>): P
           : {
               id: `r${n}`,
               name: 'read',
-              args: { path: 'big.ts', offset: step[0], limit: step[1] },
+              args: { path: step[2] ?? 'big.ts', offset: step[0], limit: step[1] },
             },
       ],
     }),
@@ -149,5 +151,31 @@ describe('re-reads over trimmed copies with no edit in between', () => {
   it('keeps reading open when an edit lands between passes', async () => {
     const withEdit = [...longer.slice(0, 3), 'edit' as const, ...longer.slice(3)];
     expect(paused(await summaries(withEdit))).toBe(0);
+  });
+});
+
+// The region rule skips trimmed copies too: big.ts read from line 1 four times, another file read
+// between each pass so every earlier copy of big.ts has been shed by the time it is read again.
+describe('same-region re-reads over trimmed copies', () => {
+  it('keeps reading open', async () => {
+    const other = (p: string): [number, undefined, string] => [1, undefined, p];
+    const steps: Array<[number, number | undefined, string?]> = [
+      [1, undefined],
+      other('a.ts'),
+      other('b.ts'),
+      [1, undefined],
+      other('c.ts'),
+      other('d.ts'),
+      [1, undefined],
+      other('e.ts'),
+      other('f.ts'),
+      [1, undefined],
+      other('g.ts'),
+      other('h.ts'),
+    ];
+    const history = await summaries(steps);
+    const tools = history.filter(m => m.role === 'tool');
+    expect(tools.filter(m => m.aged).length).toBeGreaterThanOrEqual(3);
+    expect(tools.map(m => m.summary).filter(s => /paused/.test(s))).toEqual([]);
   });
 });
