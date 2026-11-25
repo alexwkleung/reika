@@ -271,6 +271,9 @@ export function batchAgePayloads(
   // reasoning whatever `reasoningAged` says, so a mark would shed nothing while still costing the
   // sweep a pass — and `marked` would report a shed that never happened.
   shedReasoning = true,
+  // First index the sweep may not touch, when a caller protects more than the active round (the
+  // aging replay prices that); the active round is protected whatever this says.
+  protectFrom = Infinity,
 ): AgeResult {
   const threshold = compactThreshold(contextWindow, minGen);
   const none: AgeResult = { marked: 0, bulk: 0, crumbs: 0, kept: 0, short: 0 };
@@ -279,7 +282,7 @@ export function batchAgePayloads(
   // Never age the active round: the trailing tool block is what the model is about to act on, and
   // the assistant message that issued those calls keeps its reasoning (some providers require the
   // active roundtrip's reasoning_content — see toolcall.ts).
-  const protect = protectedTailStart(history);
+  const protect = Math.min(protectedTailStart(history), protectFrom);
   // #227: the turn's task-defining payload is exempt. Aging is oldest-first and a skill that
   // mandates a spec fetch as its opening call puts that payload at the front of the queue, so
   // without this the definition of the task is always the first thing dropped — and an aged
