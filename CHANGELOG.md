@@ -30,7 +30,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   getting back what was removed and still needs those lines to make its edit. A model that keeps
   re-reading the same lines with no edit landing is still paused (#1118).
 - Reading the same part of a file again after reika trimmed it from the model's context no longer
-  counts as a repeated read either, so it no longer pauses reading on its own (#PR).
+  counts as a repeated read either, so it no longer pauses reading on its own (#1119).
 - In `reika web`, the mode and model menus open with the current option already highlighted,
   instead of showing nothing highlighted for a moment first (#1106).
 - In `reika web`, a subagent's rows are now just indented, with the same spacing as the rest of
