@@ -1763,7 +1763,7 @@ export async function runTurn(opts: {
   // dup-live / dup-aged so a run reveals whether re-reads are redundant loops, rational refetches
   // of aged-out content, or a model shrinking its window to get around an omitted payload.
   // Model-invisible — only the debug log reads it. See agent/readtrace.ts.
-  const readTrace = new ReadTrace();
+  const readTrace = new ReadTrace(m => priorCopyState(m, opts.history, prefixStable) === 'yes');
   // The tool message that last carried each traced region, so a re-read's log line can say whether
   // that copy had actually been shed or folded away (`prevAged=`). Keyed like ReadTrace's regions.
   const lastReadMessage = new Map<string, Message>();
@@ -4322,7 +4322,10 @@ export async function runTurn(opts: {
       };
       opts.history.push(toolMsg);
       opts.onMessage(toolMsg);
-      if (traceKey) lastReadMessage.set(traceKey, toolMsg);
+      if (traceKey) {
+        lastReadMessage.set(traceKey, toolMsg);
+        readTrace.attachMessage(traceKey.slice(0, traceKey.indexOf('\0')), toolMsg);
+      }
       // Read-first (#72): ground the path against the message just pushed, so the gate can later ask
       // whether those exact bytes are still in the request rather than whether they ever were.
       if (groundsPath) {

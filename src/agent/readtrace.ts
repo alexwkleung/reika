@@ -52,11 +52,19 @@ export type LoopingRead = { path: string; offset: number; repeats: number };
 // reconstruction spiral fetches the same lines four, five, eight times (`types.ts` 156-185 was
 // under 1-300, 156-300, 156-185, 165-176, 156-165, …). Past this depth the file feeds the same
 // ledger → withdrawal ladder as a region repeat.
+//
+// An earlier fetch whose copy the harness has since shed or folded away does not stack: the model
+// re-reading bytes we removed is recovery, and withdrawing inspection then leaves it unable to see
+// the lines its edit needs. Observed on a 32k window: three files read whole, five sheds, one region
+// of `highlight.ts` fetched four times with every earlier copy gone, inspection withdrawn, and the
+// turn ended with no edit. Only a copy still in the request deepens.
 export const FILE_OVERLAP_DEPTH = 4;
+
+type FetchedRange = { lo: number; hi: number; msg?: Message };
 
 type FileEntry = {
   hash: string;
-  ranges: Array<[number, number]>;
+  ranges: FetchedRange[];
   // Deepest coverage any line of the file has reached, and the round it last deepened.
   depth: number;
   lastRound: number;
@@ -94,6 +102,10 @@ export class ReadTrace {
   // The window is still carried in the entry (not the key) for the narrowing carve-out below, which
   // needs to compare against the previous request rather than fork a new region for every window.
   private seen = new Map<string, Entry>();
+  // Whether the tool message that carried an earlier fetch is gone from the request (shed or
+  // folded). Without one, every earlier fetch stacks, as it did before.
+  constructor(private isGone: (m: Message) => boolean = () => false) {}
+
   private files = new Map<string, FileEntry>();
   private counts: Record<ReadClass, number> = {
     unique: 0,
@@ -198,10 +210,11 @@ export class ReadTrace {
     }
     f.lastVia = via;
     if (cls !== 'narrowed' && cls !== 'regrounded') {
-      const points = [lo, ...f.ranges.map(([a]) => a).filter(a => a >= lo && a <= hi)];
+      const held = f.ranges.filter(r => !r.msg || !this.isGone(r.msg));
+      const points = [lo, ...held.map(r => r.lo).filter(a => a >= lo && a <= hi)];
       let depth = 1;
       for (const p of points) {
-        const stacked = 1 + f.ranges.filter(([a, b]) => p >= a && p <= b).length;
+        const stacked = 1 + held.filter(r => p >= r.lo && p <= r.hi).length;
         if (stacked > depth) depth = stacked;
       }
       if (depth > f.depth) {
@@ -212,7 +225,13 @@ export class ReadTrace {
         f.lastRound = round;
       }
     }
-    f.ranges.push([lo, hi]);
+    f.ranges.push({ lo, hi });
+  }
+
+  // Links the latest fetch of `path` to the tool message that carried it, once that message exists.
+  attachMessage(path: string, msg: Message): void {
+    const last = this.files.get(path)?.ranges.at(-1);
+    if (last && !last.msg) last.msg = msg;
   }
 
   // Regions the model is looping on, re-read within the last `recentWithin` rounds of
