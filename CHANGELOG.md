@@ -27,7 +27,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 - On a small context window, re-reading a file after reika trimmed it from the model's context
   no longer counts as a read loop, so reading is no longer paused on a model that is only
-  getting back what was removed and still needs those lines to make its edit.
+  getting back what was removed and still needs those lines to make its edit (#1118).
 - In `reika web`, the mode and model menus open with the current option already highlighted,
   instead of showing nothing highlighted for a moment first (#1106).
 - In `reika web`, a subagent's rows are now just indented, with the same spacing as the rest of
