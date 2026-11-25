@@ -670,6 +670,11 @@ function newestLiveReadIndex(
 // and must not claim otherwise. Prefix-stable needs no such exclusion — there the pin lives in
 // batch aging, so an unpinned-and-unaged payload is already not counted.
 export function droppedPayloadCount(history: Message[], prefixStable = false): number {
+  return droppedPayloadMessages(history, prefixStable).length;
+}
+
+// The tool messages that count above, oldest first, so the notice can name them.
+export function droppedPayloadMessages(history: Message[], prefixStable = false): Message[] {
   const freshFrom = prefixStable ? 0 : findFreshToolBlockStart(history);
   const specIdx = prefixStable ? -1 : taskSpecIndex(history);
   return history.filter((m, i) =>
@@ -678,7 +683,7 @@ export function droppedPayloadCount(history: Message[], prefixStable = false): n
         ? !!m.aged
         : i < freshFrom
       : false,
-  ).length;
+  );
 }
 
 export function hasDroppedPayloads(history: Message[], prefixStable = false): boolean {

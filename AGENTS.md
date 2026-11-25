@@ -578,7 +578,7 @@ reading why:
   rule, concatenate 3+ runs per arm and read the aggregate, not the per-turn rows. The per-message form was tried and rejected: at
   ~90 chars against a ~34-char aged summary it measured 2,730 chars on a 30-round turn (~19% of the
   serialized request), and being mid-history it moved the compaction trigger, the keep boundary and
-  the cap arithmetic at once. The ledger is ~450 chars, flat, and touches no budget walk. Composition
+  the cap arithmetic at once. The ledger touches no budget walk, and stays bounded: it names the dropped calls by their summary lines, newest first, at most `DROPPED_LEDGER_MAX_LISTED` (8) with the rest counted, says newer results are still in context, and says it repeats every round. Sent generically, inkling read each round's copy as a new message from the user ("The user sent a context limit warning again") and took its fresh reads for dropped ones, re-reading slices it still had; `evals/dropnote-report.ts` counts both per session for the A/B. Composition
   order matters — it goes first, ahead of the other ledgers, in **both** `buildSteadySystem` and the
   agent loop's inline mirror, or the warm prefix diverges from round 0 (`warm.test.ts` locks them).
 - **Payload dedup** (default on since 2026-09-18; `REIKA_DEDUP_PAYLOADS=0` is the baseline arm —
