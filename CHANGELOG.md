@@ -17,6 +17,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Changed
 
+- The `edit` tool's description now says that indentation in `old_string` may differ from the
+  file, which it already accepted, so a model no longer holds off editing for want of exact
+  whitespace (#PR).
 - A turn that only edits files TypeScript never reads (docs, styles, images, YAML) no longer
   runs the post-edit typecheck, so it finishes sooner and no longer reports a pass its edits
   could not have earned (#1116).

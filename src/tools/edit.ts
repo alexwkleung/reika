@@ -15,14 +15,15 @@ import { declineSummary } from '../approval.js';
 export const editTool: Tool = {
   name: 'edit',
   description:
-    'Replace one exact-match occurrence of old_string with new_string in a file. Fails if old_string is missing or appears more than once — add surrounding context to make it unique.',
+    'Replace one occurrence of old_string with new_string in a file. Whitespace at the start and end of each line may differ from the file; the rest must match. Fails if old_string is missing or appears more than once — add surrounding context to make it unique.',
   parameters: {
     type: 'object',
     properties: {
       path: { type: 'string', description: 'File path, relative to cwd.' },
       old_string: {
         type: 'string',
-        description: 'Exact text to replace. Include enough context to be unique in the file.',
+        description:
+          'Text to replace, copied from the file (indentation may differ). Include enough context to be unique.',
       },
       new_string: { type: 'string', description: 'Replacement text.' },
     },
