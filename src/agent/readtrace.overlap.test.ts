@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Message } from '../types.js';
-import { FILE_OVERLAP_DEPTH, ReadTrace } from './readtrace.js';
+import { DEPTH_WITHOUT_PROGRESS, FILE_OVERLAP_DEPTH, ReadTrace } from './readtrace.js';
 
 // #341: the region key is (path, offset), so N distinct slices of one unchanged file never read as
 // a loop. The per-file coverage depth catches that shape — and only that shape: a line fetched a
@@ -177,5 +177,60 @@ describe('ReadTrace depth skips copies the harness removed', () => {
     shed.add(msgs[0]);
     t.record('src/ui/highlight.ts', 120, H, 27, 40, 'read'); // three held copies + this one
     expect(files(t, 27)).toEqual(['src/ui/highlight.ts']);
+  });
+});
+
+// The backstop: trimmed copies are free only while edits land. A line fetched
+// DEPTH_WITHOUT_PROGRESS times since the last landed edit flags, trimmed copies included.
+describe('ReadTrace re-reads with no progress', () => {
+  const tool = (): Message => ({ role: 'tool', callId: 'c', summary: 's' });
+  const readShed = (t: ReadTrace, shed: Set<Message>, rounds: number[]) => {
+    let previous: Message | undefined;
+    for (const round of rounds) {
+      if (previous) shed.add(previous);
+      // A fresh start line each pass, so the region rule (same offset) stays out of it.
+      t.record('src/ui/DiffView.tsx', round, H, round, 400, 'read');
+      previous = tool();
+      t.attachMessage('src/ui/DiffView.tsx', previous);
+    }
+  };
+
+  it('flags a file re-read over trimmed copies with no edit in between', () => {
+    const shed = new Set<Message>();
+    const t = new ReadTrace(m => shed.has(m));
+    readShed(t, shed, [1, 5, 9, 13]);
+    expect(files(t, 13)).toEqual([]);
+    readShed(t, shed, [17]);
+    expect(DEPTH_WITHOUT_PROGRESS).toBe(5);
+    expect(files(t, 17)).toEqual(['src/ui/DiffView.tsx']);
+    expect(t.summary()).toContain('refetched=1');
+  });
+
+  it('restarts the count when an edit lands, in any file', () => {
+    const shed = new Set<Message>();
+    const t = new ReadTrace(m => shed.has(m));
+    readShed(t, shed, [1, 5, 9]);
+    t.noteProgress();
+    readShed(t, shed, [13, 17, 21, 25]);
+    expect(files(t, 25)).toEqual([]);
+  });
+
+  it('counts a re-page in chunks after one trim as one pass', () => {
+    const shed = new Set<Message>();
+    const t = new ReadTrace(m => shed.has(m));
+    const first = tool();
+    t.record('src/ui/DiffView.tsx', 1, H, 1, 400, 'read');
+    t.attachMessage('src/ui/DiffView.tsx', first);
+    shed.add(first);
+    for (const [offset, round] of [
+      [1, 5],
+      [101, 6],
+      [201, 7],
+      [301, 8],
+    ]) {
+      t.record('src/ui/DiffView.tsx', offset, H, round, 100, 'read');
+      t.attachMessage('src/ui/DiffView.tsx', tool());
+    }
+    expect(files(t, 8)).toEqual([]);
   });
 });

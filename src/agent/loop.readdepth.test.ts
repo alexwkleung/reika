@@ -42,6 +42,14 @@ const stubRead: Tool = {
   }),
 };
 
+// Lands an edit without touching the file, so only the progress signal moves, not the hash.
+const stubEdit: Tool = {
+  name: 'edit',
+  description: 'edit a file',
+  parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+  run: async () => ({ summary: 'Edited big.ts' }),
+};
+
 const config: Config = {
   baseURL: 'http://localhost',
   apiKey: 'x',
@@ -65,12 +73,21 @@ const config: Config = {
   sandbox: false,
 };
 
-async function summaries(reads: Array<[number, number | undefined]>): Promise<Message[]> {
+// A step is a read [offset, limit] or 'edit'.
+async function summaries(steps: Array<[number, number | undefined] | 'edit'>): Promise<Message[]> {
   h.scripted.length = 0;
-  reads.forEach(([offset, limit], n) =>
+  steps.forEach((step, n) =>
     h.scripted.push({
       content: '',
-      toolCalls: [{ id: `r${n}`, name: 'read', args: { path: 'big.ts', offset, limit } }],
+      toolCalls: [
+        step === 'edit'
+          ? { id: `e${n}`, name: 'edit', args: { path: 'big.ts' } }
+          : {
+              id: `r${n}`,
+              name: 'read',
+              args: { path: 'big.ts', offset: step[0], limit: step[1] },
+            },
+      ],
     }),
   );
   h.scripted.push({ content: 'done', toolCalls: undefined });
@@ -89,7 +106,7 @@ async function summaries(reads: Array<[number, number | undefined]>): Promise<Me
       skills: [],
     },
     config,
-    tools: [stubRead],
+    tools: [stubRead, stubEdit],
     payloads: new PayloadStore(),
     promptMode: 'agent',
     onMessage: () => {},
@@ -114,5 +131,23 @@ describe('read depth skips copies the harness shed', () => {
     const tools = history.filter(m => m.role === 'tool');
     expect(tools.filter(m => m.aged).length).toBeGreaterThanOrEqual(3);
     expect(tools.map(m => m.summary).filter(s => /paused/.test(s))).toEqual([]);
+  });
+});
+
+// The backstop: trimmed copies stop being free once the re-reads lead nowhere. Line ~130 is in
+// every read below, so seven reads with no edit reach the no-progress depth and pause reading,
+// and the same reads with an edit landing after the third do not.
+describe('re-reads over trimmed copies with no edit in between', () => {
+  const longer: Array<[number, number | undefined]> = [...sequence, [125, 20], [128, 10]];
+  const paused = (history: Message[]) =>
+    history.filter(m => m.role === 'tool' && /paused/.test(m.summary)).length;
+
+  it('pauses reading when no edit lands', async () => {
+    expect(paused(await summaries(longer))).toBeGreaterThan(0);
+  });
+
+  it('keeps reading open when an edit lands between passes', async () => {
+    const withEdit = [...longer.slice(0, 3), 'edit' as const, ...longer.slice(3)];
+    expect(paused(await summaries(withEdit))).toBe(0);
   });
 });

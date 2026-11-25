@@ -4204,6 +4204,9 @@ export async function runTurn(opts: {
       if (!bouncedBlindEdit && didMutate(call.name, changes)) {
         editingStarted = true;
         mutatedSinceWithdrawal = true;
+        // Only a landed change is progress for the re-read backstop; a failed edit is an attempt.
+        if (!MUTATING_TOOLS.has(call.name) || /^(Edited|Wrote) /.test(summary))
+          readTrace.noteProgress();
       }
       if (!bouncedBlindEdit && MUTATING_TOOLS.has(call.name)) {
         // Track edit-recovery state: a failed edit (old_string not in the file, etc.) keeps the model

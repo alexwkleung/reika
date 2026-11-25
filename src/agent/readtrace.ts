@@ -60,7 +60,14 @@ export type LoopingRead = { path: string; offset: number; repeats: number };
 // turn ended with no edit. Only a copy still in the request deepens.
 export const FILE_OVERLAP_DEPTH = 4;
 
-type FetchedRange = { lo: number; hi: number; msg?: Message };
+// The backstop for that exemption. Re-reading removed bytes is recovery only while it leads to
+// work: a line fetched this many times since the last landed edit, trimmed copies included, is
+// circling (replayed: qwen3.6-35b-a3b read one 400-line file 10-20 times in a turn whose reasoning
+// never repeated, so no other guard fired). Counted per line, like depth, so re-paging a file in
+// chunks after one trim is one pass, not one per chunk. Any landed edit, in any file, restarts it.
+export const DEPTH_WITHOUT_PROGRESS = 5;
+
+type FetchedRange = { lo: number; hi: number; msg?: Message; epoch: number };
 
 type FileEntry = {
   hash: string;
@@ -68,6 +75,9 @@ type FileEntry = {
   // Deepest coverage any line of the file has reached, and the round it last deepened.
   depth: number;
   lastRound: number;
+  // The same depth with trimmed copies counted, over fetches since the last landed edit.
+  depthSinceProgress: number;
+  lastProgressRound: number;
   // The tool of the latest fetch, so a `read` right after a shell fetch can be told apart (#812).
   lastVia: ReadVia;
 };
@@ -107,6 +117,8 @@ export class ReadTrace {
   constructor(private isGone: (m: Message) => boolean = () => false) {}
 
   private files = new Map<string, FileEntry>();
+  // Bumped by each landed edit; a fetch is "since progress" while its epoch is the current one.
+  private epoch = 0;
   private counts: Record<ReadClass, number> = {
     unique: 0,
     changed: 0,
@@ -205,11 +217,30 @@ export class ReadTrace {
     const hi = window === Infinity ? Infinity : lo + window - 1;
     let f = this.files.get(path);
     if (!f || f.hash !== hash) {
-      f = { hash, ranges: [], depth: 0, lastRound: round, lastVia: via };
+      f = {
+        hash,
+        ranges: [],
+        depth: 0,
+        lastRound: round,
+        lastVia: via,
+        depthSinceProgress: 0,
+        lastProgressRound: round,
+      };
       this.files.set(path, f);
     }
     f.lastVia = via;
     if (cls !== 'narrowed' && cls !== 'regrounded') {
+      const since = f.ranges.filter(r => r.epoch === this.epoch);
+      const sincePoints = [lo, ...since.map(r => r.lo).filter(a => a >= lo && a <= hi)];
+      let sinceDepth = 1;
+      for (const p of sincePoints) {
+        const stacked = 1 + since.filter(r => p >= r.lo && p <= r.hi).length;
+        if (stacked > sinceDepth) sinceDepth = stacked;
+      }
+      if (sinceDepth >= f.depthSinceProgress || sinceDepth >= DEPTH_WITHOUT_PROGRESS) {
+        f.depthSinceProgress = Math.max(f.depthSinceProgress, sinceDepth);
+        f.lastProgressRound = round;
+      }
       const held = f.ranges.filter(r => !r.msg || !this.isGone(r.msg));
       const points = [lo, ...held.map(r => r.lo).filter(a => a >= lo && a <= hi)];
       let depth = 1;
@@ -225,7 +256,13 @@ export class ReadTrace {
         f.lastRound = round;
       }
     }
-    f.ranges.push({ lo, hi });
+    f.ranges.push({ lo, hi, epoch: this.epoch });
+  }
+
+  // An edit, a write or a command that changed the tree landed: re-reads before it led somewhere.
+  noteProgress(): void {
+    this.epoch++;
+    for (const f of this.files.values()) f.depthSinceProgress = 0;
   }
 
   // Links the latest fetch of `path` to the tool message that carried it, once that message exists.
@@ -260,9 +297,13 @@ export class ReadTrace {
     const named = new Set(out.map(l => l.path));
     for (const [path, f] of this.files) {
       if (named.has(path)) continue;
-      if (currentRound - f.lastRound > recentWithin) continue;
-      if (f.depth >= FILE_OVERLAP_DEPTH) {
+      if (f.depth >= FILE_OVERLAP_DEPTH && currentRound - f.lastRound <= recentWithin) {
         out.push({ path, offset: 1, repeats: f.depth });
+      } else if (
+        f.depthSinceProgress >= DEPTH_WITHOUT_PROGRESS &&
+        currentRound - f.lastProgressRound <= recentWithin
+      ) {
+        out.push({ path, offset: 1, repeats: f.depthSinceProgress });
       }
     }
     return out;
@@ -282,11 +323,15 @@ export class ReadTrace {
       if (e.repeats >= 3) looped++;
     }
     let overlapped = 0;
-    for (const f of this.files.values()) if (f.depth >= FILE_OVERLAP_DEPTH) overlapped++;
+    let refetched = 0;
+    for (const f of this.files.values()) {
+      if (f.depth >= FILE_OVERLAP_DEPTH) overlapped++;
+      if (f.depthSinceProgress >= DEPTH_WITHOUT_PROGRESS) refetched++;
+    }
     return (
       `unique=${c.unique} changed=${c.changed} dup-live=${c['dup-live']} dup-aged=${c['dup-aged']} ` +
       `narrowed=${c.narrowed} maxrepeat=${maxRepeat} looped=${looped} overlapped=${overlapped} ` +
-      `regrounded=${c.regrounded}`
+      `regrounded=${c.regrounded} refetched=${refetched}`
     );
   }
 }

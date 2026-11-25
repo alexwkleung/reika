@@ -1,7 +1,8 @@
 // Prices the read-depth rule's treatment of copies the harness removed. Each saved session's model
 // history is re-grown one request at a time at the session's own window through the loop's
 // batchAgePayloads + compactHistory, and every read is fed to two ReadTraces: one that stacks every
-// earlier fetch (the rule before), one that skips fetches whose copy was shed or folded at the time.
+// earlier fetch (the rule before), one that skips fetches whose copy was shed or folded at the time
+// and keeps the no-progress backstop (DEPTH_WITHOUT_PROGRESS) on top.
 // The loop ladder is replayed per round (ledger once a loop is active, withdrawal on its second
 // active round), so the counts are rounds where the model would have been told to stop reading.
 // A session with no window is skipped: without one nothing is shed and the two arms agree.
@@ -34,7 +35,7 @@ const LIVE_MIN = 2;
 const WITHDRAW_AFTER = 2;
 const CALIBRATION = Number(process.env.REPLAY_CALIBRATION ?? 1.15);
 
-type Arm = 'stack-all' | 'skip-removed';
+type Arm = 'stack-all' | 'trimmed-free';
 type TurnResult = {
   ledger: boolean;
   withdrawn: boolean;
@@ -88,7 +89,7 @@ function replay(source: Message[], window: number, cwd: string): Map<Arm, TurnRe
   const threshold = compactThreshold(window, MIN_GEN);
   const target = threshold * AGE_LOW_FRACTION;
   const gone = (m: Message) => (m.role === 'tool' && !!m.aged) || !live.includes(m);
-  const arms: Arm[] = ['stack-all', 'skip-removed'];
+  const arms: Arm[] = ['stack-all', 'trimmed-free'];
   const out = new Map<Arm, TurnResult[]>(arms.map(a => [a, []]));
   let traces = new Map<Arm, ReadTrace>();
   let active = new Map<Arm, number>();
@@ -105,7 +106,7 @@ function replay(source: Message[], window: number, cwd: string): Map<Arm, TurnRe
       }
     traces = new Map([
       ['stack-all', new ReadTrace()],
-      ['skip-removed', new ReadTrace(gone)],
+      ['trimmed-free', new ReadTrace(gone)],
     ]);
     active = new Map(arms.map(a => [a, 0]));
     cur = new Map(arms.map(a => [a, { ledger: false, withdrawn: false, editedAfter: false }]));
@@ -149,6 +150,7 @@ function replay(source: Message[], window: number, cwd: string): Map<Arm, TurnRe
     live.push(m);
     if (m.role !== 'tool') continue;
     if (isMutation(m)) {
+      for (const t of traces.values()) t.noteProgress();
       for (const a of arms) {
         const r = cur.get(a)!;
         if (r.withdrawn) r.editedAfter = true;
@@ -212,7 +214,7 @@ async function main() {
   const list = argv.includes('--list');
   const files = sessionFiles(argv.filter(a => !a.startsWith('--')));
   const totals = new Map<Arm, { turns: number; ledger: number; withdrawn: number; edited: number }>(
-    (['stack-all', 'skip-removed'] as Arm[]).map(a => [
+    (['stack-all', 'trimmed-free'] as Arm[]).map(a => [
       a,
       { turns: 0, ledger: 0, withdrawn: 0, edited: 0 },
     ]),
@@ -245,14 +247,14 @@ async function main() {
       }
     }
     const a = res.get('stack-all')!;
-    const b = res.get('skip-removed')!;
+    const b = res.get('trimmed-free')!;
     a.forEach((r, n) => {
       if (r.withdrawn === b[n].withdrawn) return;
       changed.push({
         file: f.replace(homedir(), '~'),
         turn: n,
         round: (r.withdrawn ? r.firstWithdrawRound : b[n].firstWithdrawRound) ?? -1,
-        withdrawnIn: r.withdrawn ? ['stack-all'] : ['skip-removed'],
+        withdrawnIn: r.withdrawn ? ['stack-all'] : ['trimmed-free'],
         editedAfter: r.editedAfter,
       });
     });
@@ -267,7 +269,7 @@ async function main() {
     );
   }
   const lost = changed.filter(c => c.withdrawnIn[0] === 'stack-all');
-  const gained = changed.filter(c => c.withdrawnIn[0] === 'skip-removed');
+  const gained = changed.filter(c => c.withdrawnIn[0] === 'trimmed-free');
   console.log(
     `withdrawals removed: ${lost.length}` +
       ` (session went on to edit in ${lost.filter(c => c.editedAfter).length}); added: ${gained.length}`,
