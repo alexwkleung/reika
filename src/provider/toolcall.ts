@@ -52,6 +52,32 @@ const SENT_DENSITY_FLOOR = 1;
 // those setups every non-trailing payload is a summary, which is exactly the trail it collapses.
 // `=0` is the baseline arm; strict no-op when off. See dedupToolContent.
 const DEDUP_PAYLOADS = process.env.REIKA_DEDUP_PAYLOADS !== '0';
+
+// EXPERIMENT (REIKA_AGE_ARGS, default off): an old call's arguments are otherwise sent verbatim for
+// the rest of the session, and at a fold an edit's strings and a bash heredoc are 20-27% of what no
+// shed can touch (evals/aging-replay.ts). Their effect is on disk and in the result, so once batch
+// aging marks a call (`argsAged`), each long string argument goes out as a stub. A bash command keeps
+// its first line, which says what ran. Only at shrink events, so it costs nothing on prefill.
+export const AGE_CALL_ARGS = process.env.REIKA_AGE_ARGS === '1';
+// A call whose arguments serialize shorter than this is left whole: the stub would buy nothing.
+export const AGED_ARGS_MIN_CHARS = 300;
+const AGED_ARG_STRING_MIN_CHARS = 120;
+const AGED_BASH_HEAD_CHARS = 160;
+// What a stub looks like inside a string; the loop counts it when it comes back in a new call.
+export const AGED_ARG_STUB_RE = /\[\d+ chars, sent earlier\]/;
+
+export function stubCallArgs(name: string, args: Record<string, unknown>): Record<string, unknown> {
+  if (JSON.stringify(args).length < AGED_ARGS_MIN_CHARS) return args;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(args)) {
+    if (typeof v !== 'string' || v.length < AGED_ARG_STRING_MIN_CHARS) out[k] = v;
+    else if (name === 'bash' && k === 'command')
+      out[k] =
+        `${v.split('\n')[0].slice(0, AGED_BASH_HEAD_CHARS)} …[${v.length} chars, sent earlier]`;
+    else out[k] = `[${v.length} chars, sent earlier]`;
+  }
+  return out;
+}
 // Replaces a stubbed FRESH payload (an identical full result still simultaneously in context — a
 // parallel or in-band re-read of one file within a single round). The summary is kept, so the model
 // still sees what the result was; only the duplicated body is dropped.
@@ -492,7 +518,7 @@ export function messagesToChatParams(
           type: 'function' as const,
           function: {
             name: tc.name,
-            arguments: JSON.stringify(tc.args),
+            arguments: JSON.stringify(msg.argsAged ? stubCallArgs(tc.name, tc.args) : tc.args),
           },
         }));
       }

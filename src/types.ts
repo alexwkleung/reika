@@ -89,6 +89,9 @@ export type Message =
       // thing shed once spent — the same "the model can't re-fetch its own reasoning" logic that
       // ages reasoning first, which applies again the moment the tail has done its job.
       continuationTail?: boolean;
+      // EXPERIMENT (REIKA_AGE_ARGS): this message's long call arguments are sent as stubs
+      // (provider/toolcall.ts stubCallArgs). Set by batch aging, sticky like `reasoningAged`.
+      argsAged?: boolean;
     }
   | {
       role: 'tool';

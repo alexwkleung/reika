@@ -53,6 +53,7 @@ const assistant: Role<'assistant'> = {
   planFinal: true,
   planChecks: { at: LEAK.length, missing: [LEAK], deadUrls: [{ url: LEAK, error: LEAK }] },
   reasoningAged: false,
+  argsAged: false,
   continuationTail: false,
 };
 const tool: Role<'tool'> = {

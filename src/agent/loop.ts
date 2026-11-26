@@ -38,6 +38,7 @@ import {
   AGE_LOW_FRACTION,
 } from './compaction.js';
 import {
+  AGED_ARG_STUB_RE,
   droppedPayloadCount,
   findFreshToolBlockStart,
   hasDroppedPayloads,
@@ -2758,7 +2759,7 @@ export async function runTurn(opts: {
         // is about to trigger was avoidable.
         debugLog(
           `[reika:debug] round=${i} prefix-stable batch-age marked=${aged.marked} ` +
-            `bulk=${aged.bulk} crumbs=${aged.crumbs} kept=${aged.kept} short=${aged.short}\n`,
+            `bulk=${aged.bulk} crumbs=${aged.crumbs} args=${aged.args} kept=${aged.kept} short=${aged.short}\n`,
         );
         shrink.sheds++;
         opts.onShrink?.({ kind: 'age', round: i, ...aged }, { ...shrink });
@@ -4027,6 +4028,11 @@ export async function runTurn(opts: {
           Object.values(call.args).some(v => typeof v === 'string' && referencesSpill(v))
         ) {
           recordFollowed({ by: call.name });
+        }
+        // REIKA_AGE_ARGS: a small model copies the shapes in its own history, so a stub it can see
+        // may come back inside a new call. Counted so the A/B can say whether that happens.
+        if (Object.values(call.args).some(v => typeof v === 'string' && AGED_ARG_STUB_RE.test(v))) {
+          debugLog(`[reika:debug] round=${i} age-args-echo tool=${call.name}\n`);
         }
         // Live in-flight row (#509). After the spill-stats bookkeeping and the typecheck baseline
         // above — both harness work that happens before the command runs — so the row's lifetime is

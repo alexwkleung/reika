@@ -14,6 +14,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 - When a long command's output is trimmed from the model's context, the model still gets the path
   of its saved output and, if the command failed, its last three lines, so it can read the failure
   instead of running the command again (#1112).
+- `REIKA_AGE_ARGS=1` (experimental, off by default) also cuts old tool-call arguments, such as an
+  edit's text or a long shell command, to a short stub when older context is trimmed. In a replay
+  of saved sessions it made folds a fifth to a third rarer (#PR).
 
 ### Changed
 
