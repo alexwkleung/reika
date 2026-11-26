@@ -7,6 +7,7 @@ import {
   buildWithdrawalDirective,
   withdrawalRemedy,
   withdrawnToolsPhrase,
+  withdrawalReturn,
   buildAbsentGrounding,
   buildEditRecoveryLedger,
   buildPlanWritePrompt,
@@ -314,18 +315,33 @@ describe('withdrawal text follows the turn tool list', () => {
 
   it("pins agent mode's refusal and ledger bytes", () => {
     // House rule: a change that only adds a new mode must not move the bytes of the existing one,
-    // or every measurement taken against the old text silently stops comparing.
+    // or every measurement taken against the old text silently stops comparing. Moved deliberately
+    // once, to say when reading comes back (the pause-is-temporary A/B).
     expect(buildWithdrawalDirective(AGENT_TOOLS)).toBe(
       '(reika: this is deliberate, not a fault. inspection tools (read/grep/glob/list, and read-only ' +
         'shell commands like grep/cat/tail) are paused because the work has repeated without making ' +
         'progress. Sending this call again now gets this same reply, so do not retry it. Make the ' +
         'edit the task requires with the edit/write tools, state what is specifically blocking you, ' +
-        'or — if the change is already complete — say so and stop.)',
+        'or — if the change is already complete — say so and stop. The pause is temporary: reading ' +
+        'comes back once an edit lands, or after a few rounds.)',
     );
     expect(buildAgentLoopLedger([], true, AGENT_TOOLS)).toContain(
       'Reading and searching are now PAUSED. Make the edit the task requires with the edit/write\n' +
         'tools, state specifically what is still blocking you, or — if the change is already complete —\n' +
-        'say so and stop.',
+        'say so and stop.\nThe pause is temporary: reading comes back once an edit lands, or after a few rounds.',
+    );
+  });
+
+  // A failed edit also lifts the hold; saying so would let a junk edit buy the reads back.
+  it('says when reading returns, and never that a failed edit lifts the pause', () => {
+    for (const tools of [AGENT_TOOLS, MINIMAL_TOOLS, CHAT_TOOLS]) {
+      const s = buildWithdrawalDirective(tools);
+      expect(s).toContain('The pause is temporary');
+      expect(s).not.toMatch(/fail/i);
+    }
+    expect(withdrawalReturn(MINIMAL_TOOLS)).toContain('a command changes a file');
+    expect(withdrawalReturn(CHAT_TOOLS)).toBe(
+      'The pause is temporary: reading comes back after a few rounds.',
     );
   });
 

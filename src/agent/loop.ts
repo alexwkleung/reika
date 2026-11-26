@@ -1068,6 +1068,20 @@ export function withdrawalRemedy(toolNames: ReadonlySet<string>): string {
   return 'Answer from what you already have';
 }
 
+// When reading comes back, said so a cornered model knows the pause is not the end of the turn:
+// inkling-2-mini stopped on its first paused round in 5 of 5 pauses with "the tools are paused, so I
+// cannot re-read", and kept working when told the pause would lift. A FAILED edit also ends the hold
+// (edit recovery needs reads); that is left unsaid, or a junk edit would buy the reads back.
+export function withdrawalReturn(toolNames: ReadonlySet<string>): string {
+  if (toolNames.has('edit') || toolNames.has('write')) {
+    return 'The pause is temporary: reading comes back once an edit lands, or after a few rounds.';
+  }
+  if (toolNames.has('bash')) {
+    return 'The pause is temporary: reading comes back once a command changes a file, or after a few rounds.';
+  }
+  return 'The pause is temporary: reading comes back after a few rounds.';
+}
+
 // The hard tier of the loop ledger, hand-wrapped per mode. The remedy differs (see
 // withdrawalRemedy) but the two escapes that need no tool at all — name the blocker, or stop if the
 // change is done — survive in every mode: they are what keeps a cornered model from being forced
@@ -1079,6 +1093,7 @@ function withdrawnLedgerLines(toolNames: ReadonlySet<string>): string[] {
       'Reading and searching are now PAUSED. Make the edit the task requires with the edit/write',
       'tools, state specifically what is still blocking you, or — if the change is already complete —',
       'say so and stop.',
+      withdrawalReturn(toolNames),
     ];
   }
   if (toolNames.has('bash')) {
@@ -1086,11 +1101,13 @@ function withdrawnLedgerLines(toolNames: ReadonlySet<string>): string[] {
       'Reading and searching are now PAUSED. Make the change the task requires by running the',
       'command that applies it, state specifically what is still blocking you, or — if the change',
       'is already complete — say so and stop.',
+      withdrawalReturn(toolNames),
     ];
   }
   return [
     'Reading and searching are now PAUSED. Answer from what you already have, state specifically',
     'what is still blocking you, or — if the change is already complete — say so and stop.',
+    withdrawalReturn(toolNames),
   ];
 }
 
@@ -1103,7 +1120,7 @@ export function buildWithdrawalDirective(toolNames: ReadonlySet<string>): string
     `(reika: this is deliberate, not a fault. ${withdrawnToolsPhrase(toolNames)} are paused ` +
     'because the work has repeated without making progress. Sending this call again now gets ' +
     `this same reply, so do not retry it. ${withdrawalRemedy(toolNames)}, state what is ` +
-    'specifically blocking you, or — if the change is already complete — say so and stop.)'
+    `specifically blocking you, or — if the change is already complete — say so and stop. ${withdrawalReturn(toolNames)})`
   );
 }
 
