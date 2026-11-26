@@ -19,7 +19,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 - When reika pauses reading because the model keeps re-reading, it now tells the model the pause
   is temporary and when reading comes back, so a model no longer ends its turn thinking it can
-  never read the files again (#PR).
+  never read the files again (#1123).
 - A turn that only edits files TypeScript never reads (docs, styles, images, YAML) no longer
   runs the post-edit typecheck, so it finishes sooner and no longer reports a pass its edits
   could not have earned (#1116).
