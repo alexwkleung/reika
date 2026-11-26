@@ -26,7 +26,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 ### Fixed
 
 - A subagent whose report was cut off at the token limit on its last round now hands the parent
-  that report, instead of a "reached max turns" message with the report thrown away (#PR).
+  that report, instead of a "reached max turns" message with the report thrown away (#1124).
 - In `reika web`, the mode and model menus open with the current option already highlighted,
   instead of showing nothing highlighted for a moment first (#1106).
 - In `reika web`, a subagent's rows are now just indented, with the same spacing as the rest of
