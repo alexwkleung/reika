@@ -39,8 +39,8 @@ import {
 } from './compaction.js';
 import {
   droppedPayloadCount,
+  droppedPayloadMessages,
   findFreshToolBlockStart,
-  hasDroppedPayloads,
   lastUserMessageIndex,
   oversizeOpeningPayloadIndex,
   taskSpecIndex,
@@ -1232,24 +1232,43 @@ function prefixed(ledger: string): string {
 // four, and a bare `FLAG && hasDroppedPayloads(...)` at each site is the same mistake waiting to
 // happen. Returns '' when the flag is off or nothing was actually dropped.
 function droppedPayloadLedgerFor(history: Message[], prefixStable: boolean): string {
-  return DROPPED_LEDGER && hasDroppedPayloads(history, prefixStable)
-    ? buildDroppedPayloadLedger()
+  if (!DROPPED_LEDGER) return '';
+  const dropped = droppedPayloadMessages(history, prefixStable);
+  return dropped.length
+    ? buildDroppedPayloadLedger(dropped.map(m => (m.role === 'tool' ? m.summary : '')))
     : '';
 }
+
+// How many dropped calls the notice names, newest first; the rest are counted. Bounded because the
+// notice rides every request once anything was dropped, and a small window pays for every line.
+export const DROPPED_LEDGER_MAX_LISTED = 8;
+const DROPPED_LEDGER_SUMMARY_CHARS = 100;
 
 // The sentence that identifies this ledger in a composed request. Exported so the debug line can
 // look for it in the ACTUAL system/tail bytes rather than re-running the gate — the composition has
 // four sites and re-deriving "did it fire?" is how a check drifts from what shipped.
 export const DROPPED_LEDGER_MARKER = 'Their output was dropped to make room';
 
-export function buildDroppedPayloadLedger(): string {
+// Names the dropped calls and says the note repeats: sent generically every round, inkling read each
+// copy as a new message from the user ("The user sent a context limit warning again") and concluded
+// its fresh reads were dropped too, then re-read slices it still had in context.
+export function buildDroppedPayloadLedger(summaries: string[]): string {
+  const newest = summaries.slice(-DROPPED_LEDGER_MAX_LISTED).reverse();
+  const earlier = summaries.length - newest.length;
+  const clip = (s: string) =>
+    s.length > DROPPED_LEDGER_SUMMARY_CHARS
+      ? `${s.slice(0, DROPPED_LEDGER_SUMMARY_CHARS - 1)}…`
+      : s;
   return [
-    '--- reika status (auto-generated — not user input) ---',
-    'Some tool results above now show only their summary line (e.g. `Ran: … (505 bytes output)`)',
-    `or a short outline of the output. ${DROPPED_LEDGER_MARKER}; it is not in your context`,
-    'any more. That is a context limit, not a failed command, and it does not mean you already',
-    'handled the result. If you need what one of them returned, re-run that call — do not answer',
-    'from memory of it.',
+    '--- reika status (auto-generated — not user input; repeated every round, not a new message) ---',
+    'These tool results above now show only their summary line or a short outline.',
+    `${DROPPED_LEDGER_MARKER}; it is not in your context any more:`,
+    ...newest.map(s => `- ${clip(s)}`),
+    ...(earlier > 0 ? [`- and ${earlier} earlier`] : []),
+    'Every other tool result above, including the newest, is still in your context as shown. This is',
+    'a context limit, not a failed command, and it does not mean you already handled those results.',
+    'If you still need what one of them returned, re-run that call — do not answer from memory of',
+    'it, and do not re-run calls whose output you still have.',
   ].join('\n');
 }
 
