@@ -345,7 +345,8 @@ window.
   setting with a known better value
 - **`REIKA_AGE_ARGS`** — In a replay of saved sessions it cut folds by a fifth at a 24k window and by
   a third at 32k, with re-reads unchanged; a small A/B on a local 35B model pointed the same way.
-  `REIKA_DEBUG` logs `age-args-echo` when a stub comes back in a new call
+  A new call that copies a stub is not run, and the model is told to send the real text;
+  `REIKA_DEBUG` logs `age-args-echo` when that happens
 - **`REIKA_PLAN_HANDOFF`** — `0` turns it off
 - **`REIKA_PLAN_BASH`** — Plan mode still cannot change the repo; the guarantee now comes from the
   allowlist rather than from the tool being absent. `0` removes the tool and reverts the plan prompt

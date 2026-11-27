@@ -38,7 +38,8 @@ import {
   AGE_LOW_FRACTION,
 } from './compaction.js';
 import {
-  AGED_ARG_STUB_RE,
+  AGED_ARG_ECHO_DIRECTIVE,
+  agedArgEcho,
   droppedPayloadCount,
   findFreshToolBlockStart,
   hasDroppedPayloads,
@@ -1776,6 +1777,8 @@ export async function runTurn(opts: {
   // a path; the first blind edit to an ungrounded path is bounced once with a read directive.
   // Recorded unconditionally (cheap); only READ_FIRST (default on) lets it withhold anything.
   const readFirst = new ReadFirstGate(opts.bundle.cwd);
+  // REIKA_AGE_ARGS: calls refused once this turn for carrying a stub; the identical call runs.
+  const refusedArgEchoes = new Set<string>();
   // Cross-round reasoning-loop detector (Layer 2). Records each round's reasoning to spot the model
   // re-deriving the same analysis instead of converging. Always recorded (cheap, and the debug
   // diagnostic reads it); its verdict only drives a force-commit when REASONING_LOOP_BREAK is set.
@@ -3924,6 +3927,18 @@ export async function runTurn(opts: {
         blindEdit &&
         !provenEdit &&
         readFirst.shouldBounce(String(call.args.path), opts.history, prefixStable);
+      // Only once a stub has been served: until then the marker cannot have come from us. Once per
+      // identical call, so a file that really contains the text can still be written.
+      const echoKey = `${call.name}\0${JSON.stringify(call.args)}`;
+      const refusedArgEcho =
+        tool !== undefined &&
+        !refused &&
+        !bouncedBlindEdit &&
+        !heldForSubagent &&
+        !refusedArgEchoes.has(echoKey) &&
+        agedArgEcho(call.args) &&
+        opts.history.some(m => m.role === 'assistant' && m.argsAged);
+      if (refusedArgEcho) refusedArgEchoes.add(echoKey);
       let summary: string;
       let payload: string | undefined;
       let diff: ToolResult['diff'];
@@ -3965,6 +3980,7 @@ export async function runTurn(opts: {
         tool &&
         !refused &&
         !bouncedBlindEdit &&
+        !refusedArgEcho &&
         mayAffectTypes(call.name, call.args, opts.bundle.cwd)
       ) {
         typecheckBaselineAttempted = true;
@@ -4011,6 +4027,10 @@ export async function runTurn(opts: {
           );
           debugLog(`[reika:debug] round=${i} read-first bounce ${blindPath} ${probe}\n`);
         }
+      } else if (refusedArgEcho) {
+        summary = `${call.name} not run — it contains a placeholder for text sent earlier`;
+        payload = AGED_ARG_ECHO_DIRECTIVE;
+        debugLog(`[reika:debug] round=${i} age-args-echo refused tool=${call.name}\n`);
       } else if (heldForSubagent) {
         const label = refusedBashGrep ? 'shell inspection' : call.name;
         summary = `${label} held — the subagent dispatched this round covers it`;
@@ -4029,10 +4049,9 @@ export async function runTurn(opts: {
         ) {
           recordFollowed({ by: call.name });
         }
-        // REIKA_AGE_ARGS: a small model copies the shapes in its own history, so a stub it can see
-        // may come back inside a new call. Counted so the A/B can say whether that happens.
-        if (Object.values(call.args).some(v => typeof v === 'string' && AGED_ARG_STUB_RE.test(v))) {
-          debugLog(`[reika:debug] round=${i} age-args-echo tool=${call.name}\n`);
+        // The second, identical call after an echo refusal runs; logged so a run can say so.
+        if (refusedArgEchoes.has(echoKey)) {
+          debugLog(`[reika:debug] round=${i} age-args-echo resent tool=${call.name}\n`);
         }
         // Live in-flight row (#509). After the spill-stats bookkeeping and the typecheck baseline
         // above — both harness work that happens before the command runs — so the row's lifetime is
@@ -4192,7 +4211,7 @@ export async function runTurn(opts: {
       // on path+offset so a same-or-wider re-read still counts; a narrowing one is exempt, being
       // the omission marker's own remedy); mutating tools reset the memory so a read-after-edit
       // isn't flagged. Skipped for unknown tools (nothing produced).
-      if (tool && !refused && !bouncedBlindEdit && !heldForSubagent)
+      if (tool && !refused && !bouncedBlindEdit && !heldForSubagent && !refusedArgEcho)
         payload = flagRepeatedCall(seenReadOnly, call.name, call.args, summary, payload);
       // A refusal (budget, offline, latch) carries no payload, so it is never novelty.
       if (tool && !refused && payload && WEB_LOOKUP_ARG[call.name]) {
@@ -4207,11 +4226,11 @@ export async function runTurn(opts: {
       // edit/write-only — `lastEditFailed`, the read-first grounding, and applyPlanEdit all read
       // fields (old_string failures, args.path, a rendered diff) that a shell command has no
       // analogue for.
-      if (!bouncedBlindEdit && didMutate(call.name, changes)) {
+      if (!bouncedBlindEdit && !refusedArgEcho && didMutate(call.name, changes)) {
         editingStarted = true;
         mutatedSinceWithdrawal = true;
       }
-      if (!bouncedBlindEdit && MUTATING_TOOLS.has(call.name)) {
+      if (!bouncedBlindEdit && !refusedArgEcho && MUTATING_TOOLS.has(call.name)) {
         // Track edit-recovery state: a failed edit (old_string not in the file, etc.) keeps the model
         // needing a re-read; a successful one clears it. Drives the withdrawal exemption + dead-end
         // stop. `Edited …` is the success prefix from tools/edit.ts; anything else is a non-apply.

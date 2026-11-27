@@ -64,8 +64,22 @@ export const AGE_CALL_ARGS = process.env.REIKA_AGE_ARGS !== '0';
 export const AGED_ARGS_MIN_CHARS = 300;
 const AGED_ARG_STRING_MIN_CHARS = 120;
 const AGED_BASH_HEAD_CHARS = 160;
-// What a stub looks like inside a string; the loop counts it when it comes back in a new call.
-export const AGED_ARG_STUB_RE = /\[\d+ chars, sent earlier\]/;
+// What a stub looks like inside a string. Matched on its tail, so a copy that lost the count or the
+// opening bracket is still caught: the loop refuses a new call carrying one (agedArgEcho).
+export const AGED_ARG_STUB_RE = /chars, sent earlier\]/;
+
+// A small model copies the shapes in its own history. A stub copied into `old_string` only fails to
+// match, but in `new_string`, a write or a heredoc it would replace real text with the placeholder,
+// and nothing downstream reads it as an error outside a typechecked file.
+export function agedArgEcho(args: Record<string, unknown>): boolean {
+  return AGED_ARG_STUB_RE.test(JSON.stringify(args));
+}
+
+export const AGED_ARG_ECHO_DIRECTIVE =
+  '(reika: not run. This call contains a placeholder like "[412 chars, sent earlier]". Reika put ' +
+  'that in place of text from an older call to save room; it is not the text itself. Read the file ' +
+  'for the current contents and send the real text. If the placeholder is genuinely part of what ' +
+  'you are writing, send the identical call again and it will run.)';
 
 export function stubCallArgs(name: string, args: Record<string, unknown>): Record<string, unknown> {
   if (JSON.stringify(args).length < AGED_ARGS_MIN_CHARS) return args;

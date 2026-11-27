@@ -872,8 +872,10 @@ strings and a bash heredoc (`stubCallArgs`), which are otherwise sent verbatim f
 20–27% of what a fold could not shed in the replay. It goes after the crumbs, never before the
 payloads: shed first, the replay measured more events and more folds. Default-on on the risk
 profile, not a significant result: the 35b A/B in #1126 pointed the replay's way with folds counted in
-single digits. `age-args-echo` counts a stub copied into a new call; a model that does it is the
-cost to watch for.
+single digits. A new call carrying a stub (`agedArgEcho`, matched on its tail so a mangled copy
+counts) is not run once a stub has been served: a stub copied into `new_string`, a write or a
+heredoc would put the placeholder into the file. The identical call sent again runs, so a file that
+really contains the text can still be written. `age-args-echo refused`/`resent` log both.
 When
 aging fires but can't reach the watermark (it stops at the protected tail, and on a small window
 the system prompt + the active round's reads are most of it), compaction is pulled into the same
