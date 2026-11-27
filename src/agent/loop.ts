@@ -2920,8 +2920,12 @@ export async function runTurn(opts: {
     // steerRetryActive keeps the one steered force-write retry abort-protected even after the normal
     // recovery budget is spent, so an ignored steer is still cut (cheap-to-fail) rather than running
     // to the max_tokens wall.
+    // Never on a subagent's report round: every recovery from a cut starts another round, which is
+    // past the cap, so the parent got "(reached max turns …)" for a report that was being written.
     const canAbortVerbatim =
-      VERBATIM_ABORT && (verbatimRecoveries < MAX_VERBATIM_RECOVERIES || steerRetryActive);
+      VERBATIM_ABORT &&
+      !subagentForceReport &&
+      (verbatimRecoveries < MAX_VERBATIM_RECOVERIES || steerRetryActive);
     const trackSpin = !!opts.onReasoningStatus || debugEnabled() || canAbortVerbatim;
     const onReasoningDelta = trackSpin
       ? (delta: string): void => {
@@ -3473,7 +3477,10 @@ export async function runTurn(opts: {
     // derived from real data rather than guessed. See agent/continuation.ts.
     const cutOffMidThought = response.finishReason === 'length' && isFinal;
     let continueRound = false;
-    if (CONTINUE && cutOffMidThought && carriedBlock.trim()) {
+    // Not on a subagent's report round, for the same reason as the reasoning cut: the next round is
+    // past the cap. Observed: a 14,067-char report cut at the token limit, continued, and replaced by
+    // "(reached max turns of 10 …)", so the parent received 69 chars. The cut report commits instead.
+    if (CONTINUE && cutOffMidThought && carriedBlock.trim() && !subagentForceReport) {
       // Judged on the block that is actually carried, not on reasoning alone: gating one string and
       // sending back a different one is a mismatch nobody can reconstruct later.
       const gate = continuationGate(carriedBlock);
@@ -3568,6 +3575,7 @@ export async function runTurn(opts: {
     // concisely, and retry. Bounded by MAX_LENGTH_RETRIES so a genuinely-stuck model
     // doesn't loop — the second truncation falls through and commits as the final answer.
     if (
+      !subagentForceReport &&
       shouldRetryTruncated({
         finishReason: response.finishReason,
         hasToolCalls: !isFinal,

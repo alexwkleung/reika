@@ -32,6 +32,8 @@ type Captured = {
 };
 const h = vi.hoisted(() => ({
   scripted: [] as ModelResponse[],
+  // Extra reasoning streamed before a call answers, one entry per call ('' for none).
+  stream: [] as string[],
   captured: [] as {
     system: string;
     tools: { name: string }[];
@@ -51,6 +53,8 @@ vi.mock('../provider/client.js', () => ({
       // Streaming: the model "types" a reasoning and content delta before answering, so a test can
       // see whether they reached the caller's callbacks.
       opts.onReasoningDelta?.('thinking…');
+      const extra = h.stream.shift();
+      if (extra) opts.onReasoningDelta?.(extra);
       opts.onContentDelta?.('typing…');
       h.captured.push({
         system: opts.system,
@@ -123,6 +127,7 @@ describe('subagent bounded return (#340)', () => {
     await writeFile(join(cwd, 'b.ts'), 'export const b = 2;\n', 'utf8');
     h.scripted.length = 0;
     h.captured.length = 0;
+    h.stream.length = 0;
     vi.mocked(callModel).mockClear();
   });
   afterEach(async () => {
@@ -171,6 +176,73 @@ describe('subagent bounded return (#340)', () => {
     expect(
       history.some(m => m.role === 'assistant' && m.content.includes('reached max turns')),
     ).toBe(false);
+  });
+
+  // Every recovery from a cut starts another round, and the report round is the last one: a 14,067-
+  // char report cut at the token limit was continued past the cap and the parent got 69 chars.
+  it('commits a report cut at the token limit instead of continuing past the cap', async () => {
+    const history: Message[] = [];
+    h.scripted.push(readResponse('a.ts'), {
+      content: '# Map\n\nReport: a then b, and c is',
+      finishReason: 'length',
+      toolCalls: undefined,
+    });
+    await runTurn({
+      userInput: 'trace',
+      history,
+      bundle: makeBundle(cwd),
+      config: makeConfig({ maxTurns: 2 }),
+      tools: [readTool],
+      payloads: new PayloadStore(),
+      onMessage: () => {},
+      reportAtCap: true,
+    });
+    expect(h.captured).toHaveLength(2);
+    const last = history[history.length - 1] as Message & { role: 'assistant' };
+    expect(last.content).toContain('Report: a then b');
+    expect(
+      history.some(m => m.role === 'assistant' && m.content.includes('reached max turns')),
+    ).toBe(false);
+  });
+
+  it('commits the reasoning of a report round cut at the token limit with no content', async () => {
+    const history: Message[] = [];
+    h.scripted.push(readResponse('a.ts'), {
+      content: '',
+      reasoning: 'a is 1, b is 2, c is',
+      finishReason: 'length',
+      toolCalls: undefined,
+    });
+    await runTurn({
+      userInput: 'trace',
+      history,
+      bundle: makeBundle(cwd),
+      config: makeConfig({ maxTurns: 2 }),
+      tools: [readTool],
+      payloads: new PayloadStore(),
+      onMessage: () => {},
+      reportAtCap: true,
+    });
+    const last = history[history.length - 1] as Message & { role: 'assistant' };
+    expect(last.content).toBe('a is 1, b is 2, c is');
+  });
+
+  it('does not cut the report round at the reasoning ceiling', async () => {
+    const history: Message[] = [];
+    h.stream.push('', 'x '.repeat(20000));
+    h.scripted.push(readResponse('a.ts'), final('Report: a then b.'));
+    await runTurn({
+      userInput: 'trace',
+      history,
+      bundle: makeBundle(cwd),
+      config: makeConfig({ maxTurns: 2 }),
+      tools: [readTool],
+      payloads: new PayloadStore(),
+      onMessage: () => {},
+      reportAtCap: true,
+    });
+    const last = history[history.length - 1] as Message & { role: 'assistant' };
+    expect(last.content).toContain('Report: a then b.');
   });
 
   it('falls back to the reasoning channel when the report round has no content', async () => {
