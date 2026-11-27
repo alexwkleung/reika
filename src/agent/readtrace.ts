@@ -97,6 +97,8 @@ type Entry = {
   // A dup-live repeat is never a rational refetch — the model already has the bytes — so the loop
   // policy treats it as a loop one repeat sooner than dup-aged (which can be a legitimate refetch).
   lastLive: boolean;
+  // The tool message that carried the latest fetch of this region, once it exists.
+  msg?: Message;
 };
 
 // How many times a shrinking window may restart the repeat run for one region. The bound matters
@@ -117,6 +119,8 @@ export class ReadTrace {
   constructor(private isGone: (m: Message) => boolean = () => false) {}
 
   private files = new Map<string, FileEntry>();
+  // The region key of each file's latest fetch, so attachMessage can link that region too.
+  private lastKey = new Map<string, string>();
   // Bumped by each landed edit; a fetch is "since progress" while its epoch is the current one.
   private epoch = 0;
   private counts: Record<ReadClass, number> = {
@@ -176,7 +180,10 @@ export class ReadTrace {
       repeats = 1;
       narrowings = prior.narrowings + 1;
     } else {
-      repeats = prior.repeats + 1;
+      // A re-read of a region whose previous copy a shed or fold removed is recovery, as for depth:
+      // it does not extend the run. The no-progress backstop still counts it (the same lines stack).
+      const priorGone = !!prior.msg && this.isGone(prior.msg);
+      repeats = priorGone ? prior.repeats : prior.repeats + 1;
       // distance 0 = a redundant read inside one parallel batch; distance 1 = the prior copy was
       // still in the fresh block when the model chose to re-read. Both are "live". >= 2 has aged.
       cls = round - prior.round <= 1 ? 'dup-live' : 'dup-aged';
@@ -192,6 +199,7 @@ export class ReadTrace {
       narrowings,
       lastLive: cls === 'dup-live',
     });
+    this.lastKey.set(path, key);
     this.counts[cls]++;
     this.recordFile(path, offset, window, hash, round, cls, via);
     return { cls, repeats };
@@ -269,6 +277,9 @@ export class ReadTrace {
   attachMessage(path: string, msg: Message): void {
     const last = this.files.get(path)?.ranges.at(-1);
     if (last && !last.msg) last.msg = msg;
+    const key = this.lastKey.get(path);
+    const entry = key === undefined ? undefined : this.seen.get(key);
+    if (entry && !entry.msg) entry.msg = msg;
   }
 
   // Regions the model is looping on, re-read within the last `recentWithin` rounds of
