@@ -6,8 +6,12 @@ import type { Message } from '../types.js';
 // compositions (system suffix); the prefix-stable pair, which runs through a different code path in
 // each mode, is in loop.droppedpayload.prefixstable.test.ts. loop.test.ts holds the flag-off guard.
 process.env.REIKA_DROPPED_LEDGER = '1';
-const { DROPPED_LEDGER_MARKER, buildDroppedPayloadLedger, buildSteadySystem } =
-  await import('./loop.js');
+const {
+  DROPPED_LEDGER_MARKER,
+  DROPPED_LEDGER_MAX_LISTED,
+  buildDroppedPayloadLedger,
+  buildSteadySystem,
+} = await import('./loop.js');
 
 const explored: Message[] = [
   { role: 'user', content: 'work on issue 213' },
@@ -57,7 +61,29 @@ describe('dropped-payload notice in the system suffix (#227)', () => {
   // The debug line detects the notice by searching the composed request for this exact sentence,
   // so a reworded ledger must not be able to leave that detection silently broken.
   it('the marker the debug line looks for is really in the ledger', () => {
-    expect(buildDroppedPayloadLedger()).toContain(DROPPED_LEDGER_MARKER);
+    expect(buildDroppedPayloadLedger(['Read b.ts'])).toContain(DROPPED_LEDGER_MARKER);
+  });
+
+  // Sent generically, a model read each round's copy as a new user message and took its fresh reads
+  // for dropped ones too; naming the calls and saying it repeats answers both.
+  it('names the dropped calls, newest first, and says it repeats every round', () => {
+    const s = buildDroppedPayloadLedger(['Read a.ts', 'Read b.ts']);
+    expect(s).toContain('repeated every round, not a new message');
+    expect(s.indexOf('- Read b.ts')).toBeLessThan(s.indexOf('- Read a.ts'));
+    expect(s).toContain('including the newest, is still in your context');
+  });
+
+  it('lists at most DROPPED_LEDGER_MAX_LISTED calls and counts the rest', () => {
+    const many = Array.from({ length: DROPPED_LEDGER_MAX_LISTED + 3 }, (_, n) => `Read f${n}.ts`);
+    const s = buildDroppedPayloadLedger(many);
+    expect(s.match(/^- Read /gm)).toHaveLength(DROPPED_LEDGER_MAX_LISTED);
+    expect(s).toContain('- and 3 earlier');
+    expect(s).not.toContain('- Read f0.ts');
+  });
+
+  it('clips a long summary', () => {
+    const s = buildDroppedPayloadLedger([`Ran: ${'x'.repeat(300)}`]);
+    expect(s.split('\n').every(l => l.length <= 110)).toBe(true);
   });
 
   for (const promptMode of ['agent', 'plan'] as const) {
@@ -71,6 +97,9 @@ describe('dropped-payload notice in the system suffix (#227)', () => {
       });
       expect(s).toContain('Their output was dropped to make room');
       expect(s).toContain('re-run that call');
+      expect(s).toContain('- Read b.ts');
+      expect(s).not.toContain('- Read c.ts');
+      expect(s).not.toContain('- Ran: gh issue view');
       // Stated exactly once, however many payloads were dropped.
       expect(s.split('Their output was dropped to make room')).toHaveLength(2);
       // Settled context first, directives after — the plan ledger follows it.

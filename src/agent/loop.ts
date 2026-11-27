@@ -41,8 +41,8 @@ import {
   AGED_ARG_ECHO_DIRECTIVE,
   agedArgEcho,
   droppedPayloadCount,
+  droppedPayloadMessages,
   findFreshToolBlockStart,
-  hasDroppedPayloads,
   lastUserMessageIndex,
   oversizeOpeningPayloadIndex,
   taskSpecIndex,
@@ -1070,6 +1070,20 @@ export function withdrawalRemedy(toolNames: ReadonlySet<string>): string {
   return 'Answer from what you already have';
 }
 
+// When reading comes back, said so a cornered model knows the pause is not the end of the turn:
+// inkling-2-mini stopped on its first paused round in 5 of 5 pauses with "the tools are paused, so I
+// cannot re-read", and kept working when told the pause would lift. A FAILED edit also ends the hold
+// (edit recovery needs reads); that is left unsaid, or a junk edit would buy the reads back.
+export function withdrawalReturn(toolNames: ReadonlySet<string>): string {
+  if (toolNames.has('edit') || toolNames.has('write')) {
+    return 'The pause is temporary: reading comes back once an edit to an existing file lands (a new file does not count), or after a few rounds.';
+  }
+  if (toolNames.has('bash')) {
+    return 'The pause is temporary: reading comes back once a command changes an existing file (a new file does not count), or after a few rounds.';
+  }
+  return 'The pause is temporary: reading comes back after a few rounds.';
+}
+
 // The hard tier of the loop ledger, hand-wrapped per mode. The remedy differs (see
 // withdrawalRemedy) but the two escapes that need no tool at all — name the blocker, or stop if the
 // change is done — survive in every mode: they are what keeps a cornered model from being forced
@@ -1081,6 +1095,7 @@ function withdrawnLedgerLines(toolNames: ReadonlySet<string>): string[] {
       'Reading and searching are now PAUSED. Make the edit the task requires with the edit/write',
       'tools, state specifically what is still blocking you, or — if the change is already complete —',
       'say so and stop.',
+      withdrawalReturn(toolNames),
     ];
   }
   if (toolNames.has('bash')) {
@@ -1088,11 +1103,13 @@ function withdrawnLedgerLines(toolNames: ReadonlySet<string>): string[] {
       'Reading and searching are now PAUSED. Make the change the task requires by running the',
       'command that applies it, state specifically what is still blocking you, or — if the change',
       'is already complete — say so and stop.',
+      withdrawalReturn(toolNames),
     ];
   }
   return [
     'Reading and searching are now PAUSED. Answer from what you already have, state specifically',
     'what is still blocking you, or — if the change is already complete — say so and stop.',
+    withdrawalReturn(toolNames),
   ];
 }
 
@@ -1105,7 +1122,7 @@ export function buildWithdrawalDirective(toolNames: ReadonlySet<string>): string
     `(reika: this is deliberate, not a fault. ${withdrawnToolsPhrase(toolNames)} are paused ` +
     'because the work has repeated without making progress. Sending this call again now gets ' +
     `this same reply, so do not retry it. ${withdrawalRemedy(toolNames)}, state what is ` +
-    'specifically blocking you, or — if the change is already complete — say so and stop.)'
+    `specifically blocking you, or — if the change is already complete — say so and stop. ${withdrawalReturn(toolNames)})`
   );
 }
 
@@ -1145,8 +1162,16 @@ export function shouldWithdrawInspection(opts: {
 // itself stuck gets reads back.
 export const WITHDRAW_HOLD_ROUNDS = 4;
 
+// What ends a hold early: a change to a file that already existed. A new file does not count: told
+// that reading returns once an edit lands, a model wrote `.read-unblock` ("I'll write a small file to
+// unblock reading") and got its reads back for a one-line junk file. `write` only ever creates.
+export function liftsWithdrawal(name: string, changes: ToolResult['changes']): boolean {
+  if (name === 'edit') return true;
+  return name === 'bash' && !!changes && changes.files.some(f => f.kind !== 'created');
+}
+
 // Whether a withdrawal already in force stays on this round although the loop no longer reads as
-// active. `since` is the round it began; `mutated` is whether the tree has changed since then.
+// active. `since` is the round it began; `mutated` is whether `liftsWithdrawal` has seen a change since then.
 export function holdWithdrawal(opts: {
   round: number;
   since: number | undefined;
@@ -1234,24 +1259,43 @@ function prefixed(ledger: string): string {
 // four, and a bare `FLAG && hasDroppedPayloads(...)` at each site is the same mistake waiting to
 // happen. Returns '' when the flag is off or nothing was actually dropped.
 function droppedPayloadLedgerFor(history: Message[], prefixStable: boolean): string {
-  return DROPPED_LEDGER && hasDroppedPayloads(history, prefixStable)
-    ? buildDroppedPayloadLedger()
+  if (!DROPPED_LEDGER) return '';
+  const dropped = droppedPayloadMessages(history, prefixStable);
+  return dropped.length
+    ? buildDroppedPayloadLedger(dropped.map(m => (m.role === 'tool' ? m.summary : '')))
     : '';
 }
+
+// How many dropped calls the notice names, newest first; the rest are counted. Bounded because the
+// notice rides every request once anything was dropped, and a small window pays for every line.
+export const DROPPED_LEDGER_MAX_LISTED = 8;
+const DROPPED_LEDGER_SUMMARY_CHARS = 100;
 
 // The sentence that identifies this ledger in a composed request. Exported so the debug line can
 // look for it in the ACTUAL system/tail bytes rather than re-running the gate — the composition has
 // four sites and re-deriving "did it fire?" is how a check drifts from what shipped.
 export const DROPPED_LEDGER_MARKER = 'Their output was dropped to make room';
 
-export function buildDroppedPayloadLedger(): string {
+// Names the dropped calls and says the note repeats: sent generically every round, inkling read each
+// copy as a new message from the user ("The user sent a context limit warning again") and concluded
+// its fresh reads were dropped too, then re-read slices it still had in context.
+export function buildDroppedPayloadLedger(summaries: string[]): string {
+  const newest = summaries.slice(-DROPPED_LEDGER_MAX_LISTED).reverse();
+  const earlier = summaries.length - newest.length;
+  const clip = (s: string) =>
+    s.length > DROPPED_LEDGER_SUMMARY_CHARS
+      ? `${s.slice(0, DROPPED_LEDGER_SUMMARY_CHARS - 1)}…`
+      : s;
   return [
-    '--- reika status (auto-generated — not user input) ---',
-    'Some tool results above now show only their summary line (e.g. `Ran: … (505 bytes output)`)',
-    `or a short outline of the output. ${DROPPED_LEDGER_MARKER}; it is not in your context`,
-    'any more. That is a context limit, not a failed command, and it does not mean you already',
-    'handled the result. If you need what one of them returned, re-run that call — do not answer',
-    'from memory of it.',
+    '--- reika status (auto-generated — not user input; repeated every round, not a new message) ---',
+    'These tool results above now show only their summary line or a short outline.',
+    `${DROPPED_LEDGER_MARKER}; it is not in your context any more:`,
+    ...newest.map(s => `- ${clip(s)}`),
+    ...(earlier > 0 ? [`- and ${earlier} earlier`] : []),
+    'Every other tool result above, including the newest, is still in your context as shown. This is',
+    'a context limit, not a failed command, and it does not mean you already handled those results.',
+    'If you still need what one of them returned, re-run that call — do not answer from memory of',
+    'it, and do not re-run calls whose output you still have.',
   ].join('\n');
 }
 
@@ -1765,7 +1809,7 @@ export async function runTurn(opts: {
   // dup-live / dup-aged so a run reveals whether re-reads are redundant loops, rational refetches
   // of aged-out content, or a model shrinking its window to get around an omitted payload.
   // Model-invisible — only the debug log reads it. See agent/readtrace.ts.
-  const readTrace = new ReadTrace();
+  const readTrace = new ReadTrace(m => priorCopyState(m, opts.history, prefixStable) === 'yes');
   // The tool message that last carried each traced region, so a re-read's log line can say whether
   // that copy had actually been shed or folded away (`prevAged=`). Keyed like ReadTrace's regions.
   const lastReadMessage = new Map<string, Message>();
@@ -2905,8 +2949,12 @@ export async function runTurn(opts: {
     // steerRetryActive keeps the one steered force-write retry abort-protected even after the normal
     // recovery budget is spent, so an ignored steer is still cut (cheap-to-fail) rather than running
     // to the max_tokens wall.
+    // Never on a subagent's report round: every recovery from a cut starts another round, which is
+    // past the cap, so the parent got "(reached max turns …)" for a report that was being written.
     const canAbortVerbatim =
-      VERBATIM_ABORT && (verbatimRecoveries < MAX_VERBATIM_RECOVERIES || steerRetryActive);
+      VERBATIM_ABORT &&
+      !subagentForceReport &&
+      (verbatimRecoveries < MAX_VERBATIM_RECOVERIES || steerRetryActive);
     const trackSpin = !!opts.onReasoningStatus || debugEnabled() || canAbortVerbatim;
     const onReasoningDelta = trackSpin
       ? (delta: string): void => {
@@ -3458,7 +3506,10 @@ export async function runTurn(opts: {
     // derived from real data rather than guessed. See agent/continuation.ts.
     const cutOffMidThought = response.finishReason === 'length' && isFinal;
     let continueRound = false;
-    if (CONTINUE && cutOffMidThought && carriedBlock.trim()) {
+    // Not on a subagent's report round, for the same reason as the reasoning cut: the next round is
+    // past the cap. Observed: a 14,067-char report cut at the token limit, continued, and replaced by
+    // "(reached max turns of 10 …)", so the parent received 69 chars. The cut report commits instead.
+    if (CONTINUE && cutOffMidThought && carriedBlock.trim() && !subagentForceReport) {
       // Judged on the block that is actually carried, not on reasoning alone: gating one string and
       // sending back a different one is a mismatch nobody can reconstruct later.
       const gate = continuationGate(carriedBlock);
@@ -3553,6 +3604,7 @@ export async function runTurn(opts: {
     // concisely, and retry. Bounded by MAX_LENGTH_RETRIES so a genuinely-stuck model
     // doesn't loop — the second truncation falls through and commits as the final answer.
     if (
+      !subagentForceReport &&
       shouldRetryTruncated({
         finishReason: response.finishReason,
         hasToolCalls: !isFinal,
@@ -4228,8 +4280,12 @@ export async function runTurn(opts: {
       // analogue for.
       if (!bouncedBlindEdit && !refusedArgEcho && didMutate(call.name, changes)) {
         editingStarted = true;
-        mutatedSinceWithdrawal = true;
+        // Only a landed change is progress for the re-read backstop; a failed edit is an attempt.
+        if (!MUTATING_TOOLS.has(call.name) || /^(Edited|Wrote) /.test(summary))
+          readTrace.noteProgress();
       }
+      if (!bouncedBlindEdit && !refusedArgEcho && liftsWithdrawal(call.name, changes))
+        mutatedSinceWithdrawal = true;
       if (!bouncedBlindEdit && !refusedArgEcho && MUTATING_TOOLS.has(call.name)) {
         // Track edit-recovery state: a failed edit (old_string not in the file, etc.) keeps the model
         // needing a re-read; a successful one clears it. Drives the withdrawal exemption + dead-end
@@ -4347,7 +4403,10 @@ export async function runTurn(opts: {
       };
       opts.history.push(toolMsg);
       opts.onMessage(toolMsg);
-      if (traceKey) lastReadMessage.set(traceKey, toolMsg);
+      if (traceKey) {
+        lastReadMessage.set(traceKey, toolMsg);
+        readTrace.attachMessage(traceKey.slice(0, traceKey.indexOf('\0')), toolMsg);
+      }
       // Read-first (#72): ground the path against the message just pushed, so the gate can later ask
       // whether those exact bytes are still in the request rather than whether they ever were.
       if (groundsPath) {
