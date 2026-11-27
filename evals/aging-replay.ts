@@ -4,11 +4,13 @@
 // later calls are fixed, so "re-read" below is a proxy: a shed read whose region the session reads
 // again afterwards. Arms: #821's superseded-read sweep (measured null: <1% of shed), and
 // `protect-N`, which keeps the reads of the last N rounds before the active one out of a shed.
+// `no-args`, `oracle:F` and `recent:F` are described at `Arm`; the oracle is the ceiling for any
+// rule that keeps shed regions, and at best broke even against the folds it added.
 // Each request marks the payloads it carried as sent, as the real call path does: unmarked, the
 // estimate prices a payload at the cap's room and sheds too late. REIKA_AGE_LOW_FRACTION sweeps the
 // shed depth (one process per value), and REPLAY_CALIBRATION the char/token factor (default 1.15).
 //
-//   pnpm exec tsx evals/aging-replay.ts [--window=24000,32000] [--arms=today,protect-2] [dir-or-file ...]
+//   pnpm exec tsx evals/aging-replay.ts [--window=24000,32000] [--arms=today,no-args,protect-2,oracle:0.05] [dir-or-file ...]
 import { readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -31,17 +33,28 @@ const SYSTEM = 'x'.repeat(14000);
 const READ_RE = /^Read (\S+) lines (\d+)-(\d+) of \d+/;
 
 type ReadInfo = { path: string; from: number; to: number; capped: boolean };
-type Arm = 'today' | 'superseded-first' | `protect-${number}`;
+// `no-args`: batch aging without stubbing old call arguments (REIKA_AGE_ARGS=0, #1126); every
+// other arm runs it as shipped (on unless REIKA_AGE_ARGS=0). `oracle:F` / `recent:F` keep a view of shed read regions,
+// refreshed at each shrink event and sized to F of the window: the oracle keeps the regions the
+// session reads again soonest (Belady, the ceiling for any retention rule), `recent` the most
+// recently read ones. A later read the view covers is served from it and enters history aged.
+type Arm = string;
+type Region = { path: string; from: number; to: number; text: string };
 const CALIBRATION = Number(process.env.REPLAY_CALIBRATION ?? 1.15);
 type Stats = {
   requests: number;
   events: number;
   folds: number;
   shedChars: number;
+  shedReasoningChars: number;
   supersededAvail: number;
   supersededShed: number;
   shedThenReread: number;
   shedThenRereadChars: number;
+  // A read of a region seen before whose bytes no live copy covers: the re-read aging caused.
+  forced: number;
+  served: number;
+  viewChars: number;
 };
 
 const readInfo = new WeakMap<Message, ReadInfo>();
@@ -62,6 +75,62 @@ function recentRoundsStart(history: Message[], rounds: number): number {
     if (seen++ === rounds) return i;
   }
   return 0;
+}
+
+function covers(v: { path: string; from: number; to: number }, r: ReadInfo): boolean {
+  return v.path === r.path && v.from <= r.from && v.to >= r.to;
+}
+
+function liveCovers(live: Message[], r: ReadInfo): boolean {
+  return live.some(m => {
+    const s = readInfo.get(m);
+    return m.role === 'tool' && !m.aged && !!m.payload && !!s && covers(s, r);
+  });
+}
+
+function isGone(all: Message[], i: number, live: Message[], r: ReadInfo): boolean {
+  for (let k = 0; k < i; k++) {
+    const s = readInfo.get(all[k]);
+    if (s && covers(s, r)) return !liveCovers(live, r);
+  }
+  return false;
+}
+
+function nextUse(all: Message[], from: number, r: ReadInfo): number {
+  for (let k = from; k < all.length; k++) {
+    const s = readInfo.get(all[k]);
+    if (s && s.path === r.path && s.from <= r.to && s.to >= r.from) return k;
+  }
+  return Infinity;
+}
+
+function buildView(
+  all: Message[],
+  i: number,
+  live: Message[],
+  kind: string,
+  budget: number,
+): Region[] {
+  const cands: Array<{ r: ReadInfo; text: string; at: number }> = [];
+  for (let k = i - 1; k >= 0; k--) {
+    const m = all[k];
+    const r = readInfo.get(m);
+    if (m.role !== 'tool' || !r || !m.payload || r.capped) continue;
+    if (cands.some(c => covers(c.r, r)) || liveCovers(live, r)) continue;
+    cands.push({ r, text: m.payload, at: k });
+  }
+  const ranked = cands
+    .map(c => ({ c, k: kind === 'oracle' ? nextUse(all, i, c.r) : -c.at }))
+    .filter(x => x.k !== Infinity)
+    .sort((a, b) => a.k - b.k);
+  const out: Region[] = [];
+  let used = 0;
+  for (const { c } of ranked) {
+    if (used + c.text.length > budget) continue;
+    used += c.text.length;
+    out.push({ ...c.r, text: c.text });
+  }
+  return out;
 }
 
 function isAgedTool(m: Message): boolean {
@@ -143,15 +212,26 @@ function replay(source: Message[], window: number, arm: Arm): Stats {
     events: 0,
     folds: 0,
     shedChars: 0,
+    shedReasoningChars: 0,
     supersededAvail: 0,
     supersededShed: 0,
     shedThenReread: 0,
     shedThenRereadChars: 0,
+    forced: 0,
+    served: 0,
+    viewChars: 0,
   };
   const live: Message[] = [];
+  const [viewKind, viewFrac] = arm.includes(':')
+    ? [arm.split(':')[0], Number(arm.split(':')[1])]
+    : ['', 0];
+  // char/4, the estimate's own baseline density.
+  const viewBudget = viewFrac * window * 4;
+  let view: Region[] = [];
+  let viewText = '';
   const estimate = () =>
     CALIBRATION *
-    estimateRequestTokens(SYSTEM, live, [], {
+    estimateRequestTokens(SYSTEM + viewText, live, [], {
       contextWindow: window,
       minGenTokens: MIN_GEN,
       prefixStable: true,
@@ -167,6 +247,7 @@ function replay(source: Message[], window: number, arm: Arm): Stats {
         const sup = supersededIndices(live, protect, specIdx);
         st.supersededAvail += sup.reduce((n, k) => n + payloadChars(live[k]), 0);
         const before = new Set(live.filter(isAgedTool));
+        const reasonedBefore = new Set(live.filter(m => m.role === 'assistant' && m.reasoningAged));
         let marked = 0;
         if (arm === 'superseded-first') {
           for (const k of sup) {
@@ -184,10 +265,13 @@ function replay(source: Message[], window: number, arm: Arm): Stats {
           window,
           MIN_GEN,
           true,
-          AGE_CALL_ARGS,
+          arm === 'no-args' ? false : AGE_CALL_ARGS,
           recentRoundsStart(live, keep),
         );
         marked += res.marked;
+        for (const m of live)
+          if (m.role === 'assistant' && m.reasoningAged && m.reasoning && !reasonedBefore.has(m))
+            st.shedReasoningChars += m.reasoning.length;
         const supSet = new Set(sup.map(k => live[k]));
         for (const m of live) {
           if (!isAgedTool(m) || before.has(m)) continue;
@@ -202,11 +286,27 @@ function replay(source: Message[], window: number, arm: Arm): Stats {
         const agedAbove = marked > 0 && estimate() > target;
         if (marked > 0) st.events++;
         if (shouldCompact(estimate(), window, MIN_GEN) || agedAbove) {
-          if (compactHistory(live, window, 1, MIN_GEN) > 0) {
+          // The view is in the estimate, so the fold is sized with its tokens off the window.
+          if (compactHistory(live, window - Math.ceil(viewText.length / 4), 1, MIN_GEN) > 0) {
             st.folds++;
             if (marked === 0) st.events++;
           }
         }
+        if (viewKind) {
+          view = buildView(all, i, live, viewKind, viewBudget);
+          viewText = view.map(v => v.text).join('\n');
+          st.viewChars += viewText.length;
+        }
+      }
+    }
+    const r = readInfo.get(all[i]);
+    const m = all[i];
+    if (m.role === 'tool' && r && m.payload && isGone(all, i, live, r)) {
+      st.forced++;
+      if (view.some(v => covers(v, r))) {
+        st.served++;
+        live.push({ ...m, aged: true });
+        continue;
       }
     }
     live.push(all[i]);
@@ -256,10 +356,14 @@ async function main() {
         events: 0,
         folds: 0,
         shedChars: 0,
+        shedReasoningChars: 0,
         supersededAvail: 0,
         supersededShed: 0,
         shedThenReread: 0,
         shedThenRereadChars: 0,
+        forced: 0,
+        served: 0,
+        viewChars: 0,
       };
       let withSup = 0;
       let withEvents = 0;
@@ -275,7 +379,8 @@ async function main() {
           ` requests=${tot.requests} events=${tot.events} folds=${tot.folds}` +
           ` shed=${tot.shedChars}c superseded-avail=${tot.supersededAvail}c` +
           ` superseded-shed=${tot.supersededShed}c (${pct(tot.supersededShed, tot.shedChars)} of shed)` +
-          ` shed-then-reread=${tot.shedThenReread} (${tot.shedThenRereadChars}c)`,
+          ` shed-reasoning=${tot.shedReasoningChars}c shed-then-reread=${tot.shedThenReread} (${tot.shedThenRereadChars}c)` +
+          ` forced-reread=${tot.forced} served=${tot.served} view-per-event=${tot.events ? Math.round(tot.viewChars / tot.events) : 0}c`,
       );
     }
   }
