@@ -6,18 +6,18 @@
   5  round   msgs= 12  chars= 23958  reprocess=  3530  append-only
   6  round   msgs= 14  chars= 24354  reprocess=   396  append-only
   7  round   msgs= 16  chars= 27853  reprocess=  3499  append-only
-  8  round   msgs= 19  chars= 23949  reprocess= 16447  mid-history@3
-  9  round   msgs= 21  chars= 27917  reprocess=  4447  tail-rewrite
- 10  report  msgs= 24  chars= 32394  reprocess=  4956  tail-rewrite
- 11  round   msgs= 19  chars= 26350  reprocess= 21470  system-changed
- 12  round   msgs= 21  chars= 26759  reprocess=   888  tail-rewrite
- 13  report  msgs= 24  chars= 30970  reprocess=  4690  tail-rewrite
- 14  round   msgs= 21  chars= 24341  reprocess= 19461  system-changed
- 15  round   msgs= 22  chars= 24547  reprocess=   685  tail-rewrite
- 16  round   msgs= 25  chars= 28104  reprocess=  4087  tail-rewrite
- 17  report  msgs= 28  chars= 34372  reprocess=  6747  tail-rewrite
- 18  round   msgs= 27  chars= 30953  reprocess= 26073  system-changed
+  8  round   msgs= 19  chars= 24311  reprocess= 16809  mid-history@3
+  9  round   msgs= 21  chars= 28279  reprocess=  4809  tail-rewrite
+ 10  report  msgs= 24  chars= 32756  reprocess=  5318  tail-rewrite
+ 11  round   msgs= 19  chars= 26712  reprocess= 21832  system-changed
+ 12  round   msgs= 21  chars= 27161  reprocess=  1290  tail-rewrite
+ 13  report  msgs= 24  chars= 31372  reprocess=  5092  tail-rewrite
+ 14  round   msgs= 21  chars= 24743  reprocess= 19863  system-changed
+ 15  round   msgs= 22  chars= 25013  reprocess=  1151  tail-rewrite
+ 16  round   msgs= 25  chars= 28570  reprocess=  4553  tail-rewrite
+ 17  report  msgs= 28  chars= 34835  reprocess=  7210  tail-rewrite
+ 18  round   msgs= 27  chars= 31417  reprocess= 26537  system-changed
 
-requests=19 sent=457212 reprocessed=137804
+requests=19 sent=461725 reprocessed=142317
 sheds=4 folds=3
 first=1 append-only=7 mid-history=1 tail-rewrite=7 system-changed=3
