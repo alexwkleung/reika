@@ -2,10 +2,13 @@
 // any model run. Each saved session's model history is re-grown one request at a time at a fixed
 // window through the loop's own batchAgePayloads + compactHistory, once per arm. The transcript's
 // later calls are fixed, so "re-read" below is a proxy: a shed read whose region the session reads
-// again afterwards. The arm here is #821's superseded-read sweep (measured null: <1% of shed);
-// a new candidate is another `Arm` beside it.
+// again afterwards. Arms: #821's superseded-read sweep (measured null: <1% of shed), and
+// `protect-N`, which keeps the reads of the last N rounds before the active one out of a shed.
+// Each request marks the payloads it carried as sent, as the real call path does: unmarked, the
+// estimate prices a payload at the cap's room and sheds too late. REIKA_AGE_LOW_FRACTION sweeps the
+// shed depth (one process per value), and REPLAY_CALIBRATION the char/token factor (default 1.15).
 //
-//   pnpm exec tsx evals/aging-replay.ts [--window=24000,32000] [dir-or-file ...]
+//   pnpm exec tsx evals/aging-replay.ts [--window=24000,32000] [--arms=today,protect-2] [dir-or-file ...]
 import { readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -16,7 +19,8 @@ import {
   compactThreshold,
   shouldCompact,
 } from '../src/agent/compaction.js';
-import { findFreshToolBlockStart, taskSpecIndex } from '../src/provider/toolcall.js';
+import { parseBashFileRead } from '../src/agent/bashread.js';
+import { AGE_CALL_ARGS, findFreshToolBlockStart, taskSpecIndex } from '../src/provider/toolcall.js';
 import { estimateRequestTokens } from '../src/provider/tokens.js';
 import { loadSession, modelHistoryFromScrollback } from '../src/store/sessions.js';
 import type { Message } from '../src/types.js';
@@ -27,7 +31,8 @@ const SYSTEM = 'x'.repeat(14000);
 const READ_RE = /^Read (\S+) lines (\d+)-(\d+) of \d+/;
 
 type ReadInfo = { path: string; from: number; to: number; capped: boolean };
-type Arm = 'today' | 'superseded-first';
+type Arm = 'today' | 'superseded-first' | `protect-${number}`;
+const CALIBRATION = Number(process.env.REPLAY_CALIBRATION ?? 1.15);
 type Stats = {
   requests: number;
   events: number;
@@ -45,6 +50,18 @@ function protectedTailStart(history: Message[]): number {
   let i = findFreshToolBlockStart(history) - 1;
   while (i >= 0 && history[i].role !== 'assistant') i--;
   return i >= 0 ? i : 0;
+}
+
+// Index of the assistant message that opened the round `rounds` before the active one, so a shed
+// leaves that round and every later one alone; Infinity (no extra protection) for 0.
+function recentRoundsStart(history: Message[], rounds: number): number {
+  if (rounds <= 0) return Infinity;
+  let seen = 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i].role !== 'assistant') continue;
+    if (seen++ === rounds) return i;
+  }
+  return 0;
 }
 
 function isAgedTool(m: Message): boolean {
@@ -84,6 +101,9 @@ function rereadLater(all: Message[], from: number, r: ReadInfo): boolean {
 }
 
 function replay(source: Message[], window: number, arm: Arm): Stats {
+  const calls = new Map<string, { name: string; args: Record<string, unknown> }>();
+  for (const m of source)
+    if (m.role === 'assistant') for (const c of m.toolCalls ?? []) calls.set(c.id, c);
   const all = source.map(m => {
     const c = { ...m } as Message;
     if (c.role === 'assistant') delete c.reasoningAged;
@@ -98,6 +118,22 @@ function replay(source: Message[], window: number, arm: Arm): Stats {
         const full = `${c.summary}\n\n${c.payload ?? ''}`;
         const capped = saved !== undefined && saved.length < full.length - 1;
         readInfo.set(c, { path: hit[1], from: Number(hit[2]), to: Number(hit[3]), capped });
+      } else {
+        // A one-file shell read is a read too: a model that reads through the shell re-reads that way.
+        const call = calls.get(c.callId);
+        const b =
+          call?.name === 'bash' && c.summary.startsWith('Ran: ')
+            ? parseBashFileRead(String(call.args.command ?? ''))
+            : undefined;
+        if (b && 'from' in b.range) {
+          const to = b.range.count === undefined ? Infinity : b.range.from + b.range.count - 1;
+          readInfo.set(c, {
+            path: b.path.replace(/^\.\//, ''),
+            from: b.range.from,
+            to,
+            capped: false,
+          });
+        }
       }
     }
     return c;
@@ -114,6 +150,7 @@ function replay(source: Message[], window: number, arm: Arm): Stats {
   };
   const live: Message[] = [];
   const estimate = () =>
+    CALIBRATION *
     estimateRequestTokens(SYSTEM, live, [], {
       contextWindow: window,
       minGenTokens: MIN_GEN,
@@ -140,7 +177,16 @@ function replay(source: Message[], window: number, arm: Arm): Stats {
             marked++;
           }
         }
-        const res = batchAgePayloads(live, estimate, window, MIN_GEN);
+        const keep = arm.startsWith('protect-') ? Number(arm.slice(8)) : 0;
+        const res = batchAgePayloads(
+          live,
+          estimate,
+          window,
+          MIN_GEN,
+          true,
+          AGE_CALL_ARGS,
+          recentRoundsStart(live, keep),
+        );
         marked += res.marked;
         const supSet = new Set(sup.map(k => live[k]));
         for (const m of live) {
@@ -164,6 +210,11 @@ function replay(source: Message[], window: number, arm: Arm): Stats {
       }
     }
     live.push(all[i]);
+    // The request just answered carried every live payload, so each is now frozen at its sent bytes.
+    if (all[i].role === 'assistant')
+      for (const x of live)
+        if (x.role === 'tool' && x.payload && !x.aged && x.rendered === undefined)
+          x.rendered = `${x.summary}\n\n${x.payload}`;
   }
   return st;
 }
@@ -184,6 +235,8 @@ async function main() {
   const argv = process.argv.slice(2);
   const winArg = argv.find(a => a.startsWith('--window='));
   const windows = (winArg ? winArg.slice(9) : '24000,32000').split(',').map(Number);
+  const armArg = argv.find(a => a.startsWith('--arms='));
+  const arms = (armArg ? armArg.slice(7) : 'today,superseded-first').split(',') as Arm[];
   const files = sessionFiles(argv.filter(a => !a.startsWith('--')));
   const sessions: Message[][] = [];
   for (const f of files) {
@@ -197,7 +250,7 @@ async function main() {
   }
   console.log(`${sessions.length} sessions with reads (of ${files.length} files)`);
   for (const w of windows) {
-    for (const arm of ['today', 'superseded-first'] as Arm[]) {
+    for (const arm of arms) {
       const tot: Stats = {
         requests: 0,
         events: 0,

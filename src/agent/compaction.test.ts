@@ -560,6 +560,25 @@ describe('batchAgePayloads', () => {
       return n;
     }, 0);
 
+  // The aging replay prices protecting more than the active round; the sweep must leave that span
+  // alone and still shed what is older.
+  it('leaves everything from protectFrom on alone', () => {
+    const history: Message[] = [
+      { role: 'user', content: 'go' },
+      ...round('spec', 'q'.repeat(50)),
+      ...round('a', 'x'.repeat(400)),
+      ...round('b', 'y'.repeat(400)),
+      ...round('c', 'z'.repeat(400)),
+    ];
+    const fromB = history.findIndex(m => m.role === 'assistant' && m.toolCalls?.[0]?.id === 'b');
+    batchAgePayloads(history, estimateOf(history), 1000, 0, true, false, fromB);
+    const aged = (id: string) =>
+      (history.find(m => m.role === 'tool' && m.callId === id) as Message & { role: 'tool' }).aged;
+    expect(aged('a')).toBe(true);
+    expect(aged('b')).toBeUndefined();
+    expect(aged('c')).toBeUndefined();
+  });
+
   it('is a no-op below the compaction threshold', () => {
     const history: Message[] = [{ role: 'user', content: 'go' }, ...round('a', 'x'.repeat(50))];
     expect(batchAgePayloads(history, estimateOf(history), 1000, 0).marked).toBe(0);
