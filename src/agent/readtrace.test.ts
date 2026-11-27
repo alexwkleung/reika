@@ -304,3 +304,39 @@ describe('priorCopyState (prevAged= on a re-read)', () => {
     expect(priorCopyState(undefined, [], true)).toBe('?');
   });
 });
+
+// The region rule skips trimmed copies too. Sequence from a 32k qwen3.6 `/issue` turn: one file read
+// whole five times, a shed before every re-read, paused twice by the region rule before an edit.
+describe('ReadTrace region repeats skip copies the harness removed', () => {
+  const tool = (): Message => ({ role: 'tool', callId: 'c', summary: 's' });
+  const loops = (t: ReadTrace, round: number) => t.loopingReads(round, 2, 3, 2).map(l => l.path);
+  const readEach = (t: ReadTrace, rounds: number[], shed?: Set<Message>) => {
+    let previous: Message | undefined;
+    for (const round of rounds) {
+      if (previous && shed) shed.add(previous);
+      t.record('src/ui/highlight.ts', 1, 'h', round, 209);
+      previous = tool();
+      t.attachMessage('src/ui/highlight.ts', previous);
+    }
+  };
+
+  it('does not repeat a region whose earlier copies were all trimmed', () => {
+    const shed = new Set<Message>();
+    const t = new ReadTrace(m => shed.has(m));
+    readEach(t, [0, 4, 6, 9], shed);
+    expect(loops(t, 9)).toEqual([]);
+  });
+
+  it('still repeats the same reads while the copies are in the request', () => {
+    const t = new ReadTrace(() => false);
+    readEach(t, [0, 4, 6]);
+    expect(loops(t, 6)).toEqual(['src/ui/highlight.ts']);
+  });
+
+  it('leaves the fifth trimmed pass with no edit to the no-progress backstop', () => {
+    const shed = new Set<Message>();
+    const t = new ReadTrace(m => shed.has(m));
+    readEach(t, [0, 4, 6, 9, 13], shed);
+    expect(loops(t, 13)).toEqual(['src/ui/highlight.ts']);
+  });
+});
