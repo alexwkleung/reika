@@ -1074,10 +1074,10 @@ export function withdrawalRemedy(toolNames: ReadonlySet<string>): string {
 // (edit recovery needs reads); that is left unsaid, or a junk edit would buy the reads back.
 export function withdrawalReturn(toolNames: ReadonlySet<string>): string {
   if (toolNames.has('edit') || toolNames.has('write')) {
-    return 'The pause is temporary: reading comes back once an edit lands, or after a few rounds.';
+    return 'The pause is temporary: reading comes back once an edit to an existing file lands (a new file does not count), or after a few rounds.';
   }
   if (toolNames.has('bash')) {
-    return 'The pause is temporary: reading comes back once a command changes a file, or after a few rounds.';
+    return 'The pause is temporary: reading comes back once a command changes an existing file (a new file does not count), or after a few rounds.';
   }
   return 'The pause is temporary: reading comes back after a few rounds.';
 }
@@ -1160,8 +1160,16 @@ export function shouldWithdrawInspection(opts: {
 // itself stuck gets reads back.
 export const WITHDRAW_HOLD_ROUNDS = 4;
 
+// What ends a hold early: a change to a file that already existed. A new file does not count: told
+// that reading returns once an edit lands, a model wrote `.read-unblock` ("I'll write a small file to
+// unblock reading") and got its reads back for a one-line junk file. `write` only ever creates.
+export function liftsWithdrawal(name: string, changes: ToolResult['changes']): boolean {
+  if (name === 'edit') return true;
+  return name === 'bash' && !!changes && changes.files.some(f => f.kind !== 'created');
+}
+
 // Whether a withdrawal already in force stays on this round although the loop no longer reads as
-// active. `since` is the round it began; `mutated` is whether the tree has changed since then.
+// active. `since` is the round it began; `mutated` is whether `liftsWithdrawal` has seen a change since then.
 export function holdWithdrawal(opts: {
   round: number;
   since: number | undefined;
@@ -4218,10 +4226,8 @@ export async function runTurn(opts: {
       // edit/write-only — `lastEditFailed`, the read-first grounding, and applyPlanEdit all read
       // fields (old_string failures, args.path, a rendered diff) that a shell command has no
       // analogue for.
-      if (!bouncedBlindEdit && didMutate(call.name, changes)) {
-        editingStarted = true;
-        mutatedSinceWithdrawal = true;
-      }
+      if (!bouncedBlindEdit && didMutate(call.name, changes)) editingStarted = true;
+      if (!bouncedBlindEdit && liftsWithdrawal(call.name, changes)) mutatedSinceWithdrawal = true;
       if (!bouncedBlindEdit && MUTATING_TOOLS.has(call.name)) {
         // Track edit-recovery state: a failed edit (old_string not in the file, etc.) keeps the model
         // needing a re-read; a successful one clears it. Drives the withdrawal exemption + dead-end

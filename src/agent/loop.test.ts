@@ -15,6 +15,7 @@ import {
   buildSteadySystem,
   shouldWithdrawInspection,
   holdWithdrawal,
+  liftsWithdrawal,
   WITHDRAW_HOLD_ROUNDS,
   buildPlanTransformInput,
 } from './loop.js';
@@ -323,12 +324,12 @@ describe('withdrawal text follows the turn tool list', () => {
         'progress. Sending this call again now gets this same reply, so do not retry it. Make the ' +
         'edit the task requires with the edit/write tools, state what is specifically blocking you, ' +
         'or — if the change is already complete — say so and stop. The pause is temporary: reading ' +
-        'comes back once an edit lands, or after a few rounds.)',
+        'comes back once an edit to an existing file lands (a new file does not count), or after a few rounds.)',
     );
     expect(buildAgentLoopLedger([], true, AGENT_TOOLS)).toContain(
       'Reading and searching are now PAUSED. Make the edit the task requires with the edit/write\n' +
         'tools, state specifically what is still blocking you, or — if the change is already complete —\n' +
-        'say so and stop.\nThe pause is temporary: reading comes back once an edit lands, or after a few rounds.',
+        'say so and stop.\nThe pause is temporary: reading comes back once an edit to an existing file lands (a new file does not count), or after a few rounds.',
     );
   });
 
@@ -339,7 +340,7 @@ describe('withdrawal text follows the turn tool list', () => {
       expect(s).toContain('The pause is temporary');
       expect(s).not.toMatch(/fail/i);
     }
-    expect(withdrawalReturn(MINIMAL_TOOLS)).toContain('a command changes a file');
+    expect(withdrawalReturn(MINIMAL_TOOLS)).toContain('a command changes an existing file');
     expect(withdrawalReturn(CHAT_TOOLS)).toBe(
       'The pause is temporary: reading comes back after a few rounds.',
     );
@@ -518,6 +519,26 @@ describe('buildSteadySystem', () => {
       planSteps: null,
     });
     expect(s).toContain('Nothing examined yet');
+  });
+});
+
+describe('liftsWithdrawal', () => {
+  const change = (kind: 'modified' | 'created' | 'deleted') => ({
+    files: [{ path: 'a.ts', kind, hunks: [], added: 1, removed: 0 }],
+    more: 0,
+  });
+
+  it('lifts on an edit or a command that changed an existing file', () => {
+    expect(liftsWithdrawal('edit', undefined)).toBe(true);
+    expect(liftsWithdrawal('bash', change('modified'))).toBe(true);
+    expect(liftsWithdrawal('bash', change('deleted'))).toBe(true);
+  });
+
+  // A model wrote `.read-unblock` to get its reads back; a new file is not progress.
+  it('does not lift on a new file, by write or by command', () => {
+    expect(liftsWithdrawal('write', undefined)).toBe(false);
+    expect(liftsWithdrawal('bash', change('created'))).toBe(false);
+    expect(liftsWithdrawal('bash', undefined)).toBe(false);
   });
 });
 
