@@ -52,6 +52,47 @@ const SENT_DENSITY_FLOOR = 1;
 // those setups every non-trailing payload is a summary, which is exactly the trail it collapses.
 // `=0` is the baseline arm; strict no-op when off. See dedupToolContent.
 const DEDUP_PAYLOADS = process.env.REIKA_DEDUP_PAYLOADS !== '0';
+
+// REIKA_AGE_ARGS (default on since 2026-11-27; `=0` is the baseline arm): an old call's arguments are otherwise sent verbatim for
+// the rest of the session, and at a fold an edit's strings and a bash heredoc are 20-27% of what no
+// shed can touch (evals/aging-replay.ts). Their effect is on disk and in the result, so once batch
+// aging marks a call (`argsAged`), each long string argument goes out as a stub. A bash command keeps
+// its first line, which says what ran. Only at shrink events, so it costs nothing on prefill.
+// Default-on on the risk profile: a small A/B pointed the replay's way, with no stub copied back.
+export const AGE_CALL_ARGS = process.env.REIKA_AGE_ARGS !== '0';
+// A call whose arguments serialize shorter than this is left whole: the stub would buy nothing.
+export const AGED_ARGS_MIN_CHARS = 300;
+const AGED_ARG_STRING_MIN_CHARS = 120;
+const AGED_BASH_HEAD_CHARS = 160;
+// What a stub looks like inside a string. Matched on its tail, so a copy that lost the count or the
+// opening bracket is still caught: the loop refuses a new call carrying one (agedArgEcho).
+export const AGED_ARG_STUB_RE = /chars, sent earlier\]/;
+
+// A small model copies the shapes in its own history. A stub copied into `old_string` only fails to
+// match, but in `new_string`, a write or a heredoc it would replace real text with the placeholder,
+// and nothing downstream reads it as an error outside a typechecked file.
+export function agedArgEcho(args: Record<string, unknown>): boolean {
+  return AGED_ARG_STUB_RE.test(JSON.stringify(args));
+}
+
+export const AGED_ARG_ECHO_DIRECTIVE =
+  '(reika: not run. This call contains a placeholder like "[412 chars, sent earlier]". Reika put ' +
+  'that in place of text from an older call to save room; it is not the text itself. Read the file ' +
+  'for the current contents and send the real text. If the placeholder is genuinely part of what ' +
+  'you are writing, send the identical call again and it will run.)';
+
+export function stubCallArgs(name: string, args: Record<string, unknown>): Record<string, unknown> {
+  if (JSON.stringify(args).length < AGED_ARGS_MIN_CHARS) return args;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(args)) {
+    if (typeof v !== 'string' || v.length < AGED_ARG_STRING_MIN_CHARS) out[k] = v;
+    else if (name === 'bash' && k === 'command')
+      out[k] =
+        `${v.split('\n')[0].slice(0, AGED_BASH_HEAD_CHARS)} …[${v.length} chars, sent earlier]`;
+    else out[k] = `[${v.length} chars, sent earlier]`;
+  }
+  return out;
+}
 // Replaces a stubbed FRESH payload (an identical full result still simultaneously in context — a
 // parallel or in-band re-read of one file within a single round). The summary is kept, so the model
 // still sees what the result was; only the duplicated body is dropped.
@@ -492,7 +533,7 @@ export function messagesToChatParams(
           type: 'function' as const,
           function: {
             name: tc.name,
-            arguments: JSON.stringify(tc.args),
+            arguments: JSON.stringify(msg.argsAged ? stubCallArgs(tc.name, tc.args) : tc.args),
           },
         }));
       }
@@ -670,6 +711,11 @@ function newestLiveReadIndex(
 // and must not claim otherwise. Prefix-stable needs no such exclusion — there the pin lives in
 // batch aging, so an unpinned-and-unaged payload is already not counted.
 export function droppedPayloadCount(history: Message[], prefixStable = false): number {
+  return droppedPayloadMessages(history, prefixStable).length;
+}
+
+// The tool messages that count above, oldest first, so the notice can name them.
+export function droppedPayloadMessages(history: Message[], prefixStable = false): Message[] {
   const freshFrom = prefixStable ? 0 : findFreshToolBlockStart(history);
   const specIdx = prefixStable ? -1 : taskSpecIndex(history);
   return history.filter((m, i) =>
@@ -678,7 +724,7 @@ export function droppedPayloadCount(history: Message[], prefixStable = false): n
         ? !!m.aged
         : i < freshFrom
       : false,
-  ).length;
+  );
 }
 
 export function hasDroppedPayloads(history: Message[], prefixStable = false): boolean {

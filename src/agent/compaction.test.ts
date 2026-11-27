@@ -571,7 +571,7 @@ describe('batchAgePayloads', () => {
       ...round('c', 'z'.repeat(400)),
     ];
     const fromB = history.findIndex(m => m.role === 'assistant' && m.toolCalls?.[0]?.id === 'b');
-    batchAgePayloads(history, estimateOf(history), 1000, 0, true, fromB);
+    batchAgePayloads(history, estimateOf(history), 1000, 0, true, false, fromB);
     const aged = (id: string) =>
       (history.find(m => m.role === 'tool' && m.callId === id) as Message & { role: 'tool' }).aged;
     expect(aged('a')).toBe(true);

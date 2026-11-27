@@ -38,16 +38,31 @@ const stubBash: Tool = {
     required: ['command'],
   },
   run: async args =>
-    String(args.command) === 'apply'
+    String(args.command) === 'scratch'
       ? {
-          summary: 'Ran: apply',
+          summary: 'Ran: scratch',
           exitCode: 0,
           changes: {
-            files: [{ path: 'app.ts', kind: 'modified', hunks: [], added: 1, removed: 1 }],
+            files: [{ path: 'scratch.txt', kind: 'created', hunks: [], added: 1, removed: 0 }],
             more: 0,
           },
         }
-      : { summary: `Ran: ${String(args.command)}`, exitCode: 0 },
+      : String(args.command) === 'apply'
+        ? {
+            summary: 'Ran: apply',
+            exitCode: 0,
+            changes: {
+              files: [{ path: 'app.ts', kind: 'modified', hunks: [], added: 1, removed: 1 }],
+              more: 0,
+            },
+          }
+        : { summary: `Ran: ${String(args.command)}`, exitCode: 0 },
+};
+const stubWrite: Tool = {
+  name: 'write',
+  description: 'create a file',
+  parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+  run: async args => ({ summary: `Wrote ${String(args.path)} (+1)` }),
 };
 const stubRead: Tool = {
   name: 'read',
@@ -82,8 +97,16 @@ const config: Config = {
 async function readOffered(commands: string[]): Promise<boolean[]> {
   h.scripted.length = 0;
   h.offered.length = 0;
+  // `write:<path>` is a write call; anything else is a bash command.
   commands.forEach((command, n) =>
-    h.scripted.push({ content: '', toolCalls: [{ id: `b${n}`, name: 'bash', args: { command } }] }),
+    h.scripted.push({
+      content: '',
+      toolCalls: [
+        command.startsWith('write:')
+          ? { id: `w${n}`, name: 'write', args: { path: command.slice(6), content: 'x' } }
+          : { id: `b${n}`, name: 'bash', args: { command } },
+      ],
+    }),
   );
   h.scripted.push({ content: 'done', toolCalls: undefined });
   await runTurn({
@@ -100,7 +123,7 @@ async function readOffered(commands: string[]): Promise<boolean[]> {
       skills: [],
     },
     config,
-    tools: [stubRead, stubBash],
+    tools: [stubRead, stubBash, stubWrite],
     payloads: new PayloadStore(),
     promptMode: 'agent',
     onMessage: () => {},
@@ -140,4 +163,16 @@ describe('withdrawal holds until progress (#808)', () => {
     expect(offered.slice(first, applyCall + 1).every(o => !o)).toBe(true);
     expect(offered[applyCall + 1]).toBe(true);
   });
+
+  // A model told the pause lifts once an edit lands wrote a junk file to get its reads back.
+  it.each(['write:.read-unblock', 'scratch'])(
+    'keeps the hold after a new file (%s)',
+    async step => {
+      const offered = await readOffered([...loop, step, 'npm test']);
+      const first = offered.indexOf(false);
+      const stepCall = loop.length;
+      expect(stepCall + 1).toBeLessThan(first + WITHDRAW_HOLD_ROUNDS);
+      expect(offered[stepCall + 1]).toBe(false);
+    },
+  );
 });

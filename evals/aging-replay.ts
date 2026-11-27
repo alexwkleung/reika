@@ -20,7 +20,7 @@ import {
   shouldCompact,
 } from '../src/agent/compaction.js';
 import { parseBashFileRead } from '../src/agent/bashread.js';
-import { findFreshToolBlockStart, taskSpecIndex } from '../src/provider/toolcall.js';
+import { AGE_CALL_ARGS, findFreshToolBlockStart, taskSpecIndex } from '../src/provider/toolcall.js';
 import { estimateRequestTokens } from '../src/provider/tokens.js';
 import { loadSession, modelHistoryFromScrollback } from '../src/store/sessions.js';
 import type { Message } from '../src/types.js';
@@ -184,6 +184,7 @@ function replay(source: Message[], window: number, arm: Arm): Stats {
           window,
           MIN_GEN,
           true,
+          AGE_CALL_ARGS,
           recentRoundsStart(live, keep),
         );
         marked += res.marked;
