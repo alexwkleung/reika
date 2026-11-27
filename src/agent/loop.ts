@@ -1068,6 +1068,20 @@ export function withdrawalRemedy(toolNames: ReadonlySet<string>): string {
   return 'Answer from what you already have';
 }
 
+// When reading comes back, said so a cornered model knows the pause is not the end of the turn:
+// inkling-2-mini stopped on its first paused round in 5 of 5 pauses with "the tools are paused, so I
+// cannot re-read", and kept working when told the pause would lift. A FAILED edit also ends the hold
+// (edit recovery needs reads); that is left unsaid, or a junk edit would buy the reads back.
+export function withdrawalReturn(toolNames: ReadonlySet<string>): string {
+  if (toolNames.has('edit') || toolNames.has('write')) {
+    return 'The pause is temporary: reading comes back once an edit to an existing file lands (a new file does not count), or after a few rounds.';
+  }
+  if (toolNames.has('bash')) {
+    return 'The pause is temporary: reading comes back once a command changes an existing file (a new file does not count), or after a few rounds.';
+  }
+  return 'The pause is temporary: reading comes back after a few rounds.';
+}
+
 // The hard tier of the loop ledger, hand-wrapped per mode. The remedy differs (see
 // withdrawalRemedy) but the two escapes that need no tool at all — name the blocker, or stop if the
 // change is done — survive in every mode: they are what keeps a cornered model from being forced
@@ -1079,6 +1093,7 @@ function withdrawnLedgerLines(toolNames: ReadonlySet<string>): string[] {
       'Reading and searching are now PAUSED. Make the edit the task requires with the edit/write',
       'tools, state specifically what is still blocking you, or — if the change is already complete —',
       'say so and stop.',
+      withdrawalReturn(toolNames),
     ];
   }
   if (toolNames.has('bash')) {
@@ -1086,11 +1101,13 @@ function withdrawnLedgerLines(toolNames: ReadonlySet<string>): string[] {
       'Reading and searching are now PAUSED. Make the change the task requires by running the',
       'command that applies it, state specifically what is still blocking you, or — if the change',
       'is already complete — say so and stop.',
+      withdrawalReturn(toolNames),
     ];
   }
   return [
     'Reading and searching are now PAUSED. Answer from what you already have, state specifically',
     'what is still blocking you, or — if the change is already complete — say so and stop.',
+    withdrawalReturn(toolNames),
   ];
 }
 
@@ -1103,7 +1120,7 @@ export function buildWithdrawalDirective(toolNames: ReadonlySet<string>): string
     `(reika: this is deliberate, not a fault. ${withdrawnToolsPhrase(toolNames)} are paused ` +
     'because the work has repeated without making progress. Sending this call again now gets ' +
     `this same reply, so do not retry it. ${withdrawalRemedy(toolNames)}, state what is ` +
-    'specifically blocking you, or — if the change is already complete — say so and stop.)'
+    `specifically blocking you, or — if the change is already complete — say so and stop. ${withdrawalReturn(toolNames)})`
   );
 }
 
@@ -1143,8 +1160,16 @@ export function shouldWithdrawInspection(opts: {
 // itself stuck gets reads back.
 export const WITHDRAW_HOLD_ROUNDS = 4;
 
+// What ends a hold early: a change to a file that already existed. A new file does not count: told
+// that reading returns once an edit lands, a model wrote `.read-unblock` ("I'll write a small file to
+// unblock reading") and got its reads back for a one-line junk file. `write` only ever creates.
+export function liftsWithdrawal(name: string, changes: ToolResult['changes']): boolean {
+  if (name === 'edit') return true;
+  return name === 'bash' && !!changes && changes.files.some(f => f.kind !== 'created');
+}
+
 // Whether a withdrawal already in force stays on this round although the loop no longer reads as
-// active. `since` is the round it began; `mutated` is whether the tree has changed since then.
+// active. `since` is the round it began; `mutated` is whether `liftsWithdrawal` has seen a change since then.
 export function holdWithdrawal(opts: {
   round: number;
   since: number | undefined;
@@ -4230,11 +4255,11 @@ export async function runTurn(opts: {
       // analogue for.
       if (!bouncedBlindEdit && didMutate(call.name, changes)) {
         editingStarted = true;
-        mutatedSinceWithdrawal = true;
         // Only a landed change is progress for the re-read backstop; a failed edit is an attempt.
         if (!MUTATING_TOOLS.has(call.name) || /^(Edited|Wrote) /.test(summary))
           readTrace.noteProgress();
       }
+      if (!bouncedBlindEdit && liftsWithdrawal(call.name, changes)) mutatedSinceWithdrawal = true;
       if (!bouncedBlindEdit && MUTATING_TOOLS.has(call.name)) {
         // Track edit-recovery state: a failed edit (old_string not in the file, etc.) keeps the model
         // needing a re-read; a successful one clears it. Drives the withdrawal exemption + dead-end
