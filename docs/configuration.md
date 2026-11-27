@@ -343,8 +343,8 @@ window.
   means fewer of them per run (three were about 24 minutes of a 2h15m run), at the cost of less live
   context between them. It is a knob for measuring that trade (`evals/prefixcost-report.ts`), not a
   setting with a known better value
-- **`REIKA_AGE_ARGS`** — In a replay of saved sessions it cut folds by a fifth at a 24k window and by
-  a third at 32k, with re-reads unchanged; a small A/B on a local 35B model pointed the same way.
+- **`REIKA_AGE_ARGS`** — In a replay of saved sessions it cut folds by 18% at a 24k window and by 28%
+  at 32k, with re-reads unchanged; a small A/B on a local 35B model pointed the same way.
   A new call that copies a stub is not run, and the model is told to send the real text;
   `REIKA_DEBUG` logs `age-args-echo` when that happens
 - **`REIKA_PLAN_HANDOFF`** — `0` turns it off

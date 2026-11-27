@@ -16,7 +16,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   instead of running the command again (#1112).
 - When older context is trimmed, old tool-call arguments, such as an edit's text or a long shell
   command, are now cut to a short stub too, so a long session folds its history less often. In a
-  replay of saved sessions it made folds a fifth to a third rarer. `REIKA_AGE_ARGS=0` turns it off
+  replay of saved sessions it made folds about a fifth rarer at a 24k window and over a quarter rarer at 32k. `REIKA_AGE_ARGS=0` turns it off
   (#1126).
 
 ### Changed
