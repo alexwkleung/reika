@@ -866,7 +866,17 @@ skipped on the first sweep, because relief that small can't plausibly be what ti
 under the watermark while losing it can cost a whole re-read round — and the re-read puts the
 payload straight back, pulling the next shrink event forward. The second sweep takes the crumbs too,
 so the floor only ever reorders; it can never keep an event from reaching its watermark. Reasoning
-is aged on the first sweep at any size, since the model can't re-fetch its own reasoning. When
+is aged on the first sweep at any size, since the model can't re-fetch its own reasoning. A
+third pass (on by default since 2026-11-27; `REIKA_AGE_ARGS=0` is the baseline arm, #1126) stubs old call arguments, an edit's
+strings and a bash heredoc (`stubCallArgs`), which are otherwise sent verbatim forever and were
+20–27% of what a fold could not shed in the replay. It goes after the crumbs, never before the
+payloads: shed first, the replay measured more events and more folds. Default-on on the risk
+profile, not a significant result: the 35b A/B in #1126 pointed the replay's way with folds counted in
+single digits. A new call carrying a stub (`agedArgEcho`, matched on its tail so a mangled copy
+counts) is not run once a stub has been served: a stub copied into `new_string`, a write or a
+heredoc would put the placeholder into the file. The identical call sent again runs, so a file that
+really contains the text can still be written. `age-args-echo refused`/`resent` log both.
+When
 aging fires but can't reach the watermark (it stops at the protected tail, and on a small window
 the system prompt + the active round's reads are most of it), compaction is pulled into the same
 event — otherwise the estimate hovers just under the threshold and the next round immediately

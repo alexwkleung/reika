@@ -69,6 +69,7 @@ export const DROPPED_MESSAGE_KEYS = [
   'payloadId',
   'aged',
   'reasoningAged',
+  'argsAged',
   'continuationTail',
 ] as const satisfies readonly KeysOfUnion<Message>[];
 

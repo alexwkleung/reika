@@ -56,6 +56,7 @@ const fullAssistant: Full<'assistant'> = {
   planFinal: true,
   planChecks: { at: 3, missing: ['x'], deadUrls: [] },
   reasoningAged: true,
+  argsAged: true,
   continuationTail: true,
 };
 const fullTool: Full<'tool'> = {
@@ -97,7 +98,7 @@ const everyRole: Message[] = [
 ];
 
 describe('wireMessage', () => {
-  it('drops exactly the six fields no renderer draws, across every role', () => {
+  it('drops exactly the seven fields no renderer draws, across every role', () => {
     const dropped = new Set<string>();
     for (const msg of everyRole) {
       const out = Object.keys(wireMessage(msg));
@@ -105,7 +106,15 @@ describe('wireMessage', () => {
       expect(out.every(k => k in msg)).toBe(true);
     }
     expect([...dropped].sort()).toEqual(
-      ['aged', 'continuationTail', 'payload', 'payloadId', 'reasoningAged', 'rendered'].sort(),
+      [
+        'aged',
+        'argsAged',
+        'continuationTail',
+        'payload',
+        'payloadId',
+        'reasoningAged',
+        'rendered',
+      ].sort(),
     );
     expect([...DROPPED_MESSAGE_KEYS].sort()).toEqual([...dropped].sort());
   });
@@ -118,8 +127,8 @@ describe('wireMessage', () => {
   });
 
   it('drops the aging marks off an assistant message and keeps the rest', () => {
-    const { reasoningAged, continuationTail, ...kept } = fullAssistant;
-    void [reasoningAged, continuationTail];
+    const { reasoningAged, argsAged, continuationTail, ...kept } = fullAssistant;
+    void [reasoningAged, argsAged, continuationTail];
     expect(Object.keys(wireMessage(fullAssistant)).sort()).toEqual(Object.keys(kept).sort());
     expect(wireMessage(fullAssistant)).toEqual(kept);
   });

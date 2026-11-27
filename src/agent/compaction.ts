@@ -2,6 +2,9 @@ import type { Message, ToolCall } from '../types.js';
 import { compactionNoteHeader } from './compactionreport.js';
 import { DEFAULT_MIN_GEN_TOKENS } from '../provider/budget.js';
 import {
+  AGE_CALL_ARGS,
+  AGED_ARGS_MIN_CHARS,
+  stubCallArgs,
   TASK_SPEC_PIN_CHARS,
   agedContentChars,
   findFreshToolBlockStart,
@@ -252,6 +255,8 @@ export type AgeResult = {
   // Payloads aged at or above the floor (first sweep) vs below it (second sweep, needed anyway).
   bulk: number;
   crumbs: number;
+  // Assistant messages whose long call arguments went to stubs (REIKA_AGE_ARGS).
+  args: number;
   kept: number;
   // Tokens still over the low watermark when the sweeps ran out of candidates; 0 when the event
   // reached it. Non-zero is what escalates to a fold in the same round (loop.ts,
@@ -271,9 +276,10 @@ export function batchAgePayloads(
   // reasoning whatever `reasoningAged` says, so a mark would shed nothing while still costing the
   // sweep a pass — and `marked` would report a shed that never happened.
   shedReasoning = true,
+  shedArgs = AGE_CALL_ARGS,
 ): AgeResult {
   const threshold = compactThreshold(contextWindow, minGen);
-  const none: AgeResult = { marked: 0, bulk: 0, crumbs: 0, kept: 0, short: 0 };
+  const none: AgeResult = { marked: 0, bulk: 0, crumbs: 0, args: 0, kept: 0, short: 0 };
   if (estimate() <= threshold) return none;
   const target = threshold * AGE_LOW_FRACTION;
   // Never age the active round: the trailing tool block is what the model is about to act on, and
@@ -296,7 +302,7 @@ export function batchAgePayloads(
   // event from reaching its watermark — the worst case is the previous behavior. Reasoning is aged
   // in the first sweep regardless of size, because dropping it can't provoke a re-read (the model
   // cannot re-fetch its own reasoning) and so carries none of this risk.
-  const out: AgeResult = { marked: 0, bulk: 0, crumbs: 0, kept: 0, short: 0 };
+  const out: AgeResult = { marked: 0, bulk: 0, crumbs: 0, args: 0, kept: 0, short: 0 };
   // `kept` is counted at the end over what survived, not decremented as the sweeps run: a payload
   // skipped by the first sweep and taken by the second was never kept, and tracking that by hand is
   // exactly the bookkeeping that drifts.
@@ -318,7 +324,7 @@ export function batchAgePayloads(
   // the tail IS that message and this loop never reaches it. Promoting the tail into `content` is
   // what makes it visible to the chat template; this is what keeps that promotion from becoming a
   // standing window cost only a fold could clear.
-  const marks = shedOrder(history, protect, specIdx, shedReasoning);
+  const marks = shedOrder(history, protect, specIdx, shedReasoning, shedArgs);
   let applied = 0;
   const applyTo = (k: number): void => {
     while (applied < k) marks[applied++].apply();
@@ -348,20 +354,28 @@ export function batchAgePayloads(
     out.marked++;
     if (marks[i].kind === 'bulk') out.bulk++;
     else if (marks[i].kind === 'crumb') out.crumbs++;
+    else if (marks[i].kind === 'args') out.args++;
   }
   out.kept = survivingCrumbs();
   return out;
 }
 
-type ShedMark = { kind: 'tail' | 'reasoning' | 'bulk' | 'crumb'; apply(): void; undo(): void };
+type ShedMark = {
+  kind: 'tail' | 'reasoning' | 'bulk' | 'crumb' | 'args';
+  apply(): void;
+  undo(): void;
+};
 
 // The marks batchAgePayloads would make if it never reached its watermark, in the order it makes
-// them: spent continuation tails, then reasoning and bulk payloads oldest-first, then crumbs.
+// them: spent continuation tails, then reasoning and bulk payloads oldest-first, then crumbs, then
+// old call arguments. Arguments go last: shed before the payloads, the replay measured more events
+// and more folds, since each one frees little and the payloads it spares stay in the window.
 function shedOrder(
   history: Message[],
   protect: number,
   specIdx: number,
   shedReasoning: boolean,
+  shedArgs: boolean,
 ): ShedMark[] {
   const marks: ShedMark[] = [];
   for (let i = 0; i < protect; i++) {
@@ -410,6 +424,14 @@ function shedOrder(
       }
     }
   }
+  if (shedArgs) {
+    for (let i = 0; i < protect; i++) {
+      const m = history[i];
+      if (m.role !== 'assistant' || m.argsAged || !m.toolCalls) continue;
+      if (!m.toolCalls.some(tc => JSON.stringify(tc.args).length >= AGED_ARGS_MIN_CHARS)) continue;
+      marks.push({ kind: 'args', apply: () => (m.argsAged = true), undo: () => delete m.argsAged });
+    }
+  }
   return marks;
 }
 
@@ -434,7 +456,13 @@ function msgChars(m: Message): number {
       return (
         (m.content?.length ?? 0) +
         (m.reasoning?.length ?? 0) +
-        (m.toolCalls ? JSON.stringify(m.toolCalls).length : 0)
+        (m.toolCalls
+          ? JSON.stringify(
+              m.argsAged
+                ? m.toolCalls.map(tc => ({ ...tc, args: stubCallArgs(tc.name, tc.args) }))
+                : m.toolCalls,
+            ).length
+          : 0)
       );
     case 'tool':
       // An aged payload is not always just its summary: it may carry a bounded skeleton, or (under
