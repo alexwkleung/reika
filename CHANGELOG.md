@@ -29,6 +29,17 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- On a small context window, re-reading a file after reika trimmed it from the model's context
+  no longer counts toward a read loop, so reading is no longer paused on a model that is only
+  getting back what was removed and still needs those lines to make its edit. A model that keeps
+  re-reading the same lines with no edit landing is still paused (#1118).
+- Reading the same part of a file again after reika trimmed it from the model's context no longer
+  counts as a repeated read either, so it no longer pauses reading on its own (#1119).
+- When older tool output is trimmed from the model's context, the note telling the model so now
+  names which calls were trimmed and says the newer results are still there, so a model no longer
+  takes the repeated note as a new message and re-reads files it still has (#1120).
+- A subagent whose report was cut off at the token limit on its last round now hands the parent
+  that report, instead of a "reached max turns" message with the report thrown away (#1124).
 - In `reika web`, the mode and model menus open with the current option already highlighted,
   instead of showing nothing highlighted for a moment first (#1106).
 - In `reika web`, a subagent's rows are now just indented, with the same spacing as the rest of
