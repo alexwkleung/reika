@@ -53,12 +53,13 @@ const SENT_DENSITY_FLOOR = 1;
 // `=0` is the baseline arm; strict no-op when off. See dedupToolContent.
 const DEDUP_PAYLOADS = process.env.REIKA_DEDUP_PAYLOADS !== '0';
 
-// EXPERIMENT (REIKA_AGE_ARGS, default off): an old call's arguments are otherwise sent verbatim for
+// REIKA_AGE_ARGS (default on since 2026-11-27; `=0` is the baseline arm): an old call's arguments are otherwise sent verbatim for
 // the rest of the session, and at a fold an edit's strings and a bash heredoc are 20-27% of what no
 // shed can touch (evals/aging-replay.ts). Their effect is on disk and in the result, so once batch
 // aging marks a call (`argsAged`), each long string argument goes out as a stub. A bash command keeps
 // its first line, which says what ran. Only at shrink events, so it costs nothing on prefill.
-export const AGE_CALL_ARGS = process.env.REIKA_AGE_ARGS === '1';
+// Default-on on the risk profile: a small A/B pointed the replay's way, with no stub copied back.
+export const AGE_CALL_ARGS = process.env.REIKA_AGE_ARGS !== '0';
 // A call whose arguments serialize shorter than this is left whole: the stub would buy nothing.
 export const AGED_ARGS_MIN_CHARS = 300;
 const AGED_ARG_STRING_MIN_CHARS = 120;
