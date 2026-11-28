@@ -49,6 +49,13 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 - In `reika web`, a subagent's rows are now just indented, with the same spacing as the rest of
   the conversation, instead of running into each other beside a broken guide line (#1117).
 
+### Security
+
+- A model's sandboxed shell command can no longer reach the web search browser's debugging port,
+  which would have let it get the browser to open any URL, past the sandbox's network block. A
+  project's `.env` can no longer set `REIKA_CHROME_PATH`, `REIKA_MODE_MODELS` or
+  `REIKA_SPILL_STATS_FILE`; set them in your shell or `~/.config/reika/.env` (#1128).
+
 ## [0.14.0] - 2026-11-20
 
 ### Added
