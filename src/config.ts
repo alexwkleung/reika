@@ -35,6 +35,10 @@ const PROJECT_ENV_DENIED = new Set([
   'REIKA_CDP_SEARCH',
   'REIKA_CDP_PORT',
   'REIKA_DEBUG_FILE',
+  // A program reika runs, a profile (so a server) a mode's turns go to, and a file path to write.
+  'REIKA_CHROME_PATH',
+  'REIKA_MODE_MODELS',
+  'REIKA_SPILL_STATS_FILE',
 ]);
 
 export function isDeniedFromProjectEnv(key: string): boolean {

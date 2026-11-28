@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { sandboxProfile } from '../tools/_sandbox.js';
 import { buildBrowserCloseScript, ChromeHost } from './_chrome.js';
 
 const spawnedDetached = vi.hoisted(() => vi.fn(() => ({ unref() {} })));
@@ -24,6 +25,16 @@ function stubCdp(tabs: { type: string; url: string }[]): string[] {
   });
   return requested;
 }
+
+describe('ChromeHost sandbox port', () => {
+  // A sandboxed command reaching the debugging port could have the browser load any URL.
+  it('denies its debugging port to sandboxed commands from construction, before any launch', () => {
+    new ChromeHost({ port: 48761 });
+    for (const p of [sandboxProfile({ network: false }), sandboxProfile({ network: true })]) {
+      expect(p).toContain('(deny network-outbound (remote ip "localhost:48761"))');
+    }
+  });
+});
 
 describe('ChromeHost idle shutdown', () => {
   afterEach(() => vi.unstubAllGlobals());
