@@ -254,6 +254,18 @@ describe('CdpSearchProvider', () => {
     }
   });
 
+  it('does not read a thin results page as a wall because its text carries the wording', async () => {
+    const thin = JSON.stringify({
+      links: results(1).map(link),
+      anchors: 40,
+      bodyText: 'Verifying you are not a bot with reCAPTCHA v3: unusual traffic detection',
+    });
+    const s = spy();
+    const out = await cdp(hostReturning(thin, s)).search('recaptcha v3 unusual traffic');
+    expect(out).toHaveLength(1);
+    expect(s.shown).toBe(0);
+  });
+
   it('does not read a page with results as a wall because a snippet quotes the wording', async () => {
     const quoting = JSON.stringify({
       links: results(5).map(link),

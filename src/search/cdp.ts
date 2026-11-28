@@ -199,11 +199,13 @@ function challengeText(engine: SearchEngine, page: PageRecord): boolean {
 
 // Same principle as #236: a search the harness could not serve has to say so. A CAPTCHA reported
 // as an empty result set reads to the model as a bad query, and it rewords and retries against a
-// wall that will refuse every variant identically. The wording counts only while the page offers
-// too little to use, so a result whose snippet quotes "unusual traffic" does not read as a wall.
+// wall that will refuse every variant identically. Either half needs a page with no results at all:
+// a results page prints the query and its matches back, so a thin page for "recaptcha v3" or one
+// whose snippet quotes "unusual traffic" would otherwise raise the window for a check that is not
+// there, and wait out the whole bound on it.
 function interstitial(engine: SearchEngine, page: PageRecord, picked: number): boolean {
-  if (picked < MIN_USABLE_RESULTS && challengeText(engine, page)) return true;
-  return picked === 0 && page.anchors < engine.minAnchors;
+  if (picked > 0) return false;
+  return challengeText(engine, page) || page.anchors < engine.minAnchors;
 }
 
 function unavailable(
