@@ -6,10 +6,10 @@ vi.mock('./ui/pr.js', () => ({ resolvePr }));
 
 const { createController } = await import('./controller.js');
 
-const session = (cwd = '/repo/app') =>
+const session = (cwd = '/repo/app', config: { prBadge?: boolean } = {}) =>
   ({
     bundle: { cwd },
-    getSnapshot: () => ({ config: {} }),
+    getSnapshot: () => ({ config }),
     subscribe: () => () => {},
   }) as unknown as Session;
 
@@ -48,6 +48,17 @@ describe('the status bar PR', () => {
     vi.useFakeTimers({ toFake: ['setInterval'] });
     await flush();
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  it('never shells out with REIKA_PR_BADGE=0, timer ticks included', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval'] });
+    const c = createController({ mode: 'agent', remember: vi.fn(), pollPr: true });
+    c.attachSession(session('/repo/app', { prBadge: false }), 'default');
+    await flush();
+    vi.advanceTimersByTime(60_000);
+    await flush();
+    expect(resolvePr).not.toHaveBeenCalled();
+    expect(c.getSnapshot().pr).toBeNull();
   });
 
   it('never shells out unless a front end asks', async () => {

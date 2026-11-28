@@ -828,7 +828,7 @@ export function createController(opts: {
   let prTimer: ReturnType<typeof setInterval> | null = null;
   const checkPr = async (): Promise<void> => {
     const s = session;
-    if (!s) return;
+    if (!s || s.getSnapshot().config.prBadge === false) return;
     const next = await resolvePr(s.bundle.cwd, Date.now());
     if (next !== snapshot.pr) set({ pr: next });
   };
