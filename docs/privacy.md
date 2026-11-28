@@ -140,12 +140,18 @@ home directory, readable by your user account. If that doesn't suit you, set `RE
 delete the folder for a project. A `/save` transcript, the one meant for sharing, is redacted by
 default, and `REIKA_ANON=1` also replaces your git name, email and account names in it.
 
-## If something here doesn't match
+## If something doesn't match, or seems off
 
 If Reika sends a request or writes a file this page doesn't mention, that is a bug in Reika or in
-this page, and either way it should be fixed.
+this page, and either way it should be fixed. The same goes for a choice here that seems wrong to
+you, even if it works as described: a default that should be off, a switch that should exist, or
+wording that left you with the wrong idea.
 
 - **Found a way around one of the guards** (the sandbox, the approval prompts, the fetch checks)?
   Report it privately, as described in [SECURITY.md](../SECURITY.md).
-- **Anything else**: open a [GitHub issue](https://github.com/alexwkleung/reika/issues), or write to
+- **Something that doesn't match, or a choice you'd change**: open a
+  [GitHub issue](https://github.com/alexwkleung/reika/issues).
+- **A question about any of it**: ask in
+  [GitHub Discussions](https://github.com/alexwkleung/reika/discussions).
+- **Anything you'd rather not post publicly**: write to
   [hello@reikacode.com](mailto:hello@reikacode.com).
