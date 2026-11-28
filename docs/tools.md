@@ -19,6 +19,13 @@ The agent has these tools. Optional ones register only when their config is pres
 | `mcp__<server>__<tool>` | A tool offered by a configured MCP server (one row per tool; see below) | yes                          | `REIKA_MCP_SERVERS`                                                   |
 | `ask_user`              | Ask you ONE multiple-choice question mid-turn and wait for the answer   | no (it _is_ the prompt)      | `REIKA_ASK=0` removes it                                              |
 
+`edit` has an experimental positional form, off by default (`REIKA_EDIT_POSITION=1`, see
+[configuration](configuration.md)): instead of `old_string` it takes `insert_after` or
+`insert_before` (text from the one line to insert beside) or `start_line`/`end_line` written
+`N:hash` from `read`'s gutter, which then carries a short hash per line. A range whose hashes no
+longer match is refused with the current lines shown, and a range replace returns the lines it
+removed.
+
 ## Approvals
 
 An approval prompt shows a unified diff (or, for `bash`, the command), with **Approve / Decline /

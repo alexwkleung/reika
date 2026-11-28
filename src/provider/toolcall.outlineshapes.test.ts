@@ -180,3 +180,24 @@ describe('structure is relative to the page, not the file (#269)', () => {
     );
   });
 });
+
+// #1132: under REIKA_EDIT_POSITION the gutter carries a line hash. The outline must still find its
+// lines and keep them whole, hash included, so a structural line can serve as a range edge.
+describe('hashed read gutter outlines like the plain one (#1132)', () => {
+  const h = (n: number, text: string): string => `${String(n).padStart(5, ' ')}:abc│${text}`;
+  const FILE = [
+    h(1, 'export function first() {'),
+    ...Array.from({ length: 40 }, (_, i) => h(2 + i, '  const value = compute();')),
+    h(42, '}'),
+    h(43, 'export function second() {'),
+    ...Array.from({ length: 40 }, (_, i) => h(44 + i, '  const other = compute();')),
+    h(84, '}'),
+  ].join('\n');
+
+  it('keeps the structural lines with their hashes', () => {
+    const aged = agedContent('Read src/a.ts lines 1-84 of 84', FILE);
+    expect(aged).toContain('    1:abc│export function first() {');
+    expect(aged).toContain('   43:abc│export function second() {');
+    expect(aged).not.toContain('compute()');
+  });
+});

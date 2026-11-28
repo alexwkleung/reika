@@ -3,7 +3,8 @@ import { readTool } from './read.js';
 import { listTool } from './list.js';
 import { grepTool } from './grep.js';
 import { globTool } from './glob.js';
-import { editTool } from './edit.js';
+import { editTool, positionalEditTool } from './edit.js';
+import { positionalEditsEnabled } from './_lineref.js';
 import { writeTool } from './write.js';
 import { bashTool, grindBashTool, minimalBashTool, readOnlyBashTool } from './bash.js';
 import { subagentTool } from './subagent.js';
@@ -29,7 +30,7 @@ export function defaultTools(config?: Config, opts: ToolListOptions = {}): Tool[
     listTool,
     grepTool,
     globTool,
-    editTool,
+    editToolForSession(),
     writeTool,
     bashTool,
     subagentTool,
@@ -37,6 +38,12 @@ export function defaultTools(config?: Config, opts: ToolListOptions = {}): Tool[
   ];
   if (askEnabled()) tools.push(askUserTool);
   return tools;
+}
+
+// #1132: the positional variant only under REIKA_EDIT_POSITION=1, so with it off the tool list in
+// the round-0 prefix is byte-identical.
+function editToolForSession(): Tool {
+  return positionalEditsEnabled() ? positionalEditTool : editTool;
 }
 
 // The web pair. `fetch_url` is unconditional, unlike `search`: fetching a known URL needs no
@@ -126,7 +133,7 @@ export function minimalTools(): Tool[] {
 // — the long unattended grind is exactly where the model would be left guessing. Same gating as
 // agent and plan mode.
 export function grindTools(config?: Config, opts: ToolListOptions = {}): Tool[] {
-  const tools: Tool[] = [readTool, editTool, grindBashTool];
+  const tools: Tool[] = [readTool, editToolForSession(), grindBashTool];
   if (askEnabled()) tools.push(askUserTool);
   tools.push(...webTools(config, opts));
   return tools;

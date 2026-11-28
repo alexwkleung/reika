@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { relative } from 'node:path';
 import { resolveUserPath } from './_paths.js';
 import { createHash } from 'node:crypto';
+import { gutterLine } from './_lineref.js';
 import type { Tool } from '../types.js';
 
 // Lines returned when the model gives no `limit`. Exported because the agent loop has to resolve
@@ -63,7 +64,7 @@ export const readTool: Tool = {
     // for the line's own leading indentation — everything after `│` is verbatim
     // file content. This keeps weaker models from mis-counting whitespace when
     // they copy text into an edit's old_string.
-    const numbered = slice.map((l, i) => `${String(offset + i).padStart(5, ' ')}│${l}`).join('\n');
+    const numbered = slice.map((l, i) => gutterLine(offset + i, l)).join('\n');
     // The summary's "of N" is evicted with the payload when this result ages out, so
     // the "more below" signal must live in the payload itself, at the point of recency,
     // and spell out the exact next call — weak models won't infer the offset arithmetic.

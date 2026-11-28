@@ -191,7 +191,7 @@ const DIFF_STRUCTURE_RE = /^(?:diff --git |--- |\+\+\+ |@@ )/;
 const AGED_READ_SKELETON_CHARS = 1024;
 // A `read` payload's gutter (see tools/read.ts). Nothing else in the harness emits it, so it is
 // also what identifies the payload as a code read rather than command output.
-const READ_GUTTER_RE = /^\s*(\d+)│(.*)$/;
+const READ_GUTTER_RE = /^\s*(\d+)(?::[0-9a-f]+)?│(.*)$/;
 // Top-level declarations only: a declaration keyword at column zero. Indented matches are excluded
 // deliberately — at any indent this fires on locals and object literals and the outline stops being
 // an outline. Deliberately several languages wide and shallow; a missed dialect degrades to the

@@ -107,8 +107,10 @@ import {
   ReadFirstGate,
   buildReadFirstDirective,
   oldStringProvesBytes,
+  positionProvesBytes,
   probeWouldLand,
 } from './readfirst.js';
+import { hasPositionArgs } from '../tools/edit.js';
 import {
   SUBAGENT_REPORT_DIRECTIVE,
   SUBAGENT_REPORT_FRAME,
@@ -3965,15 +3967,18 @@ export async function runTurn(opts: {
         tool !== undefined &&
         typeof call.args.path === 'string' &&
         readFirst.wouldBounce(call.args.path, opts.history, prefixStable);
+      const positional = hasPositionArgs(call.args);
       const provenEdit =
-        READ_FIRST_EXACT &&
         blindEdit &&
-        (await oldStringProvesBytes(
-          opts.bundle.cwd,
-          String(call.args.path),
-          String(call.args.old_string ?? ''),
-          String(call.args.new_string ?? ''),
-        ));
+        (positional
+          ? await positionProvesBytes(opts.bundle.cwd, String(call.args.path), call.args)
+          : READ_FIRST_EXACT &&
+            (await oldStringProvesBytes(
+              opts.bundle.cwd,
+              String(call.args.path),
+              String(call.args.old_string ?? ''),
+              String(call.args.new_string ?? ''),
+            )));
       if (provenEdit) debugLog(`[reika:debug] round=${i} read-first proven ${call.args.path}\n`);
       const bouncedBlindEdit =
         blindEdit &&
@@ -4071,12 +4076,15 @@ export async function runTurn(opts: {
         summary = `edit paused — read ${blindPath} first, then re-issue the edit`;
         payload = buildReadFirstDirective(blindPath);
         if (debugEnabled()) {
-          const probe = await probeWouldLand(
-            opts.bundle.cwd,
-            blindPath,
-            String(call.args.old_string ?? ''),
-            String(call.args.new_string ?? ''),
-          );
+          // A positional edit is bounced only when it would not apply (positionProvesBytes).
+          const probe = hasPositionArgs(call.args)
+            ? 'would-land=no match=position'
+            : await probeWouldLand(
+                opts.bundle.cwd,
+                blindPath,
+                String(call.args.old_string ?? ''),
+                String(call.args.new_string ?? ''),
+              );
           debugLog(`[reika:debug] round=${i} read-first bounce ${blindPath} ${probe}\n`);
         }
       } else if (refusedArgEcho) {
