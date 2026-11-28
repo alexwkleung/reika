@@ -3,7 +3,7 @@
 User-facing changes in each release: fixes, changed behavior or defaults, new or renamed config
 keys, commands and tools. Reika is 0.x, so a minor version may change behavior and config.
 
-## [Unreleased]
+## [0.15.0] - 2026-11-27
 
 ### Added
 
@@ -18,7 +18,6 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   command, are now cut to a short stub too, so a long session folds its history less often. In a
   replay of saved sessions it made folds about a fifth rarer at a 24k window and over a quarter rarer at 32k. `REIKA_AGE_ARGS=0` turns it off
   (#1126).
-
 - `REIKA_PR_BADGE=0` turns off the status bar's pull request badge, and with it the `gh pr view`
   lookup it makes against GitHub about once a minute (#1129).
 
@@ -41,7 +40,6 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   returned one result, often Brave's own footer link. Search now asks DuckDuckGo first and Brave
   only when DuckDuckGo returns too little, and it no longer picks up links from a results page's
   header or footer (#1131).
-
 - On a small context window, re-reading a file after reika trimmed it from the model's context
   no longer counts toward a read loop, so reading is no longer paused on a model that is only
   getting back what was removed and still needs those lines to make its edit. A model that keeps
