@@ -403,6 +403,7 @@ window.
 | `REIKA_INPUT_FLOOR`   | `1`     | Experimental. Keeps the input box on the terminal's bottom rows: the live frame fills the screen from startup and never gets shorter than the space it holds. `0` restores the frame that follows its content. |
 | `REIKA_BASIC_GLYPHS`  | auto    | Draws the UI with glyphs a basic console font carries (`●`, `└`, `│`, square borders, an ASCII spinner) in place of the ones it lacks (`⏺`, `↳`, `▎`, rounded borders, braille).                               |
 | `REIKA_WORKING_WORDS` | `1`     | Rotates garden and perfumery verbs on the busy line ("Blooming…", "Steeping…"); `0` shows "Working". The web page follows it too.                                                                              |
+| `REIKA_PR_BADGE`      | `1`     | Shows the current branch's pull request in the status bar, looked up with `gh pr view`. `0` turns it off, and Reika then makes no GitHub requests of its own. The web page follows it too.                     |
 
 - **`REIKA_SYNC_OUTPUT`** — Ink paints a frame by erasing and redrawing, in three separate writes
   when a message moves into scrollback. If the process is swapped out between them under memory
