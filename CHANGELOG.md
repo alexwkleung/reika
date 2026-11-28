@@ -36,6 +36,12 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 
 ### Fixed
 
+- Web search through the browser (on by default on macOS) works again. Brave Search had started
+  wrapping most of its results in links that hide where they go, so a typical coding search
+  returned one result, often Brave's own footer link. Search now asks DuckDuckGo first and Brave
+  only when DuckDuckGo returns too little, and it no longer picks up links from a results page's
+  header or footer (#1131).
+
 - On a small context window, re-reading a file after reika trimmed it from the model's context
   no longer counts toward a read loop, so reading is no longer paused on a model that is only
   getting back what was removed and still needs those lines to make its edit. A model that keeps

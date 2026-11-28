@@ -1,120 +1,47 @@
 import { debugLog } from '../debug.js';
 import { ChromeHost, type BrowserHost, type TabHandle } from './_chrome.js';
+import { ENGINE_ORDER, type SearchEngine } from './engines.js';
+import { collectScript, pickResults, type PageRecord } from './extract.js';
 import { SearchUnavailableError } from './types.js';
 import type { SearchOptions, SearchProvider, SearchResult } from './types.js';
 
-// Brave, not Google. Measured on a live SERP: Google and Bing launder every outbound link through
-// an opaque tracker (`google.com/goto?url=…`, `bing.com/ck/a?…`) — 0 of 53 and 0 of 46 visible links
-// respectively survive to a usable URL, and `cite` is a display string, not a fallback ("2 answers ·
-// 2 years ago"). Brave hands back the real href. It also runs its own index rather than reselling
-// Bing, so it isn't correlated with the engine most likely to block us next. See #235.
-const SEARCH_URL = 'https://search.brave.com/search?q=';
-const OWN_HOSTS = /(^|\.)(brave\.com|search\.brave\.com)$/;
-// Brave ends some result anchors with a date line ("May 8, 2026", "3 days ago"), which the
-// last-line rule below then reported as the result's title.
-export const DATE_LINE =
-  /^(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.? \d{1,2},? \d{4}|\d+ (?:second|minute|hour|day|week|month|year)s? ago)$/i;
+export { DATE_LINE } from './extract.js';
 
-// Deliberately structure-agnostic: every visible link, filtered and deduped. No result-card
-// selectors, so a SERP redesign can't silently empty the results the way class-name scraping does.
-// The snippet walks up from the anchor until a container holds meaningfully more text than the
-// title, which needs no knowledge of the markup either.
-function extractionScript(maxResults: number): string {
-  return `(() => {
-  const clean = s => (s || '').replace(/\\s+/g, ' ').trim();
-  const visible = el => {
-    const r = el.getBoundingClientRect();
-    const st = getComputedStyle(el);
-    return r.width > 0 && r.height > 0 && st.display !== 'none' && st.visibility !== 'hidden';
-  };
-  const own = ${OWN_HOSTS.toString()};
-  // A result anchor's innerText is "SiteName / breadcrumb › path / actual title" on separate lines.
-  // The last line is the title; the earlier ones are chrome that would otherwise be fed to the model
-  // as part of it. No class names involved, so a redesign degrades this to "whole text", not to junk.
-  const dateLine = ${DATE_LINE.toString()};
-  const titleOf = a => {
-    const lines = (a.innerText || '').split('\\n').map(clean).filter(Boolean);
-    const named = lines.filter(l => !dateLine.test(l));
-    return named.length ? named[named.length - 1] : '';
-  };
-  // The container repeats the anchor's own text before the description; removing it stops every
-  // snippet from opening with a copy of the title it sits under.
-  const snippetFor = (a, title) => {
-    const anchorText = clean(a.innerText || '');
-    let node = a.parentElement;
-    for (let depth = 0; node && depth < 4; depth++, node = node.parentElement) {
-      // Stop before climbing into a container that groups several results, or the snippet picks up
-      // the *next* result's title. A block holding many links is a group, not one result's body.
-      if (node.querySelectorAll('a[href]').length > 3) break;
-      const full = clean(node.innerText || '');
-      if (full.length <= anchorText.length + 40) continue;
-      const body = clean(full.split(anchorText).join(' ').split(title).join(' '));
-      if (body.length >= 20) return body.slice(0, 300);
-    }
-    return '';
-  };
-  const seen = new Set();
-  const perHost = new Map();
-  const results = [];
-  for (const a of document.querySelectorAll('a[href]')) {
-    if (results.length >= ${maxResults}) break;
-    if (!visible(a)) continue;
-    const title = titleOf(a);
-    if (title.length < 8) continue;
-    let u;
-    try { u = new URL(a.href); } catch { continue; }
-    if (!/^https?:$/.test(u.protocol)) continue;
-    if (own.test(u.hostname)) continue;
-    const key = u.hostname + u.pathname;
-    if (seen.has(key)) continue;
-    // A result with a nested sub-link cluster (issues, discussions) contributes a run of tightly
-    // packed anchors from one host in DOM order, which crowds out every lower-ranked result. Two
-    // per host keeps that from turning eight slots into one site's sitemap.
-    const used = perHost.get(u.hostname) || 0;
-    if (used >= 2) continue;
-    perHost.set(u.hostname, used + 1);
-    seen.add(key);
-    results.push({ title: title.slice(0, 180), url: u.href, snippet: snippetFor(a, title) });
-  }
-  return JSON.stringify({
-    results,
-    anchors: document.querySelectorAll('a[href]').length,
-    blocked: /verifying you|not a bot|unusual traffic|are you a robot|verify you are human|complete the security check|traditional captcha/i
-      .test(document.body ? document.body.innerText : ''),
-  });
-})()`;
-}
+// Bot-check wording any engine might use, beside each engine's own (`engines.ts`). The list cannot
+// be complete (the challenge that prompted it says "Verifying you're not a bot", which none of the
+// obvious phrasings would have caught), so a page's shape carries the verdict too: see
+// `SearchEngine.minAnchors`.
+const SHARED_CHALLENGE_TEXT =
+  /not a bot|unusual traffic|are you a robot|verify you are human|complete the security check/i;
 
-type Extracted = {
-  results?: { title?: string; url?: string; snippet?: string }[];
-  anchors?: number;
-  blocked?: boolean;
-};
-
-// A real SERP carries dozens of links even when it matches nothing. A page with almost none is an
-// interstitial — a challenge, a consent wall, an error. This is the structural half of the check on
-// purpose: the phrase list above cannot be complete (the challenge that prompted it says "Verifying
-// you're not a bot", which none of the obvious phrasings would have caught), so the shape of the
-// page has to carry the verdict when the wording is unfamiliar.
-const MIN_SERP_ANCHORS = 10;
+// Fewer usable results than this from one engine, and the next engine is asked too (#1130). An
+// engine whose page changed does not fail: it answers with one footer link, which only a count
+// can tell from a real answer.
+const MIN_USABLE_RESULTS = 3;
 
 // A bot check is a gate, not noise: it does not clear on its own, and a solve persists on the
 // profile (observed on a real run — one manual solve, served normally since; #238). So on a
 // challenge the provider does the one thing that can work — puts the window in front of the user
-// and waits for the page to turn into a SERP — rather than retrying with backoff against a wall.
-// The wait is bounded because nobody may be at the desk; past it the search fails the turn the
-// way it did before, with the tab left open and raised so the check can still be completed later.
+// and waits for the page to turn into results — rather than retrying with backoff against a wall.
+// It does so only when no other engine answered well enough: a challenge another engine can route
+// around is not worth interrupting the user for. The wait is bounded because nobody may be at the
+// desk; past it the search fails the way it did before, with the tab left open and raised so the
+// check can still be completed later.
 const CHALLENGE_WAIT_MS = 120_000;
 const CHALLENGE_POLL_MS = 1_000;
 
 export type CdpProviderOptions = {
   challengeWaitMs?: number;
   challengePollMs?: number;
+  engines?: readonly SearchEngine[];
 };
+
+type EngineAnswer = SearchResult[] | 'challenged';
 
 export class CdpSearchProvider implements SearchProvider {
   private readonly waitMs: number;
   private readonly pollMs: number;
+  private readonly engines: readonly SearchEngine[];
   // One challenge at a time. Parallel searches in a turn are all refused together, and the solve
   // is profile-wide: the first to hit it raises its own tab and waits, the rest wait on the same
   // promise and then simply reload — a second raised window would compete for the user's one solve.
@@ -126,23 +53,69 @@ export class CdpSearchProvider implements SearchProvider {
   ) {
     this.waitMs = opts.challengeWaitMs ?? CHALLENGE_WAIT_MS;
     this.pollMs = opts.challengePollMs ?? CHALLENGE_POLL_MS;
+    this.engines = opts.engines ?? ENGINE_ORDER;
   }
 
   async search(query: string, opts: SearchOptions = {}): Promise<SearchResult[]> {
     const max = opts.maxResults ?? 8;
-    const url = SEARCH_URL + encodeURIComponent(query);
+    const enough = Math.min(max, MIN_USABLE_RESULTS);
+    let results: SearchResult[] = [];
+    let challenged: SearchEngine | undefined;
+    let failure: unknown;
+    for (const engine of this.engines) {
+      try {
+        const answer = await this.searchEngine(engine, query, max, opts, false);
+        if (answer === 'challenged') challenged ??= engine;
+        else results = mergeResults(results, answer, max);
+      } catch (e) {
+        failure ??= e;
+      }
+      if (results.length >= enough) return results;
+    }
+    if (challenged) {
+      try {
+        const answer = await this.searchEngine(challenged, query, max, opts, true);
+        // The challenged engine was asked first for a reason, so its results lead once it answers.
+        if (answer !== 'challenged') results = mergeResults(answer, results, max);
+      } catch (e) {
+        // A refused search must not read as an empty one (#236), but a partial answer from another
+        // engine is neither: it is what the turn has, and the challenge stays open for later.
+        if (results.length === 0) throw e;
+        debugLog(
+          `[cdp] ${challenged.name}: check not completed, keeping the other engines' results`,
+        );
+      }
+      return results;
+    }
+    if (results.length === 0 && failure) throw failure;
+    return results;
+  }
+
+  private async searchEngine(
+    engine: SearchEngine,
+    query: string,
+    max: number,
+    opts: SearchOptions,
+    allowChallenge: boolean,
+  ): Promise<EngineAnswer> {
+    const url = engine.searchUrl(query);
     const tab = await this.host.newTab();
     // Set when this tab is showing an unsolved check: closing it would take the challenge away
     // from the user who was just told to complete it.
     let holdOpen = false;
     try {
       await tab.navigate(url);
-      let data = parseExtraction(await tab.evaluate(extractionScript(max)));
+      let page = parsePage(await tab.evaluate(collectScript()));
+      let picked = pickResults(page, engine, max);
 
-      if (interstitial(data)) {
+      if (interstitial(engine, page, picked.length)) {
+        if (!allowChallenge) {
+          debugLog(`[cdp] ${engine.name} "${query}" -> challenge, trying the next engine`);
+          return 'challenged';
+        }
         const owner = !this.challenge;
         if (owner) {
-          this.challenge = this.awaitSolve(tab, max, opts).finally(() => {
+          this.challenge = this.awaitSolve(tab, engine, max, opts).finally(() => {
             this.challenge = undefined;
           });
         }
@@ -152,28 +125,20 @@ export class CdpSearchProvider implements SearchProvider {
           holdOpen = owner;
           throw e;
         }
-        // The solved tab has usually landed on the SERP by itself; the reload is for the tabs that
-        // waited on it, which still show the check they never got to answer.
+        // The solved tab has usually landed on the results by itself; the reload is for the tabs
+        // that waited on it, which still show the check they never got to answer.
         await tab.navigate(url);
-        data = parseExtraction(await tab.evaluate(extractionScript(max)));
+        page = parsePage(await tab.evaluate(collectScript()));
+        picked = pickResults(page, engine, max);
         // Passed the check and still walled: not a challenge any more, and not something waiting
         // longer can fix. Report it as the wall it is.
-        if (interstitial(data)) throw unavailable(data);
+        if (interstitial(engine, page, picked.length)) throw unavailable(engine, page);
       }
 
-      const results: SearchResult[] = (data.results ?? [])
-        .filter(r => r.url && r.url.trim().length > 0)
-        .slice(0, max)
-        .map(r => ({
-          title: r.title ?? '',
-          url: r.url as string,
-          snippet: r.snippet ?? '',
-          source: 'brave',
-        }));
       debugLog(
-        `[cdp] "${query}" -> ${results.length} result(s), ${data.anchors ?? 0} links on page`,
+        `[cdp] ${engine.name} "${query}" -> ${picked.length} result(s), ${page.anchors} links on page`,
       );
-      return results;
+      return picked.map(r => ({ ...r, source: engine.name }));
     } finally {
       // The tab closes even when extraction threw; leaking one per failed search would grow the
       // browser's memory for the rest of the session.
@@ -185,44 +150,73 @@ export class CdpSearchProvider implements SearchProvider {
   // (the page is mid-navigation after the solve, or the user closed the tab) is not a verdict;
   // the deadline is. The window goes back down only on success: on timeout it stays where the user
   // will find it, with the unsolved check on it.
-  private async awaitSolve(tab: TabHandle, max: number, opts: SearchOptions): Promise<void> {
+  private async awaitSolve(
+    tab: TabHandle,
+    engine: SearchEngine,
+    max: number,
+    opts: SearchOptions,
+  ): Promise<void> {
     await tab.show();
     opts.onChallenge?.('raised');
-    debugLog('[cdp] bot check: window raised, waiting for the user');
+    debugLog(`[cdp] ${engine.name} bot check: window raised, waiting for the user`);
     const deadline = Date.now() + this.waitMs;
-    let last: Extracted | undefined;
+    let last: PageRecord | undefined;
     for (;;) {
       await sleep(this.pollMs);
       try {
-        last = parseExtraction(await tab.evaluate(extractionScript(max)));
-        if (!interstitial(last)) break;
+        last = parsePage(await tab.evaluate(collectScript()));
+        if (!interstitial(engine, last, pickResults(last, engine, max).length)) break;
       } catch {
         /* mid-navigation; keep polling */
       }
       if (Date.now() >= deadline) {
-        debugLog('[cdp] bot check: not completed within the wait');
-        throw unavailable(last ?? { blocked: true }, true);
+        debugLog(`[cdp] ${engine.name} bot check: not completed within the wait`);
+        throw unavailable(engine, last, true);
       }
     }
-    debugLog('[cdp] bot check cleared');
+    debugLog(`[cdp] ${engine.name} bot check cleared`);
     await tab.hide();
     opts.onChallenge?.('cleared');
   }
 }
 
-// Same principle as #236: a search the harness could not serve has to say so. A CAPTCHA reported
-// as an empty result set reads to the model as a bad query, and it rewords and retries against a
-// wall that will refuse every variant identically.
-function interstitial(data: Extracted): boolean {
-  return (
-    !!data.blocked || ((data.results ?? []).length === 0 && (data.anchors ?? 0) < MIN_SERP_ANCHORS)
-  );
+// Earlier results first, a later engine's only where they add a page not already listed.
+function mergeResults(first: SearchResult[], then: SearchResult[], max: number): SearchResult[] {
+  const seen = new Set(first.map(r => r.url));
+  const out = [...first];
+  for (const r of then) {
+    if (out.length >= max) break;
+    if (seen.has(r.url)) continue;
+    seen.add(r.url);
+    out.push(r);
+  }
+  return out.slice(0, max);
 }
 
-function unavailable(data: Extracted, timedOut = false): SearchUnavailableError {
-  const message = data.blocked
-    ? 'the search page served a bot check instead of results'
-    : `the search page returned no result list (${data.anchors ?? 0} links on the page) — likely a challenge or interstitial`;
+function challengeText(engine: SearchEngine, page: PageRecord): boolean {
+  return SHARED_CHALLENGE_TEXT.test(page.bodyText) || engine.challengeText.test(page.bodyText);
+}
+
+// Same principle as #236: a search the harness could not serve has to say so. A CAPTCHA reported
+// as an empty result set reads to the model as a bad query, and it rewords and retries against a
+// wall that will refuse every variant identically. Either half needs a page with no results at all:
+// a results page prints the query and its matches back, so a thin page for "recaptcha v3" or one
+// whose snippet quotes "unusual traffic" would otherwise raise the window for a check that is not
+// there, and wait out the whole bound on it.
+function interstitial(engine: SearchEngine, page: PageRecord, picked: number): boolean {
+  if (picked > 0) return false;
+  return challengeText(engine, page) || page.anchors < engine.minAnchors;
+}
+
+function unavailable(
+  engine: SearchEngine,
+  page: PageRecord | undefined,
+  timedOut = false,
+): SearchUnavailableError {
+  const message =
+    !page || challengeText(engine, page)
+      ? `the ${engine.name} search page served a bot check instead of results`
+      : `the ${engine.name} search page returned no result list (${page.anchors} links on the page) — likely a challenge or interstitial`;
   // The remedy is for the user (the model cannot click a checkbox): where the check is, and that
   // one solve is enough. Only on a timeout — the other way here is a wall the check didn't explain.
   return new SearchUnavailableError(
@@ -237,15 +231,21 @@ function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
 
-function parseExtraction(raw: unknown): Extracted {
+function parsePage(raw: unknown): PageRecord {
   if (typeof raw !== 'string') {
     // Runtime.evaluate returning a non-string means the page never ran our script — a navigation
     // failure or a detached target, not an answered search.
     throw new Error('the search page returned nothing to extract');
   }
+  let page: Partial<PageRecord>;
   try {
-    return JSON.parse(raw) as Extracted;
+    page = JSON.parse(raw) as Partial<PageRecord>;
   } catch {
     throw new Error('could not parse results from the search page');
   }
+  return {
+    links: Array.isArray(page.links) ? page.links : [],
+    anchors: typeof page.anchors === 'number' ? page.anchors : 0,
+    bodyText: typeof page.bodyText === 'string' ? page.bodyText : '',
+  };
 }

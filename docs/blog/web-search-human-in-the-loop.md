@@ -41,7 +41,7 @@ A few decisions did most of the work:
 - The browser isn't headless. It launches minimized in the background so it doesn't focus during work or pollute your main browser instance. So it's separated in that sense.
 - The CAPTCHA is a thing that a person needs to deal with and not an automated retry ([#238](https://github.com/alexwkleung/reika/issues/238)). The CAPTCHA doesn't clear on its own so retrying burns requests and spams the upstream engines redundantly. So when a CAPTCHA appears, Reika raises the browser window, waits a maximum of two minutes for it to be solved, then continues on with the search. If it isn't solved then the search fails and the tool properly errors instead of forcing an empty/useless search.
 
-The measured details are written up in [Building on Reika](../building-on-reika.md#search-brave-not-google-or-bing-when-driving-a-browser).
+The measured details are written up in [Building on Reika](../building-on-reika.md#search-an-engine-whose-links-carry-the-real-address-and-check-by-count).
 
 ## What it cost
 

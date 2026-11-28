@@ -1,0 +1,2166 @@
+{
+  "duckduckgo-coding": {
+    "captured": "2026-11-27",
+    "links": [
+      {
+        "href": "https://html.duckduckgo.com/html/",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "A l l R e g i o n s A r g e n t i n a A u s t r a l i a A u s t r i a B e l g i u m ( f r ) B e l g i u m ( n l ) B r a "
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fdeveloper.mozilla.org%2Fen%2DUS%2Fdocs%2FWeb%2FAPI%2FAbortSignal&rut=cbcde458a14a663884f09de0d979bde561decdbac352d9aaca76703e3fb0ad4a",
+        "inner": "AbortSignal - Web APIs - MDN",
+        "text": "AbortSignal - Web APIs - MDN",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fdeveloper.mozilla.org%2Fen%2DUS%2Fdocs%2FWeb%2FAPI%2FAbortSignal&rut=cbcde458a14a663884f09de0d979bde561decdbac352d9aaca76703e3fb0ad4a",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "d e v e l o p e r . m o z i l l a . o r g / e n - U S / d o c s / W e b / A P I / A b o r t S i g n a l"
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fdeveloper.mozilla.org%2Fen%2DUS%2Fdocs%2FWeb%2FAPI%2FAbortSignal&rut=cbcde458a14a663884f09de0d979bde561decdbac352d9aaca76703e3fb0ad4a",
+        "inner": "developer.mozilla.org/en-US/docs/Web/API/AbortSignal",
+        "text": "developer.mozilla.org/en-US/docs/Web/API/AbortSignal",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fdeveloper.mozilla.org%2Fen%2DUS%2Fdocs%2FWeb%2FAPI%2FAbortSignal&rut=cbcde458a14a663884f09de0d979bde561decdbac352d9aaca76703e3fb0ad4a",
+        "inner": "The AbortSignal interface represents a signal object that allows you to communicate with an asynchronous operation (such as a fetch request) and abort it if required via an AbortController object.",
+        "text": "The AbortSignal interface represents a signal object that allows you to communicate with an asynchronous operation (such as a fetch request) and abort it if required via an AbortController object.",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fdeveloper.mozilla.org%2Fen%2DUS%2Fdocs%2FWeb%2FAPI%2FAbortSignal%2Ftimeout_static&rut=7361876d1ab7051ff30b036fe072ba77e7d4fbfb8c67c63ec64c2d9ba32613b3",
+        "inner": "AbortSignal: timeout () static method - Web APIs | MDN",
+        "text": "AbortSignal: timeout () static method - Web APIs | MDN",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fdeveloper.mozilla.org%2Fen%2DUS%2Fdocs%2FWeb%2FAPI%2FAbortSignal%2Ftimeout_static&rut=7361876d1ab7051ff30b036fe072ba77e7d4fbfb8c67c63ec64c2d9ba32613b3",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "d e v e l o p e r . m o z i l l a . o r g / e n - U S / d o c s / W e b / A P I / A b o r t S i g n a l / t i m e o u t "
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fdeveloper.mozilla.org%2Fen%2DUS%2Fdocs%2FWeb%2FAPI%2FAbortSignal%2Ftimeout_static&rut=7361876d1ab7051ff30b036fe072ba77e7d4fbfb8c67c63ec64c2d9ba32613b3",
+        "inner": "developer.mozilla.org/en-US/docs/Web/API/AbortSignal/timeout_static",
+        "text": "developer.mozilla.org/en-US/docs/Web/API/AbortSignal/timeout_static",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fdeveloper.mozilla.org%2Fen%2DUS%2Fdocs%2FWeb%2FAPI%2FAbortSignal%2Ftimeout_static&rut=7361876d1ab7051ff30b036fe072ba77e7d4fbfb8c67c63ec64c2d9ba32613b3",
+        "inner": "The AbortSignal.timeout() static method returns an AbortSignal that will automatically abort after a specified time.",
+        "text": "The AbortSignal.timeout() static method returns an AbortSignal that will automatically abort after a specified time.",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Fnode%2Dfetch%2Ftimeout%2Dsignal&rut=72e546ec1ea1149f2c74fc999ecba6fab0304e84e80427929df178a95762a04c",
+        "inner": "GitHub - node-fetch/timeout-signal: Create an AbortSignal that aborts ...",
+        "text": "GitHub - node-fetch/timeout-signal: Create an AbortSignal that aborts ...",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Fnode%2Dfetch%2Ftimeout%2Dsignal&rut=72e546ec1ea1149f2c74fc999ecba6fab0304e84e80427929df178a95762a04c",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Fnode%2Dfetch%2Ftimeout%2Dsignal&rut=72e546ec1ea1149f2c74fc999ecba6fab0304e84e80427929df178a95762a04c",
+        "inner": "github.com/node-fetch/timeout-signal",
+        "text": "github.com/node-fetch/timeout-signal",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fgithub.com%2Fnode%2Dfetch%2Ftimeout%2Dsignal&rut=72e546ec1ea1149f2c74fc999ecba6fab0304e84e80427929df178a95762a04c",
+        "inner": "Create an AbortSignal that aborts after a delay. Contribute to node-fetch/timeout-signal development by creating an account on GitHub.",
+        "text": "Create an AbortSignal that aborts after a delay. Contribute to node-fetch/timeout-signal development by creating an account on GitHub.",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fcodewithnodejs.com%2Ffetch%2Dwith%2Dtimeout%2F&rut=8487bee0b7d5b184cd8a7d8436cb86adf76ed59a612ed36de90dc5275d43f2d1",
+        "inner": "fetch() with a timeout: AbortSignal.timeout(), AbortSignal.any() and ...",
+        "text": "fetch() with a timeout: AbortSignal.timeout(), AbortSignal.any() and ...",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fcodewithnodejs.com%2Ffetch%2Dwith%2Dtimeout%2F&rut=8487bee0b7d5b184cd8a7d8436cb86adf76ed59a612ed36de90dc5275d43f2d1",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fcodewithnodejs.com%2Ffetch%2Dwith%2Dtimeout%2F&rut=8487bee0b7d5b184cd8a7d8436cb86adf76ed59a612ed36de90dc5275d43f2d1",
+        "inner": "codewithnodejs.com/fetch-with-timeout/",
+        "text": "codewithnodejs.com/fetch-with-timeout/",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fcodewithnodejs.com%2Ffetch%2Dwith%2Dtimeout%2F&rut=8487bee0b7d5b184cd8a7d8436cb86adf76ed59a612ed36de90dc5275d43f2d1",
+        "inner": "fetch() has no timeout option, but one line fixes that: AbortSignal.timeout(ms) . Here's how it behaves while you wait for headers and while you read the…",
+        "text": "fetch() has no timeout option, but one line fixes that: AbortSignal.timeout(ms) . Here's how it behaves while you wait for headers and while you read the…",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F75969669%2Fabortsignal%2Dtimeout%2Din%2Dfetch%2Drequest%2Dalways%2Dresponds%2Dwith%2Daborterror%2Dbut%2Dnot%2Dt&rut=bfb8b0eec05fbc8b7816da6dac160117f0776e640ab1f90aaa699a3a540b98ae",
+        "inner": "javascript - AbortSignal.timeout () in fetch request always responds ...",
+        "text": "javascript - AbortSignal.timeout () in fetch request always responds ...",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F75969669%2Fabortsignal%2Dtimeout%2Din%2Dfetch%2Drequest%2Dalways%2Dresponds%2Dwith%2Daborterror%2Dbut%2Dnot%2Dt&rut=bfb8b0eec05fbc8b7816da6dac160117f0776e640ab1f90aaa699a3a540b98ae",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "s t a c k o v e r f l o w . c o m / q u e s t i o n s / 7 5 9 6 9 6 6 9 / a b o r t s i g n a l - t i m e o u t - i n - "
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F75969669%2Fabortsignal%2Dtimeout%2Din%2Dfetch%2Drequest%2Dalways%2Dresponds%2Dwith%2Daborterror%2Dbut%2Dnot%2Dt&rut=bfb8b0eec05fbc8b7816da6dac160117f0776e640ab1f90aaa699a3a540b98ae",
+        "inner": "stackoverflow.com/questions/75969669/abortsignal-timeout-in-fetch-request-always-responds-with-aborterror-but-not-t",
+        "text": "stackoverflow.com/questions/75969669/abortsignal-timeout-in-fetch-request-always-responds-with-aborterror-but-not-t",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F75969669%2Fabortsignal%2Dtimeout%2Din%2Dfetch%2Drequest%2Dalways%2Dresponds%2Dwith%2Daborterror%2Dbut%2Dnot%2Dt&rut=bfb8b0eec05fbc8b7816da6dac160117f0776e640ab1f90aaa699a3a540b98ae",
+        "inner": "Here, getData uses fetch () to retrieve data from an API endpoint, I set signal property of request to AbortSignal.timeout (5_000) to implement timeout. According to MDN documentation, AbortSignal.tim",
+        "text": "Here, getData uses fetch () to retrieve data from an API endpoint, I set signal property of request to AbortSignal.timeout (5_000) to implement timeout. According to MDN documentation, AbortSignal.tim",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Ftechearl.com%2Ffetch%2Dtimeout%2Dabortcontroller&rut=dcc46fda474e4745d56e8c5633c42fe4b96e054c015e340090fb9f97269e53d7",
+        "inner": "fetch () Timeout: AbortSignal.timeout and AbortController",
+        "text": "fetch () Timeout: AbortSignal.timeout and AbortController",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Ftechearl.com%2Ffetch%2Dtimeout%2Dabortcontroller&rut=dcc46fda474e4745d56e8c5633c42fe4b96e054c015e340090fb9f97269e53d7",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "t e c h e a r l . c o m / f e t c h - t i m e o u t - a b o r t c o n t r o l l e r"
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Ftechearl.com%2Ffetch%2Dtimeout%2Dabortcontroller&rut=dcc46fda474e4745d56e8c5633c42fe4b96e054c015e340090fb9f97269e53d7",
+        "inner": "techearl.com/fetch-timeout-abortcontroller",
+        "text": "techearl.com/fetch-timeout-abortcontroller",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Ftechearl.com%2Ffetch%2Dtimeout%2Dabortcontroller&rut=dcc46fda474e4745d56e8c5633c42fe4b96e054c015e340090fb9f97269e53d7",
+        "inner": "Node has a global fetch and AbortSignal.timeout () since Node 17.3, stable from Node 18, so fetch (url, { signal: AbortSignal.timeout (5000) }) runs server-side with no node-fetch dependency.",
+        "text": "Node has a global fetch and AbortSignal.timeout () since Node 17.3, stable from Node 18, so fetch (url, { signal: AbortSignal.timeout (5000) }) runs server-side with no node-fetch dependency.",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F46946380%2Ffetch%2Dapi%2Drequest%2Dtimeout&rut=3ec6b3e4f7dc9bd1ef3d39ca9404798e3b184dbbaee035e07a99bc6ffde1fabb",
+        "inner": "javascript - Fetch API request timeout? - Stack Overflow",
+        "text": "javascript - Fetch API request timeout? - Stack Overflow",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F46946380%2Ffetch%2Dapi%2Drequest%2Dtimeout&rut=3ec6b3e4f7dc9bd1ef3d39ca9404798e3b184dbbaee035e07a99bc6ffde1fabb",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "s t a c k o v e r f l o w . c o m / q u e s t i o n s / 4 6 9 4 6 3 8 0 / f e t c h - a p i - r e q u e s t - t i m e o "
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F46946380%2Ffetch%2Dapi%2Drequest%2Dtimeout&rut=3ec6b3e4f7dc9bd1ef3d39ca9404798e3b184dbbaee035e07a99bc6ffde1fabb",
+        "inner": "stackoverflow.com/questions/46946380/fetch-api-request-timeout",
+        "text": "stackoverflow.com/questions/46946380/fetch-api-request-timeout",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fstackoverflow.com%2Fquestions%2F46946380%2Ffetch%2Dapi%2Drequest%2Dtimeout&rut=3ec6b3e4f7dc9bd1ef3d39ca9404798e3b184dbbaee035e07a99bc6ffde1fabb",
+        "inner": "On fetch api's default behavior doesnt include builtin timeout mechanism. that means that if request take long time it'll continue wait indefinitely unless define it yourself, Theres how you can handl",
+        "text": "On fetch api's default behavior doesnt include builtin timeout mechanism. that means that if request take long time it'll continue wait indefinitely unless define it yourself, Theres how you can handl",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fadnanhjoy.vercel.app%2Fblogs%2Fnodejs%2Dfetch%2Dtimeout%2Duse%2Dabortsignaltimeout%2Dthe%2Dright%2Dway&rut=f169d26b1160226da61e60e7357b9f825842af65e6d4ab2f6621738a5521ef9a",
+        "inner": "Node.js Fetch Timeout: AbortSignal.timeout () Guide | Adnan Hossain",
+        "text": "Node.js Fetch Timeout: AbortSignal.timeout () Guide | Adnan Hossain",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fadnanhjoy.vercel.app%2Fblogs%2Fnodejs%2Dfetch%2Dtimeout%2Duse%2Dabortsignaltimeout%2Dthe%2Dright%2Dway&rut=f169d26b1160226da61e60e7357b9f825842af65e6d4ab2f6621738a5521ef9a",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "a d n a n h j o y . v e r c e l . a p p / b l o g s / n o d e j s - f e t c h - t i m e o u t - u s e - a b o r t s i g "
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fadnanhjoy.vercel.app%2Fblogs%2Fnodejs%2Dfetch%2Dtimeout%2Duse%2Dabortsignaltimeout%2Dthe%2Dright%2Dway&rut=f169d26b1160226da61e60e7357b9f825842af65e6d4ab2f6621738a5521ef9a",
+        "inner": "adnanhjoy.vercel.app/blogs/nodejs-fetch-timeout-use-abortsignaltimeout-the-right-way",
+        "text": "adnanhjoy.vercel.app/blogs/nodejs-fetch-timeout-use-abortsignaltimeout-the-right-way",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fadnanhjoy.vercel.app%2Fblogs%2Fnodejs%2Dfetch%2Dtimeout%2Duse%2Dabortsignaltimeout%2Dthe%2Dright%2Dway&rut=f169d26b1160226da61e60e7357b9f825842af65e6d4ab2f6621738a5521ef9a",
+        "inner": "Set a Node.js fetch timeout with AbortSignal.timeout(), handle TimeoutError, combine signals with AbortSignal.any() and add retries safely in Express.",
+        "text": "Set a Node.js fetch timeout with AbortSignal.timeout(), handle TimeoutError, combine signals with AbortSignal.any() and add retries safely in Express.",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fmedium.com%2Fdeno%2Dthe%2Dcomplete%2Dreference%2Ftimeout%2Dfetch%2Drequest%2Din%2Dnode%2Djs%2D4231f33a9b95&rut=1320dab994f194088e7090854af5b0bab15c10aa06173f02e03ef340c825d874",
+        "inner": "Timeout fetch request in Node.js | Tech Tonic - Medium",
+        "text": "Timeout fetch request in Node.js | Tech Tonic - Medium",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fmedium.com%2Fdeno%2Dthe%2Dcomplete%2Dreference%2Ftimeout%2Dfetch%2Drequest%2Din%2Dnode%2Djs%2D4231f33a9b95&rut=1320dab994f194088e7090854af5b0bab15c10aa06173f02e03ef340c825d874",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "m e d i u m . c o m / d e n o - t h e - c o m p l e t e - r e f e r e n c e / t i m e o u t - f e t c h - r e q u e s t "
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fmedium.com%2Fdeno%2Dthe%2Dcomplete%2Dreference%2Ftimeout%2Dfetch%2Drequest%2Din%2Dnode%2Djs%2D4231f33a9b95&rut=1320dab994f194088e7090854af5b0bab15c10aa06173f02e03ef340c825d874",
+        "inner": "medium.com/deno-the-complete-reference/timeout-fetch-request-in-node-js-4231f33a9b95",
+        "text": "medium.com/deno-the-complete-reference/timeout-fetch-request-in-node-js-4231f33a9b95",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fmedium.com%2Fdeno%2Dthe%2Dcomplete%2Dreference%2Ftimeout%2Dfetch%2Drequest%2Din%2Dnode%2Djs%2D4231f33a9b95&rut=1320dab994f194088e7090854af5b0bab15c10aa06173f02e03ef340c825d874",
+        "inner": "The AbortSignal interface represents a signal object that allows you to communicate with an asynchronous operation (such as a fetch request) and abort it if required via an AbortController object.",
+        "text": "The AbortSignal interface represents a signal object that allows you to communicate with an asynchronous operation (such as a fetch request) and abort it if required via an AbortController object.",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.samuelfaj.com%2Fen%2Fblog%2Fhow%2Dto%2Dadd%2Da%2Dtimeout%2Dto%2Dfetch%2Din%2Dnodejs%2F&rut=ab8cfd9ec92ff098d8875161ed7da58ce4b84450d068aed642377afddefe39de",
+        "inner": "Node.js fetch timeout with AbortSignal - samuelfaj.com",
+        "text": "Node.js fetch timeout with AbortSignal - samuelfaj.com",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.samuelfaj.com%2Fen%2Fblog%2Fhow%2Dto%2Dadd%2Da%2Dtimeout%2Dto%2Dfetch%2Din%2Dnodejs%2F&rut=ab8cfd9ec92ff098d8875161ed7da58ce4b84450d068aed642377afddefe39de",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "w w w . s a m u e l f a j . c o m / e n / b l o g / h o w - t o - a d d - a - t i m e o u t - t o - f e t c h - i n - n "
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.samuelfaj.com%2Fen%2Fblog%2Fhow%2Dto%2Dadd%2Da%2Dtimeout%2Dto%2Dfetch%2Din%2Dnodejs%2F&rut=ab8cfd9ec92ff098d8875161ed7da58ce4b84450d068aed642377afddefe39de",
+        "inner": "www.samuelfaj.com/en/blog/how-to-add-a-timeout-to-fetch-in-nodejs/",
+        "text": "www.samuelfaj.com/en/blog/how-to-add-a-timeout-to-fetch-in-nodejs/",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.samuelfaj.com%2Fen%2Fblog%2Fhow%2Dto%2Dadd%2Da%2Dtimeout%2Dto%2Dfetch%2Din%2Dnodejs%2F&rut=ab8cfd9ec92ff098d8875161ed7da58ce4b84450d068aed642377afddefe39de",
+        "inner": "Add a timeout to Node.js fetch with AbortSignal, separate timeouts from cancellation, and protect response-body reads without blind retries in production.",
+        "text": "Add a timeout to Node.js fetch with AbortSignal, separate timeouts from cancellation, and protect response-body reads without blind retries in production.",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/feedback.html",
+        "inner": "Feedback",
+        "text": "Feedback",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      }
+    ],
+    "anchors": 42,
+    "bodyText": "All Regions\nArgentina\nAustralia\nAustria\nBelgium (fr)\nBelgium (nl)\nBrazil\nBulgaria\nCanada (en)\nCanada (fr)\nCatalonia\nChile\nChina\nColombia\nCroatia\nCzech Republic\nDenmark\nEstonia\nFinland\nFrance\nGermany\nGreece\nHong Kong\nHungary\nIceland\nIndia (en)\nIndonesia (en)\nIreland\nIsrael (en)\nItaly\nJapan\nKorea\nLatv"
+  },
+  "duckduckgo-general": {
+    "captured": "2026-11-27",
+    "links": [
+      {
+        "href": "https://html.duckduckgo.com/html/",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "A l l R e g i o n s A r g e n t i n a A u s t r a l i a A u s t r i a B e l g i u m ( f r ) B e l g i u m ( n l ) B r a "
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.recipesfromitaly.com%2Fspaghetti%2Dcarbonara%2Doriginal%2Drecipe%2F&rut=fe64ea5ef2b999b0f4ace24f5c23e9e7ac43af27e8328d086b7599ef90eb8d43",
+        "inner": "Traditional Italian Spaghetti Carbonara - Recipes from Italy",
+        "text": "Traditional Italian Spaghetti Carbonara - Recipes from Italy",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.recipesfromitaly.com%2Fspaghetti%2Dcarbonara%2Doriginal%2Drecipe%2F&rut=fe64ea5ef2b999b0f4ace24f5c23e9e7ac43af27e8328d086b7599ef90eb8d43",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "w w w . r e c i p e s f r o m i t a l y . c o m / s p a g h e t t i - c a r b o n a r a - o r i g i n a l - r e c i p e "
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.recipesfromitaly.com%2Fspaghetti%2Dcarbonara%2Doriginal%2Drecipe%2F&rut=fe64ea5ef2b999b0f4ace24f5c23e9e7ac43af27e8328d086b7599ef90eb8d43",
+        "inner": "www.recipesfromitaly.com/spaghetti-carbonara-original-recipe/",
+        "text": "www.recipesfromitaly.com/spaghetti-carbonara-original-recipe/",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.recipesfromitaly.com%2Fspaghetti%2Dcarbonara%2Doriginal%2Drecipe%2F&rut=fe64ea5ef2b999b0f4ace24f5c23e9e7ac43af27e8328d086b7599ef90eb8d43",
+        "inner": "Spaghetti Carbonara is one of the most famous pasta dishes from Roman cuisine. This authentic Italian Carbonara recipe is made with just five simple ingredients: spaghetti, crispy guanciale, black pep",
+        "text": "Spaghetti Carbonara is one of the most famous pasta dishes from Roman cuisine. This authentic Italian Carbonara recipe is made with just five simple ingredients: spaghetti, crispy guanciale, black pep",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.simplyrecipes.com%2Frecipes%2Fspaghetti_alla_carbonara%2F&rut=c9674b84fb0c55b798ec1436c3c86feab1ca6d36176f5821f7113313bcb9ca01",
+        "inner": "Pasta Carbonara Recipe - Simply Recipes",
+        "text": "Pasta Carbonara Recipe - Simply Recipes",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.simplyrecipes.com%2Frecipes%2Fspaghetti_alla_carbonara%2F&rut=c9674b84fb0c55b798ec1436c3c86feab1ca6d36176f5821f7113313bcb9ca01",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "w w w . s i m p l y r e c i p e s . c o m / r e c i p e s / s p a g h e t t i _ a l l a _ c a r b o n a r a /"
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.simplyrecipes.com%2Frecipes%2Fspaghetti_alla_carbonara%2F&rut=c9674b84fb0c55b798ec1436c3c86feab1ca6d36176f5821f7113313bcb9ca01",
+        "inner": "www.simplyrecipes.com/recipes/spaghetti_alla_carbonara/",
+        "text": "www.simplyrecipes.com/recipes/spaghetti_alla_carbonara/",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.simplyrecipes.com%2Frecipes%2Fspaghetti_alla_carbonara%2F&rut=c9674b84fb0c55b798ec1436c3c86feab1ca6d36176f5821f7113313bcb9ca01",
+        "inner": "Classic spaghetti carbonara is an indulgent yet surprisingly simple recipe. Made with pancetta (or bacon) and plenty of Parmesan cheese, our foolproof recipe takes just 30 minutes to prepare from star",
+        "text": "Classic spaghetti carbonara is an indulgent yet surprisingly simple recipe. Made with pancetta (or bacon) and plenty of Parmesan cheese, our foolproof recipe takes just 30 minutes to prepare from star",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.recipetineats.com%2Fcarbonara%2F&rut=6bd5a48ed3900f6ec8087062c6d0530fefc728ebaa45d739a6499a4051ff35df",
+        "inner": "Carbonara - RecipeTin Eats",
+        "text": "Carbonara - RecipeTin Eats",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.recipetineats.com%2Fcarbonara%2F&rut=6bd5a48ed3900f6ec8087062c6d0530fefc728ebaa45d739a6499a4051ff35df",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.recipetineats.com%2Fcarbonara%2F&rut=6bd5a48ed3900f6ec8087062c6d0530fefc728ebaa45d739a6499a4051ff35df",
+        "inner": "www.recipetineats.com/carbonara/",
+        "text": "www.recipetineats.com/carbonara/",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.recipetineats.com%2Fcarbonara%2F&rut=6bd5a48ed3900f6ec8087062c6d0530fefc728ebaa45d739a6499a4051ff35df",
+        "inner": "Spaghetti carbonara Carbonara is a beautiful, classic Italian pasta that's so creamy, you'd swear there's a good amount of cream in it. And indeed, there's plenty of recipes that cheat by adding in cr",
+        "text": "Spaghetti carbonara Carbonara is a beautiful, classic Italian pasta that's so creamy, you'd swear there's a good amount of cream in it. And indeed, there's plenty of recipes that cheat by adding in cr",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fanitalianinmykitchen.com%2Fspaghetti%2Dcarbonara%2F&rut=94781a2326f82ed5be07d985d6b0fff2be1f1d1cc5d3527c9d44559c20df59a4",
+        "inner": "Authentic Spaghetti Carbonara Recipe - An Italian in my Kitchen",
+        "text": "Authentic Spaghetti Carbonara Recipe - An Italian in my Kitchen",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fanitalianinmykitchen.com%2Fspaghetti%2Dcarbonara%2F&rut=94781a2326f82ed5be07d985d6b0fff2be1f1d1cc5d3527c9d44559c20df59a4",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "a n i t a l i a n i n m y k i t c h e n . c o m / s p a g h e t t i - c a r b o n a r a /"
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fanitalianinmykitchen.com%2Fspaghetti%2Dcarbonara%2F&rut=94781a2326f82ed5be07d985d6b0fff2be1f1d1cc5d3527c9d44559c20df59a4",
+        "inner": "anitalianinmykitchen.com/spaghetti-carbonara/",
+        "text": "anitalianinmykitchen.com/spaghetti-carbonara/",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fanitalianinmykitchen.com%2Fspaghetti%2Dcarbonara%2F&rut=94781a2326f82ed5be07d985d6b0fff2be1f1d1cc5d3527c9d44559c20df59a4",
+        "inner": "Learn how to make the classic Italian pasta dish with only 4 ingredients: egg yolks, pecorino, black pepper and guanciale. Follow the easy steps and tips to achieve a creamy and delicious carbonara in",
+        "text": "Learn how to make the classic Italian pasta dish with only 4 ingredients: egg yolks, pecorino, black pepper and guanciale. Follow the easy steps and tips to achieve a creamy and delicious carbonara in",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.allrecipes.com%2Frecipe%2F11973%2Fspaghetti%2Dcarbonara%2Dii%2F&rut=3d1047b1e93a99e679c02c66fc510711255611777505d1e6ac367ebb145848c7",
+        "inner": "Spaghetti Carbonara Recipe",
+        "text": "Spaghetti Carbonara Recipe",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.allrecipes.com%2Frecipe%2F11973%2Fspaghetti%2Dcarbonara%2Dii%2F&rut=3d1047b1e93a99e679c02c66fc510711255611777505d1e6ac367ebb145848c7",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "w w w . a l l r e c i p e s . c o m / r e c i p e / 1 1 9 7 3 / s p a g h e t t i - c a r b o n a r a - i i /"
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.allrecipes.com%2Frecipe%2F11973%2Fspaghetti%2Dcarbonara%2Dii%2F&rut=3d1047b1e93a99e679c02c66fc510711255611777505d1e6ac367ebb145848c7",
+        "inner": "www.allrecipes.com/recipe/11973/spaghetti-carbonara-ii/",
+        "text": "www.allrecipes.com/recipe/11973/spaghetti-carbonara-ii/",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.allrecipes.com%2Frecipe%2F11973%2Fspaghetti%2Dcarbonara%2Dii%2F&rut=3d1047b1e93a99e679c02c66fc510711255611777505d1e6ac367ebb145848c7",
+        "inner": "This spaghetti carbonara recipe is a classic pasta dish that cooks in 20 minutes with spaghetti and crispy bacon in a creamy Parmesan and egg sauce.",
+        "text": "This spaghetti carbonara recipe is a classic pasta dish that cooks in 20 minutes with spaghetti and crispy bacon in a creamy Parmesan and egg sauce.",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.bbcgoodfood.com%2Frecipes%2Fultimate%2Dspaghetti%2Dcarbonara%2Drecipe&rut=aa65309959b39345709adf53a43899148eb53d42a715e6959f909da43b4a0996",
+        "inner": "Ultimate spaghetti carbonara recipe - BBC Good Food",
+        "text": "Ultimate spaghetti carbonara recipe - BBC Good Food",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.bbcgoodfood.com%2Frecipes%2Fultimate%2Dspaghetti%2Dcarbonara%2Drecipe&rut=aa65309959b39345709adf53a43899148eb53d42a715e6959f909da43b4a0996",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "w w w . b b c g o o d f o o d . c o m / r e c i p e s / u l t i m a t e - s p a g h e t t i - c a r b o n a r a - r e c "
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.bbcgoodfood.com%2Frecipes%2Fultimate%2Dspaghetti%2Dcarbonara%2Drecipe&rut=aa65309959b39345709adf53a43899148eb53d42a715e6959f909da43b4a0996",
+        "inner": "www.bbcgoodfood.com/recipes/ultimate-spaghetti-carbonara-recipe",
+        "text": "www.bbcgoodfood.com/recipes/ultimate-spaghetti-carbonara-recipe",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.bbcgoodfood.com%2Frecipes%2Fultimate%2Dspaghetti%2Dcarbonara%2Drecipe&rut=aa65309959b39345709adf53a43899148eb53d42a715e6959f909da43b4a0996",
+        "inner": "Discover how to make traditional spaghetti carbonara. This classic Italian pasta dish combines a silky cheese sauce with crisp pancetta and black pepper.",
+        "text": "Discover how to make traditional spaghetti carbonara. This classic Italian pasta dish combines a silky cheese sauce with crisp pancetta and black pepper.",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.foodnetwork.com%2Frecipes%2Ffood%2Dnetwork%2Dkitchen%2Fthe%2Dbest%2Dcarbonara%2D7260325&rut=abf18baf8aa218a7303b158f817ffdca30d6040a2c5e2841e5c56a63af59125d",
+        "inner": "The Best Carbonara Recipe - Food Network",
+        "text": "The Best Carbonara Recipe - Food Network",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.foodnetwork.com%2Frecipes%2Ffood%2Dnetwork%2Dkitchen%2Fthe%2Dbest%2Dcarbonara%2D7260325&rut=abf18baf8aa218a7303b158f817ffdca30d6040a2c5e2841e5c56a63af59125d",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "w w w . f o o d n e t w o r k . c o m / r e c i p e s / f o o d - n e t w o r k - k i t c h e n / t h e - b e s t - c a "
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.foodnetwork.com%2Frecipes%2Ffood%2Dnetwork%2Dkitchen%2Fthe%2Dbest%2Dcarbonara%2D7260325&rut=abf18baf8aa218a7303b158f817ffdca30d6040a2c5e2841e5c56a63af59125d",
+        "inner": "www.foodnetwork.com/recipes/food-network-kitchen/the-best-carbonara-7260325",
+        "text": "www.foodnetwork.com/recipes/food-network-kitchen/the-best-carbonara-7260325",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.foodnetwork.com%2Frecipes%2Ffood%2Dnetwork%2Dkitchen%2Fthe%2Dbest%2Dcarbonara%2D7260325&rut=abf18baf8aa218a7303b158f817ffdca30d6040a2c5e2841e5c56a63af59125d",
+        "inner": "Make this The Best Carbonara recipe for a cozy dinner that comes together fast. Simple, satisfying, and endlessly delicious. Try it tonight.",
+        "text": "Make this The Best Carbonara recipe for a cozy dinner that comes together fast. Simple, satisfying, and endlessly delicious. Try it tonight.",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.jamieoliver.com%2Frecipes%2Fpasta%2Fgennaro%2Ds%2Dclassic%2Dspaghetti%2Dcarbonara%2F&rut=46d527aee77fb9d73184168c5f76f6967084f9e77dda8296a4373927eb9a4fe0",
+        "inner": "Italian carbonara | Jamie Oliver pasta recipes",
+        "text": "Italian carbonara | Jamie Oliver pasta recipes",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.jamieoliver.com%2Frecipes%2Fpasta%2Fgennaro%2Ds%2Dclassic%2Dspaghetti%2Dcarbonara%2F&rut=46d527aee77fb9d73184168c5f76f6967084f9e77dda8296a4373927eb9a4fe0",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "w w w . j a m i e o l i v e r . c o m / r e c i p e s / p a s t a / g e n n a r o - s - c l a s s i c - s p a g h e t t "
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.jamieoliver.com%2Frecipes%2Fpasta%2Fgennaro%2Ds%2Dclassic%2Dspaghetti%2Dcarbonara%2F&rut=46d527aee77fb9d73184168c5f76f6967084f9e77dda8296a4373927eb9a4fe0",
+        "inner": "www.jamieoliver.com/recipes/pasta/gennaro-s-classic-spaghetti-carbonara/",
+        "text": "www.jamieoliver.com/recipes/pasta/gennaro-s-classic-spaghetti-carbonara/",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.jamieoliver.com%2Frecipes%2Fpasta%2Fgennaro%2Ds%2Dclassic%2Dspaghetti%2Dcarbonara%2F&rut=46d527aee77fb9d73184168c5f76f6967084f9e77dda8296a4373927eb9a4fe0",
+        "inner": "A spaghetti carbonara recipe is a failsafe classic. This Italian carbonara uses the traditional guanciale and pecorino cheese for a real taste of Italy.",
+        "text": "A spaghetti carbonara recipe is a failsafe classic. This Italian carbonara uses the traditional guanciale and pecorino cheese for a real taste of Italy.",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fcooking.nytimes.com%2Frecipes%2F12965%2Dspaghetti%2Dcarbonara&rut=5a49f44b726fdf1ad579a4a1076574b3b0346c9ac9b7ecaa93fddc3c6348ad28",
+        "inner": "Carbonara Recipe - NYT Cooking",
+        "text": "Carbonara Recipe - NYT Cooking",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fcooking.nytimes.com%2Frecipes%2F12965%2Dspaghetti%2Dcarbonara&rut=5a49f44b726fdf1ad579a4a1076574b3b0346c9ac9b7ecaa93fddc3c6348ad28",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "c o o k i n g . n y t i m e s . c o m / r e c i p e s / 1 2 9 6 5 - s p a g h e t t i - c a r b o n a r a"
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fcooking.nytimes.com%2Frecipes%2F12965%2Dspaghetti%2Dcarbonara&rut=5a49f44b726fdf1ad579a4a1076574b3b0346c9ac9b7ecaa93fddc3c6348ad28",
+        "inner": "cooking.nytimes.com/recipes/12965-spaghetti-carbonara",
+        "text": "cooking.nytimes.com/recipes/12965-spaghetti-carbonara",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fcooking.nytimes.com%2Frecipes%2F12965%2Dspaghetti%2Dcarbonara&rut=5a49f44b726fdf1ad579a4a1076574b3b0346c9ac9b7ecaa93fddc3c6348ad28",
+        "inner": "This dish is a deli bacon-egg-and-cheese-on-a-roll that has been pasta-fied, fancified, fetishized and turned into an Italian tradition that, like many inviolate Italian traditions, is actually far le",
+        "text": "This dish is a deli bacon-egg-and-cheese-on-a-roll that has been pasta-fied, fancified, fetishized and turned into an Italian tradition that, like many inviolate Italian traditions, is actually far le",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.bonappetit.com%2Frecipe%2Fsimple%2Dspaghetti%2Dcarbonara&rut=ef0d3c5518c9454e6af75aabe24c0871654876bbec215770fbe98c7f2535e29c",
+        "inner": "Spaghetti Carbonara, Step-by-Step Recipe | Bon Appétit",
+        "text": "Spaghetti Carbonara, Step-by-Step Recipe | Bon Appétit",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.bonappetit.com%2Frecipe%2Fsimple%2Dspaghetti%2Dcarbonara&rut=ef0d3c5518c9454e6af75aabe24c0871654876bbec215770fbe98c7f2535e29c",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "w w w . b o n a p p e t i t . c o m / r e c i p e / s i m p l e - s p a g h e t t i - c a r b o n a r a"
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.bonappetit.com%2Frecipe%2Fsimple%2Dspaghetti%2Dcarbonara&rut=ef0d3c5518c9454e6af75aabe24c0871654876bbec215770fbe98c7f2535e29c",
+        "inner": "www.bonappetit.com/recipe/simple-spaghetti-carbonara",
+        "text": "www.bonappetit.com/recipe/simple-spaghetti-carbonara",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/l/?uddg=https%3A%2F%2Fwww.bonappetit.com%2Frecipe%2Fsimple%2Dspaghetti%2Dcarbonara&rut=ef0d3c5518c9454e6af75aabe24c0871654876bbec215770fbe98c7f2535e29c",
+        "inner": "This easy pasta carbonara recipe turns spaghetti, eggs, cheese, and crispy guanciale, pancetta, or bacon into a silky, rich Italian dinner in just 22 minutes.",
+        "text": "This easy pasta carbonara recipe turns spaghetti, eggs, cheese, and crispy guanciale, pancetta, or bacon into a silky, rich Italian dinner in just 22 minutes.",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://duckduckgo.com/feedback.html",
+        "inner": "Feedback",
+        "text": "Feedback",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      }
+    ],
+    "anchors": 42,
+    "bodyText": "All Regions\nArgentina\nAustralia\nAustria\nBelgium (fr)\nBelgium (nl)\nBrazil\nBulgaria\nCanada (en)\nCanada (fr)\nCatalonia\nChile\nChina\nColombia\nCroatia\nCzech Republic\nDenmark\nEstonia\nFinland\nFrance\nGermany\nGreece\nHong Kong\nHungary\nIceland\nIndia (en)\nIndonesia (en)\nIreland\nIsrael (en)\nItaly\nJapan\nKorea\nLatv"
+  },
+  "brave-coding": {
+    "captured": "2026-11-27",
+    "links": [
+      {
+        "href": "https://search.brave.com/",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/",
+        "inner": "",
+        "text": "",
+        "visible": false,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/settings",
+        "inner": " ",
+        "text": "",
+        "visible": false,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/ask?q=node+fetch+timeout+abortsignal&source=web",
+        "inner": "Ask",
+        "text": "Ask",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/search?q=node+fetch+timeout+abortsignal&source=web",
+        "inner": "All",
+        "text": "All",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/images?q=node+fetch+timeout+abortsignal&source=web",
+        "inner": "Images",
+        "text": "Images",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/news?q=node+fetch+timeout+abortsignal&source=web",
+        "inner": "News",
+        "text": "News",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/videos?q=node+fetch+timeout+abortsignal&source=web",
+        "inner": "Videos",
+        "text": "Videos",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/maps/search?q=node+fetch+timeout+abortsignal&source=web",
+        "inner": "Maps",
+        "text": "Maps",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/goggles?q=node+fetch+timeout+abortsignal&source=web",
+        "inner": "Goggles",
+        "text": "Goggles",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlgJSV6HR9bqwB7s7VGkNdq0XFtJCVVzBmpKGzH7tBQGDfCsq0ojSh7kRo40WH7OluJcZRsHj0mTI6weZZgRWRRHeaXGNhhjvWvT0TJRFPF4zKp4ktu4Goj4gQn-yC03_JjKLF1DS3jCwDpDcegW3yEW47gbOM_Ff2N_10f7o87S8G",
+        "inner": "GitHub\nhttps://github.com › node-fetch › timeout-signal\nGitHub - node-fetch/timeout-signal: Create an AbortSignal that aborts after a delay. · GitHub",
+        "text": "GitHub https://github.com › node-fetch › timeout-signal GitHub - node-fetch/timeout-signal: Create an AbortSignal that aborts after a delay. · GitHub",
+        "visible": true,
+        "chrome": false,
+        "snippet": "Deprecated! Use AbortSignal.timeout(ms) instead! ... import timeoutSignal from 'timeout-signal'; const signal = timeoutS"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlgQGmn2zZPzvd-yGtUoEtGEFDb0TaTQSOx2-aIzH93MrN0pzYHXgnArLUEiKpRy8VEGhFrQJa6waofmTV4xKjO7vxh9-DNhY5Rj-b7h5236f24ahDOqDjzD6vSOZA9vIxp7sIkbiHnJVcZuw0oYM3Mkkrh5qvasIWY_KFxp29_Cc1OnJGaw204wrYkCYTgz6wDg",
+        "inner": "MDN Web Docs\nhttps://developer.mozilla.org › en-US › docs › Web › API › AbortSignal\nAbortSignal - Web APIs - MDN Web Docs - Mozilla",
+        "text": "MDN Web Docs https://developer.mozilla.org › en-US › docs › Web › API › AbortSignal AbortSignal - Web APIs - MDN Web Docs - Mozilla",
+        "visible": true,
+        "chrome": false,
+        "snippet": "September 1, 2026 - This returns an AbortSignal that will automatically timeout after a certain number of milliseconds. "
+      },
+      {
+        "href": "https://tools.belchamber.us/code-snippets/javascript/fetch-timeouts-with-abortsignal-timeout-and-any",
+        "inner": "",
+        "text": "tools.belchamber.us tools.belchamber.us › home › code snippets › javascript snippets › javascript fetch timeout: abortsignal.timeout() and any() JavaScript fetch timeout: AbortSignal.timeout() and any",
+        "visible": true,
+        "chrome": false,
+        "snippet": "How do I combine a timeout with my own AbortController? Use AbortSignal.any([AbortSignal.timeout(ms), controller.signal]"
+      },
+      {
+        "href": "https://tools.belchamber.us/code-snippets/javascript/fetch-timeouts-with-abortsignal-timeout-and-any",
+        "inner": "",
+        "text": "tools.belchamber.us tools.belchamber.us › home › code snippets › javascript snippets › javascript fetch timeout: abortsignal.timeout() and any() JavaScript fetch timeout: AbortSignal.timeout() and any",
+        "visible": true,
+        "chrome": false,
+        "snippet": "How do I set a timeout on fetch()? Pass signal: AbortSignal.timeout(ms) in the fetch options. The request rejects with a"
+      },
+      {
+        "href": "https://tools.belchamber.us/code-snippets/javascript/fetch-timeouts-with-abortsignal-timeout-and-any",
+        "inner": "",
+        "text": "tools.belchamber.us tools.belchamber.us › home › code snippets › javascript snippets › javascript fetch timeout: abortsignal.timeout() and any() JavaScript fetch timeout: AbortSignal.timeout() and any",
+        "visible": true,
+        "chrome": false,
+        "snippet": "Why does every request fail immediately with TimeoutError? The timeout signal was created once and reused. AbortSignal.t"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlgmeNeBZV03ZIcTolzQxdCidn3oFz72SJxY2VV66nyoBEF6ZzfHJ8WqsgzEoRWZyhzoIgT0GeCbBGarSj55AZzqor73SLEeh6391h55QN62G3u_O1KMhGZdlgXfJgNiJNk1FR9gdJzwO51vOsRnfZgI6dcNJMLFQ12VDZS_wZ4265wXUlbvSX37Ato9cEE-ziLwA",
+        "inner": "Jamdesk\nhttps://jamdesk.com › home › blog › abortcontroller beyond fetch: timeouts, cleanup, and signal composition\nAbortController Beyond Fetch: Timeouts, Cleanup, and Signal Composition",
+        "text": "Jamdesk https://jamdesk.com › home › blog › abortcontroller beyond fetch: timeouts, cleanup, and signal composition AbortController Beyond Fetch: Timeouts, Cleanup, and Signal Composition",
+        "visible": true,
+        "chrome": false,
+        "snippet": "April 14, 2026 - This works with anything that accepts a signal. Node.js built-ins like fs.readFile, timers/promises, an"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlgmeNeBZV03ZIcTolzQxdCidn3oFz72SJxY2VV66nyoBEF6ZzfHJ8WqsgzEoRWZyhzoIgT0GeCbBGarSj55AZzqor73SLEeh6391h55QN62G3u_O1KMhGZdlgXfJgNiJNk1FR9gdJzwO51vOsRnfZgI6dcNJMLFQ12VDZS_wZ4265wXUlbvSX37Ato9cEE-ziLwA",
+        "inner": " ",
+        "text": "",
+        "visible": false,
+        "chrome": false,
+        "snippet": "A p r i l 1 4 , 2 0 2 6 - T h i s w o r k s w i t h a n y t h i n g t h a t a c c e p t s a s i g n a l . N o d e . j s "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlgmeNeBZV03ZIcTolzQxdCidn3oFz72SJxY2VV66nyoBEF6ZzfHJ8WqsgzEoRWZyhzoIgT0GeCbBGarSj55AZzqor73SLEeh6391h55QN62G3u_O1KMhGZdlgXfJgNiJNk1FR9gdJzwO51vOsRnfZgI6dcNJMLFQ12VDZS_wZ4265wXUlbvSX37Ato9cEE-ziLwA",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "J a m d e s k h t t p s : / / j a m d e s k . c o m › h o m e › b l o g › a b o r t c o n t r o l l e r b e y o n d f e "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlgyiYAaWiTDP9y48q8pxNjZsuBHhYlanRaTgfHnRRnYKcMv8F13U4iHUlESjYy4tSgQ4nRXAobNfdgS7H4vJYc8NWmLKNjj9OS2Ll2lnGQNe7YzUOLJAHMgeLfIQ7M7wInV6v3pwOjyVIP7b1qCjA-CAMnRYcVh6Ayb1yoLr1n7rFP2l8-jE12b1EP16yVuNBRZT8RKv4ARGlOJ4ChiYO",
+        "inner": "Samuel Fajreldines\nhttps://samuelfaj.com › home › blog › javascript › how to add a timeout to fetch in node.js\nNode.js fetch timeout with AbortSignal - Samuel Fajreldines",
+        "text": "Samuel Fajreldines https://samuelfaj.com › home › blog › javascript › how to add a timeout to fetch in node.js Node.js fetch timeout with AbortSignal - Samuel Fajreldines",
+        "visible": true,
+        "chrome": false,
+        "snippet": "September 28, 2026 - If your service has a response ... abandons the result. In Node.js, AbortSignal.timeout(millisecond"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlgyiYAaWiTDP9y48q8pxNjZsuBHhYlanRaTgfHnRRnYKcMv8F13U4iHUlESjYy4tSgQ4nRXAobNfdgS7H4vJYc8NWmLKNjj9OS2Ll2lnGQNe7YzUOLJAHMgeLfIQ7M7wInV6v3pwOjyVIP7b1qCjA-CAMnRYcVh6Ayb1yoLr1n7rFP2l8-jE12b1EP16yVuNBRZT8RKv4ARGlOJ4ChiYO",
+        "inner": " ",
+        "text": "",
+        "visible": false,
+        "chrome": false,
+        "snippet": "S e p t e m b e r 2 8 , 2 0 2 6 - I f y o u r s e r v i c e h a s a r e s p o n s e . . . a b a n d o n s t h e r e s u "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlgyiYAaWiTDP9y48q8pxNjZsuBHhYlanRaTgfHnRRnYKcMv8F13U4iHUlESjYy4tSgQ4nRXAobNfdgS7H4vJYc8NWmLKNjj9OS2Ll2lnGQNe7YzUOLJAHMgeLfIQ7M7wInV6v3pwOjyVIP7b1qCjA-CAMnRYcVh6Ayb1yoLr1n7rFP2l8-jE12b1EP16yVuNBRZT8RKv4ARGlOJ4ChiYO",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "S a m u e l F a j r e l d i n e s h t t p s : / / s a m u e l f a j . c o m › h o m e › b l o g › j a v a s c r i p t › "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlhFpoP4YCwsrRwts3QPdRUnj9fyVFIjK_BKujMCRq3KLOZ-X7M_VuA7wQq8bi3PJukykbzmtNvkygw1bxLiprqsbHqL3Llt7rF6wROJHgo9zwcNKeiPz08Yd6XSoAeUZQ8ju8q4IuvcX5ak6Dkz5HEa2VlWBucna7lpGczPW45UW5xtfRm1OlAWdWAHgI7Y7hpUKmd4q0nB2fySSQ7khGf7M7taNHv4q39OpW8ur2Ow0G",
+        "inner": "Medium\nhttps://medium.com › deno-the-complete-reference › timeout-fetch-request-in-node-js-4231f33a9b95\nTimeout fetch request in Node.js | Tech Tonic",
+        "text": "Medium https://medium.com › deno-the-complete-reference › timeout-fetch-request-in-node-js-4231f33a9b95 Timeout fetch request in Node.js | Tech Tonic",
+        "visible": true,
+        "chrome": false,
+        "snippet": "February 13, 2024 - The AbortSignal interface represents ... via an AbortController object. (Source MDN) The AbortSignal"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlhFpoP4YCwsrRwts3QPdRUnj9fyVFIjK_BKujMCRq3KLOZ-X7M_VuA7wQq8bi3PJukykbzmtNvkygw1bxLiprqsbHqL3Llt7rF6wROJHgo9zwcNKeiPz08Yd6XSoAeUZQ8ju8q4IuvcX5ak6Dkz5HEa2VlWBucna7lpGczPW45UW5xtfRm1OlAWdWAHgI7Y7hpUKmd4q0nB2fySSQ7khGf7M7taNHv4q39OpW8ur2Ow0G",
+        "inner": " ",
+        "text": "",
+        "visible": false,
+        "chrome": false,
+        "snippet": "F e b r u a r y 1 3 , 2 0 2 4 - T h e A b o r t S i g n a l i n t e r f a c e r e p r e s e n t s . . . v i a a n A b o "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlhFpoP4YCwsrRwts3QPdRUnj9fyVFIjK_BKujMCRq3KLOZ-X7M_VuA7wQq8bi3PJukykbzmtNvkygw1bxLiprqsbHqL3Llt7rF6wROJHgo9zwcNKeiPz08Yd6XSoAeUZQ8ju8q4IuvcX5ak6Dkz5HEa2VlWBucna7lpGczPW45UW5xtfRm1OlAWdWAHgI7Y7hpUKmd4q0nB2fySSQ7khGf7M7taNHv4q39OpW8ur2Ow0G",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "M e d i u m h t t p s : / / m e d i u m . c o m › d e n o - t h e - c o m p l e t e - r e f e r e n c e › t i m e o u t "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlhcmDiQHpCCtpel3drRcwcNoe74fmKyfgq0ervH0JuJh215Qvn3_jNwZ4YnuzAtiS-O62hBzPJMfdy4Zm3nCogLBPSYN0RuNciJ-D88-WlN45zNmlHl22Iv-EbliJ-oWqifp7VqLEHLG37WYvQDAL16Ps8ZhaR7MF1BU4Tx5ovUmRDWhPYo5rmgalPhReukPkwdUzGaqwOH6m3oVg_CRpnklczApjPROcnUiXOJwShMND6pPD2pNfbg4",
+        "inner": "Belchamber Tools\nhttps://tools.belchamber.us › home › code snippets › javascript snippets › javascript fetch timeout: abortsignal.timeout() and any()\nJavaScript fetch timeout: AbortSignal.timeout() an",
+        "text": "Belchamber Tools https://tools.belchamber.us › home › code snippets › javascript snippets › javascript fetch timeout: abortsignal.timeout() and any() JavaScript fetch timeout: AbortSignal.timeout() an",
+        "visible": true,
+        "chrome": false,
+        "snippet": "September 26, 2026 - The fix used to be an AbortController plus a setTimeout plus a clearTimeout you had to remember. Tw"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlhcmDiQHpCCtpel3drRcwcNoe74fmKyfgq0ervH0JuJh215Qvn3_jNwZ4YnuzAtiS-O62hBzPJMfdy4Zm3nCogLBPSYN0RuNciJ-D88-WlN45zNmlHl22Iv-EbliJ-oWqifp7VqLEHLG37WYvQDAL16Ps8ZhaR7MF1BU4Tx5ovUmRDWhPYo5rmgalPhReukPkwdUzGaqwOH6m3oVg_CRpnklczApjPROcnUiXOJwShMND6pPD2pNfbg4",
+        "inner": " ",
+        "text": "",
+        "visible": false,
+        "chrome": false,
+        "snippet": "S e p t e m b e r 2 6 , 2 0 2 6 - T h e f i x u s e d t o b e a n A b o r t C o n t r o l l e r p l u s a s e t T i m e "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlhcmDiQHpCCtpel3drRcwcNoe74fmKyfgq0ervH0JuJh215Qvn3_jNwZ4YnuzAtiS-O62hBzPJMfdy4Zm3nCogLBPSYN0RuNciJ-D88-WlN45zNmlHl22Iv-EbliJ-oWqifp7VqLEHLG37WYvQDAL16Ps8ZhaR7MF1BU4Tx5ovUmRDWhPYo5rmgalPhReukPkwdUzGaqwOH6m3oVg_CRpnklczApjPROcnUiXOJwShMND6pPD2pNfbg4",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "B e l c h a m b e r T o o l s h t t p s : / / t o o l s . b e l c h a m b e r . u s › h o m e › c o d e s n i p p e t s "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlhq-W5kLENUv-I7ULrXNHTgpxc3Uo9ASPotcIeHajMoO7tVeHGdBLIgE5iZ2LxGfqvz0kf6u2f6z9aTvHbIf8Quu1hUylI-0Df3Ua9dCgVcbElvtV2FD-hbBSEEeheLqqwOsgWqw9Jakb-fdn1YjXqow5IPmMoOudmA6egoHk4cmHTyQtoRsB",
+        "inner": "TechEarl\nhttps://techearl.com › home › javascript › how to add a timeout to fetch() with abortcontroller\nfetch() Timeout: AbortSignal.timeout and AbortController",
+        "text": "TechEarl https://techearl.com › home › javascript › how to add a timeout to fetch() with abortcontroller fetch() Timeout: AbortSignal.timeout and AbortController",
+        "visible": true,
+        "chrome": false,
+        "snippet": "June 2, 2026 - The modern fetch timeout is one line: AbortSignal.timeout(5000). Use AbortController to cancel by hand, A"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlhq-W5kLENUv-I7ULrXNHTgpxc3Uo9ASPotcIeHajMoO7tVeHGdBLIgE5iZ2LxGfqvz0kf6u2f6z9aTvHbIf8Quu1hUylI-0Df3Ua9dCgVcbElvtV2FD-hbBSEEeheLqqwOsgWqw9Jakb-fdn1YjXqow5IPmMoOudmA6egoHk4cmHTyQtoRsB",
+        "inner": " ",
+        "text": "",
+        "visible": false,
+        "chrome": false,
+        "snippet": "J u n e 2 , 2 0 2 6 - T h e m o d e r n f e t c h t i m e o u t i s o n e l i n e : A b o r t S i g n a l . t i m e o u "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlhq-W5kLENUv-I7ULrXNHTgpxc3Uo9ASPotcIeHajMoO7tVeHGdBLIgE5iZ2LxGfqvz0kf6u2f6z9aTvHbIf8Quu1hUylI-0Df3Ua9dCgVcbElvtV2FD-hbBSEEeheLqqwOsgWqw9Jakb-fdn1YjXqow5IPmMoOudmA6egoHk4cmHTyQtoRsB",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "T e c h E a r l h t t p s : / / t e c h e a r l . c o m › h o m e › j a v a s c r i p t › h o w t o a d d a t i m e o u "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlhzkYVjziVOki0t7GORWORp_PpVSxjWG9oSv3CpELUtYZVDU9_WFCt1twFr1nxLsAmLxDIzHD5taVpzdxjHCXbhdjF-iBDn_FnNbNSbjEPgYXPEGr1fFioczolNdKXMREzmyqRkj-2mcJ7D3TT2h3__vEG982GeReMl8d6wT2wGwYLiua_sjyjyJpRfgMFxyyLX1ySGPGeslB9hQzXYHhPAxh7YGxI-MpWRIC",
+        "inner": "Better Stack\nhttps://betterstack.com › community › guides › scaling-nodejs › understanding-abortcontroller\nUnderstanding AbortController in Node.js: A Complete Guide | Better Stack Community",
+        "text": "Better Stack https://betterstack.com › community › guides › scaling-nodejs › understanding-abortcontroller Understanding AbortController in Node.js: A Complete Guide | Better Stack Community",
+        "visible": true,
+        "chrome": false,
+        "snippet": "July 24, 2024 - It sets a timeout of 5000 milliseconds and creates an AbortController for user-initiated aborts, combini"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlhzkYVjziVOki0t7GORWORp_PpVSxjWG9oSv3CpELUtYZVDU9_WFCt1twFr1nxLsAmLxDIzHD5taVpzdxjHCXbhdjF-iBDn_FnNbNSbjEPgYXPEGr1fFioczolNdKXMREzmyqRkj-2mcJ7D3TT2h3__vEG982GeReMl8d6wT2wGwYLiua_sjyjyJpRfgMFxyyLX1ySGPGeslB9hQzXYHhPAxh7YGxI-MpWRIC",
+        "inner": " ",
+        "text": "",
+        "visible": false,
+        "chrome": false,
+        "snippet": "J u l y 2 4 , 2 0 2 4 - I t s e t s a t i m e o u t o f 5 0 0 0 m i l l i s e c o n d s a n d c r e a t e s a n A b o r "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlhzkYVjziVOki0t7GORWORp_PpVSxjWG9oSv3CpELUtYZVDU9_WFCt1twFr1nxLsAmLxDIzHD5taVpzdxjHCXbhdjF-iBDn_FnNbNSbjEPgYXPEGr1fFioczolNdKXMREzmyqRkj-2mcJ7D3TT2h3__vEG982GeReMl8d6wT2wGwYLiua_sjyjyJpRfgMFxyyLX1ySGPGeslB9hQzXYHhPAxh7YGxI-MpWRIC",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "B e t t e r S t a c k h t t p s : / / b e t t e r s t a c k . c o m › c o m m u n i t y › g u i d e s › s c a l i n g - "
+      },
+      {
+        "href": "https://search.brave.com/search?q=node%20fetch%20timeout%20abortsignal%20!g",
+        "inner": "Google",
+        "text": "Google",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/search?q=node%20fetch%20timeout%20abortsignal%20!b",
+        "inner": "Bing",
+        "text": "Bing",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/search?q=node%20fetch%20timeout%20abortsignal%20!mojeek",
+        "inner": "Mojeek",
+        "text": "Mojeek",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnliDb6uPYS_vwbRgqXr8G9TERCI5OSogoGTitow9MlIfR7vgeFRctnLfBwBYSsuD2RsJjW3Uxz4Thbnek_NLvHlcUBhNaZ0EA4s94JXy_FVCf90wyfPZj0j7ar-g75QBMUVXHmetNWyXom6BcixxFwya17kfNb7A_dsUantOP3lpVi-VWshjBqHdA8m4fu_05ii_fSQ-6poZy6FeSgOitGAQ",
+        "inner": "MDN Web Docs\nhttps://developer.mozilla.org › en-US › docs › Web › API › AbortSignal › timeout_static\nAbortSignal: timeout() static method - Web APIs | MDN",
+        "text": "MDN Web Docs https://developer.mozilla.org › en-US › docs › Web › API › AbortSignal › timeout_static AbortSignal: timeout() static method - Web APIs | MDN",
+        "visible": true,
+        "chrome": false,
+        "snippet": "September 1, 2026 - The AbortSignal.timeout() static method returns an AbortSignal that will automatically abort after a"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnliROfdIHaAOYJQbBJc5ccFlPiwL22AhIrj989LBIej2OlABSKQmc7KpelifChPf2O1UhEstuDsXtibw0IxvS8MnOvIOBCM0Kt_WX0fljNjMFpAPRAwhLV5zAYwRSOMsecv95dc51yyjEOqcSvdWVXL5ZZzA-dCazCaz7C1fQSMVcnK1FgDP-bkZ3cbpdWPX5rWwk",
+        "inner": "Bytefork\nhttps://bytefork.tools › home › blog › fetch() never times out — and node hides a five-minute one\nfetch() never times out — and Node hides a five-minute on...",
+        "text": "Bytefork https://bytefork.tools › home › blog › fetch() never times out — and node hides a five-minute one fetch() never times out — and Node hides a five-minute on...",
+        "visible": true,
+        "chrome": false,
+        "snippet": "September 7, 2026 - fetch() has no timeout option. RequestInit accepts signal and seventeen other members, and none of t"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnliROfdIHaAOYJQbBJc5ccFlPiwL22AhIrj989LBIej2OlABSKQmc7KpelifChPf2O1UhEstuDsXtibw0IxvS8MnOvIOBCM0Kt_WX0fljNjMFpAPRAwhLV5zAYwRSOMsecv95dc51yyjEOqcSvdWVXL5ZZzA-dCazCaz7C1fQSMVcnK1FgDP-bkZ3cbpdWPX5rWwk",
+        "inner": " ",
+        "text": "",
+        "visible": false,
+        "chrome": false,
+        "snippet": "S e p t e m b e r 7 , 2 0 2 6 - f e t c h ( ) h a s n o t i m e o u t o p t i o n . R e q u e s t I n i t a c c e p t s "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnliROfdIHaAOYJQbBJc5ccFlPiwL22AhIrj989LBIej2OlABSKQmc7KpelifChPf2O1UhEstuDsXtibw0IxvS8MnOvIOBCM0Kt_WX0fljNjMFpAPRAwhLV5zAYwRSOMsecv95dc51yyjEOqcSvdWVXL5ZZzA-dCazCaz7C1fQSMVcnK1FgDP-bkZ3cbpdWPX5rWwk",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "B y t e f o r k h t t p s : / / b y t e f o r k . t o o l s › h o m e › b l o g › f e t c h ( ) n e v e r t i m e s o u "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlimttCoib4lYFnMByPyWaaPu2O_TQqcrwPXAqSgCBrVOb80TLCreIYMs4L9Qb-ktmCXaXq-fwGGnOe51xcg-QSccdh6v3Tm4TmrjrAeq0o4NpaiZeAgMxLElDzKveERMuYFcSEFYbk34eyHaXJziFADZH7nmren1PVA_5xzCPYIjb5y5-kSB-wWY9_mus2X_eNVq-DQ",
+        "inner": "Franklin\nhttps://fvdm.com › code › node-js-simple-request-timeout-with-fetch\nNode.js: Simple fetch() timeout – Franklin",
+        "text": "Franklin https://fvdm.com › code › node-js-simple-request-timeout-with-fetch Node.js: Simple fetch() timeout – Franklin",
+        "visible": true,
+        "chrome": false,
+        "snippet": "December 2, 2025 - { signal: AbortSignal.timeout( ms ), } Node.js version >= 17.3.0 is required. It may also work in rec"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlimttCoib4lYFnMByPyWaaPu2O_TQqcrwPXAqSgCBrVOb80TLCreIYMs4L9Qb-ktmCXaXq-fwGGnOe51xcg-QSccdh6v3Tm4TmrjrAeq0o4NpaiZeAgMxLElDzKveERMuYFcSEFYbk34eyHaXJziFADZH7nmren1PVA_5xzCPYIjb5y5-kSB-wWY9_mus2X_eNVq-DQ",
+        "inner": " ",
+        "text": "",
+        "visible": false,
+        "chrome": false,
+        "snippet": "D e c e m b e r 2 , 2 0 2 5 - { s i g n a l : A b o r t S i g n a l . t i m e o u t ( m s ) , } N o d e . j s v e r s i "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlimttCoib4lYFnMByPyWaaPu2O_TQqcrwPXAqSgCBrVOb80TLCreIYMs4L9Qb-ktmCXaXq-fwGGnOe51xcg-QSccdh6v3Tm4TmrjrAeq0o4NpaiZeAgMxLElDzKveERMuYFcSEFYbk34eyHaXJziFADZH7nmren1PVA_5xzCPYIjb5y5-kSB-wWY9_mus2X_eNVq-DQ",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "F r a n k l i n h t t p s : / / f v d m . c o m › c o d e › n o d e - j s - s i m p l e - r e q u e s t - t i m e o u t "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnli8bYhwGDy9tVU4Dy5_ozHe8_sQcde8iBD-PPIpVOGL6UyGzx3QlMAZ16Hb33dw7arpoO3A_LGaBbAnO5LgaHb2kX0V6tm8bPh_7hXSoEWHbEgWIbHpqJpI4wKyk5PnWXD6GeAoriO0fQgtnYEp7ri_4OnCjNdyH9FVaQOIftNcflm7q_u5TeaK02Q2y0QsLyAjjoxYAbYuDz5HCHs-yEy-qlpaGpejhtOIUZXJV-QlX8omtFlkSSMEIaCQ",
+        "inner": "DEV Community\nhttps://dev.to › johnnylemonny › stop-using-default-nodejs-fetch-in-production-without-these-two-fixes-4o5\nStop Using Default Node.js fetch() in Production Without These Two Fixes - DEV ",
+        "text": "DEV Community https://dev.to › johnnylemonny › stop-using-default-nodejs-fetch-in-production-without-these-two-fixes-4o5 Stop Using Default Node.js fetch() in Production Without These Two Fixes - DEV ",
+        "visible": true,
+        "chrome": false,
+        "snippet": "2 weeks ago - One more behavior worth covering: AbortSignal.timeout() cancels the fetch, but the undici socket underneat"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnli8bYhwGDy9tVU4Dy5_ozHe8_sQcde8iBD-PPIpVOGL6UyGzx3QlMAZ16Hb33dw7arpoO3A_LGaBbAnO5LgaHb2kX0V6tm8bPh_7hXSoEWHbEgWIbHpqJpI4wKyk5PnWXD6GeAoriO0fQgtnYEp7ri_4OnCjNdyH9FVaQOIftNcflm7q_u5TeaK02Q2y0QsLyAjjoxYAbYuDz5HCHs-yEy-qlpaGpejhtOIUZXJV-QlX8omtFlkSSMEIaCQ",
+        "inner": " ",
+        "text": "",
+        "visible": false,
+        "chrome": false,
+        "snippet": "2 w e e k s a g o - O n e m o r e b e h a v i o r w o r t h c o v e r i n g : A b o r t S i g n a l . t i m e o u t ( ) "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnli8bYhwGDy9tVU4Dy5_ozHe8_sQcde8iBD-PPIpVOGL6UyGzx3QlMAZ16Hb33dw7arpoO3A_LGaBbAnO5LgaHb2kX0V6tm8bPh_7hXSoEWHbEgWIbHpqJpI4wKyk5PnWXD6GeAoriO0fQgtnYEp7ri_4OnCjNdyH9FVaQOIftNcflm7q_u5TeaK02Q2y0QsLyAjjoxYAbYuDz5HCHs-yEy-qlpaGpejhtOIUZXJV-QlX8omtFlkSSMEIaCQ",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "D E V C o m m u n i t y h t t p s : / / d e v . t o › j o h n n y l e m o n n y › s t o p - u s i n g - d e f a u l t - "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnljNfVthTo-4jW6IkP4_NV0wiZoacV0gPkEoIu9ih_dYjCG2aF2PRy2y-0h2e51TaNmfYG7pQ9fxVZdptoX41e-0qpCGuDaN0MQzhVBAep4Fk3sjJ5FdabzZJ_WxZphF6rdD6Sp91AzCd-i44YEuaXOEGhq1F2us8BS57QPYPVpT2_FaO8e4CR4LFu2JR6arcfPDaM2mT-mhIDZwdS-OhWtAD_eKNAFi3uffvTCRKM3An9vAM",
+        "inner": "Stack Overflow\nhttps://stackoverflow.com › questions › 54204342 › node-fetch-why-is-signal-recommended-over-timeout\nnode.js - node-fetch: why is `signal` recommended over `timeout`? - Stack Overflow",
+        "text": "Stack Overflow https://stackoverflow.com › questions › 54204342 › node-fetch-why-is-signal-recommended-over-timeout node.js - node-fetch: why is `signal` recommended over `timeout`? - Stack Overflow",
+        "visible": true,
+        "chrome": false,
+        "snippet": "Top answer 1 of 2 3 The timeout option is a node-fetch-proprietary extension that is not part of the WhatWG fetch standa"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnljNfVthTo-4jW6IkP4_NV0wiZoacV0gPkEoIu9ih_dYjCG2aF2PRy2y-0h2e51TaNmfYG7pQ9fxVZdptoX41e-0qpCGuDaN0MQzhVBAep4Fk3sjJ5FdabzZJ_WxZphF6rdD6Sp91AzCd-i44YEuaXOEGhq1F2us8BS57QPYPVpT2_FaO8e4CR4LFu2JR6arcfPDaM2mT-mhIDZwdS-OhWtAD_eKNAFi3uffvTCRKM3An9vAM",
+        "inner": "Top answer\n1 of 2\n3\n\nThe timeout option is a node-fetch-proprietary extension that is not part of the WhatWG fetch standard.\n\n \n\nWhen it was built, AbortController did not exist in the standard yet, s",
+        "text": "Top answer 1 of 2 3 The timeout option is a node-fetch-proprietary extension that is not part of the WhatWG fetch standard. When it was built, AbortController did not exist in the standard yet, so the",
+        "visible": true,
+        "chrome": false,
+        "snippet": "2 of 2 0 As in the comments of your code timeout is just a node-fetch extension. AbortSignal is the new (future?) standa"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnljNfVthTo-4jW6IkP4_NV0wiZoacV0gPkEoIu9ih_dYjCG2aF2PRy2y-0h2e51TaNmfYG7pQ9fxVZdptoX41e-0qpCGuDaN0MQzhVBAep4Fk3sjJ5FdabzZJ_WxZphF6rdD6Sp91AzCd-i44YEuaXOEGhq1F2us8BS57QPYPVpT2_FaO8e4CR4LFu2JR6arcfPDaM2mT-mhIDZwdS-OhWtAD_eKNAFi3uffvTCRKM3An9vAM",
+        "inner": "2 of 2\n0\n\nAs in the comments of your code timeout is just a node-fetch extension. AbortSignal is the new (future?) standard way to cancel and the only cross platform way that cancelling fetch",
+        "text": "2 of 2 0 As in the comments of your code timeout is just a node-fetch extension. AbortSignal is the new (future?) standard way to cancel and the only cross platform way that cancelling fetch",
+        "visible": true,
+        "chrome": false,
+        "snippet": "Top answer 1 of 2 3 The timeout option is a node-fetch-proprietary extension that is not part of the WhatWG fetch standa"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnljQSSdw2J9tid6Nv-z4v8f9QPosCFBHh6y0WYlQtJoHRj--8q5UIUAjOZkuTsx36nYgI7yPpxR4BqqiaPL2BP-HvW-E5STC39DF-evZmu_HD08m1IZdWUPMf4Q8nMH_KZu4UgXAq5YMfB6GMmzAVFxdcf0MhzK5OPqEkv6K-jGjREVLaFn0VHRrcE",
+        "inner": "Devfiddle\nhttps://devfiddle.com › snippets › fetch-with-timeout\nFetch with AbortSignal Timeout - DevFiddle",
+        "text": "Devfiddle https://devfiddle.com › snippets › fetch-with-timeout Fetch with AbortSignal Timeout - DevFiddle",
+        "visible": true,
+        "chrome": false,
+        "snippet": "October 10, 2026 - If you need compatibility across older browser engines that lack AbortSignal.timeout(): async functio"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnljnMJAWqk5bzlnXbBvHREU9oXsThyFvQunNOu2cCUgFKjwMgf7-GOKh06v3rZnUFlr9M15sKPxeB-3dh4RtfxaVEqh09-Lusv_Pw1AzT1geBOnueeUzVdeiGf410y_Shiaa5AaC0EGJtd6ms15bw6noioLHsdzQ1H86vfTdaJqqL26zofECghDWOFaACA-Es4VhY7K97C-ujjqfleDA",
+        "inner": "Better Stack\nhttps://betterstack.com › community › guides › scaling-nodejs › nodejs-timeouts\nA Complete Guide to Timeouts in Node.js | Better Stack Community",
+        "text": "Better Stack https://betterstack.com › community › guides › scaling-nodejs › nodejs-timeouts A Complete Guide to Timeouts in Node.js | Better Stack Community",
+        "visible": true,
+        "chrome": false,
+        "snippet": "Ideally, the scheduled timeout should be canceled as well. If you're in control of the function that creates the timeout"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnljnMJAWqk5bzlnXbBvHREU9oXsThyFvQunNOu2cCUgFKjwMgf7-GOKh06v3rZnUFlr9M15sKPxeB-3dh4RtfxaVEqh09-Lusv_Pw1AzT1geBOnueeUzVdeiGf410y_Shiaa5AaC0EGJtd6ms15bw6noioLHsdzQ1H86vfTdaJqqL26zofECghDWOFaACA-Es4VhY7K97C-ujjqfleDA",
+        "inner": " ",
+        "text": "",
+        "visible": false,
+        "chrome": false,
+        "snippet": "I d e a l l y , t h e s c h e d u l e d t i m e o u t s h o u l d b e c a n c e l e d a s w e l l . I f y o u ' r e i n "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnljnMJAWqk5bzlnXbBvHREU9oXsThyFvQunNOu2cCUgFKjwMgf7-GOKh06v3rZnUFlr9M15sKPxeB-3dh4RtfxaVEqh09-Lusv_Pw1AzT1geBOnueeUzVdeiGf410y_Shiaa5AaC0EGJtd6ms15bw6noioLHsdzQ1H86vfTdaJqqL26zofECghDWOFaACA-Es4VhY7K97C-ujjqfleDA",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "B e t t e r S t a c k h t t p s : / / b e t t e r s t a c k . c o m › c o m m u n i t y › g u i d e s › s c a l i n g - "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlj1tusxyRoCYY_wmZmHpfi0az1f2k1qR5L4omcC0ELtasQfo4ZV3Z04U-cCWS6DAx8g1-G8pruCg9kmeQGPx2uYiUA8wRlkauH3Q_OTNEz4uc6cmqcyBrjVZfVCUQY4_xFe8YlFl8E_sioSdqyecGyDFlak1VPFuGGUeUeEusGAxAtVqXvq615RP9Cbja5V4YP9VYkPTwHGIDw3qjiH6EuhKODNow1_ma5MMnO1BCpz8jdws",
+        "inner": "DEV Community\nhttps://dev.to › shubhradev › aborting-a-fetch-doesnt-stop-your-nodejs-server-heres-what-does-2fek\nAborting a Fetch Doesn't Stop Your Node.js Server. Here's What Does. - DEV Community",
+        "text": "DEV Community https://dev.to › shubhradev › aborting-a-fetch-doesnt-stop-your-nodejs-server-heres-what-does-2fek Aborting a Fetch Doesn't Stop Your Node.js Server. Here's What Does. - DEV Community",
+        "visible": true,
+        "chrome": false,
+        "snippet": "1 month ago - Create the timeout signal inside the request. AbortSignal.timeout() starts counting when you call it, so a"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlj1tusxyRoCYY_wmZmHpfi0az1f2k1qR5L4omcC0ELtasQfo4ZV3Z04U-cCWS6DAx8g1-G8pruCg9kmeQGPx2uYiUA8wRlkauH3Q_OTNEz4uc6cmqcyBrjVZfVCUQY4_xFe8YlFl8E_sioSdqyecGyDFlak1VPFuGGUeUeEusGAxAtVqXvq615RP9Cbja5V4YP9VYkPTwHGIDw3qjiH6EuhKODNow1_ma5MMnO1BCpz8jdws",
+        "inner": " ",
+        "text": "",
+        "visible": false,
+        "chrome": false,
+        "snippet": "1 m o n t h a g o - C r e a t e t h e t i m e o u t s i g n a l i n s i d e t h e r e q u e s t . A b o r t S i g n a l "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlj1tusxyRoCYY_wmZmHpfi0az1f2k1qR5L4omcC0ELtasQfo4ZV3Z04U-cCWS6DAx8g1-G8pruCg9kmeQGPx2uYiUA8wRlkauH3Q_OTNEz4uc6cmqcyBrjVZfVCUQY4_xFe8YlFl8E_sioSdqyecGyDFlak1VPFuGGUeUeEusGAxAtVqXvq615RP9Cbja5V4YP9VYkPTwHGIDw3qjiH6EuhKODNow1_ma5MMnO1BCpz8jdws",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "D E V C o m m u n i t y h t t p s : / / d e v . t o › s h u b h r a d e v › a b o r t i n g - a - f e t c h - d o e s n "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlkKp2LdqV8U4EH-ev-iuNFKVvH0_avgxw4bN0-BkJW4w-3aAPe5v0xSFm67djwBwI2Uuu94RixP1r-dcMzZmc3FCcHcHjS4EgVK_8n4JHVBb8F6jSOdiM4gSKxgy7EmkDYVQL1MPI8n7jXRU0J2EcYfVMuX0mGAMMnRzOpZt8Z56_wFvk0V0RivOkSW4mTbTrVGcjp1OKUxNxtycmCmYNXOSuPjzOnbqQHHSf19legLWdhIsX4lrZPjteEKo0yDmj4zkIwb-D6YWdUlY3oa0IAg",
+        "inner": "Stack Overflow\nhttps://stackoverflow.com › questions › 75969669 › abortsignal-timeout-in-fetch-request-always-responds-with-aborterror-but-not-t\njavascript - AbortSignal.timeout() in fetch request alw",
+        "text": "Stack Overflow https://stackoverflow.com › questions › 75969669 › abortsignal-timeout-in-fetch-request-always-responds-with-aborterror-but-not-t javascript - AbortSignal.timeout() in fetch request alw",
+        "visible": true,
+        "chrome": false,
+        "snippet": "Top answer 1 of 1 8 This is indeed a Chrome and Safari bug. I just opened CRBUG 1431754, and Safari had BUG 246069 for q"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlkKp2LdqV8U4EH-ev-iuNFKVvH0_avgxw4bN0-BkJW4w-3aAPe5v0xSFm67djwBwI2Uuu94RixP1r-dcMzZmc3FCcHcHjS4EgVK_8n4JHVBb8F6jSOdiM4gSKxgy7EmkDYVQL1MPI8n7jXRU0J2EcYfVMuX0mGAMMnRzOpZt8Z56_wFvk0V0RivOkSW4mTbTrVGcjp1OKUxNxtycmCmYNXOSuPjzOnbqQHHSf19legLWdhIsX4lrZPjteEKo0yDmj4zkIwb-D6YWdUlY3oa0IAg",
+        "inner": "Top answer\n1 of 1\n8\n\nThis is indeed a Chrome and Safari bug.\n\n \n\nI just opened CRBUG 1431754, and Safari had BUG 246069 for quite some time now.\n\n \n\nAccording to the specs\n\nTo abort a fetch() call wit",
+        "text": "Top answer 1 of 1 8 This is indeed a Chrome and Safari bug. I just opened CRBUG 1431754, and Safari had BUG 246069 for quite some time now. According to the specs To abort a fetch() call with a promis",
+        "visible": true,
+        "chrome": false,
+        "snippet": "Stack Overflow https://stackoverflow.com › questions › 75969669 › abortsignal-timeout-in-fetch-request-always-responds-w"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlkatrFQfUBQDiTYbRzFDI8-s2a_pzhhUv3uuL2hRQLTFAdk7rBy94KI8RmZe40DqIYVl6VMg--llzdqNUQmtLbeJ93DxW8Omta7UvlG7grjJ4ofo7rC4tbzdWIAgrz4kyjkK7-4B18U3auHb1Hj-hHl7qr3l1KYz-_-DedeO-RVxoTTgWLmEqp5wXZ_dVNvkfdi8N",
+        "inner": "Vilvaathiban\nhttps://vilvaathiban.com › home › articles › 'fetch is aborted': what the error means, every place it comes from, and how to fix each one\n'Fetch Is Aborted': What the Error Means, Every P",
+        "text": "Vilvaathiban https://vilvaathiban.com › home › articles › 'fetch is aborted': what the error means, every place it comes from, and how to fix each one 'Fetch Is Aborted': What the Error Means, Every P",
+        "visible": true,
+        "chrome": false,
+        "snippet": "October 25, 2026 - Node.js (undici, the built-in fetch): AbortError: This operation was aborted when the signal fires be"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlkatrFQfUBQDiTYbRzFDI8-s2a_pzhhUv3uuL2hRQLTFAdk7rBy94KI8RmZe40DqIYVl6VMg--llzdqNUQmtLbeJ93DxW8Omta7UvlG7grjJ4ofo7rC4tbzdWIAgrz4kyjkK7-4B18U3auHb1Hj-hHl7qr3l1KYz-_-DedeO-RVxoTTgWLmEqp5wXZ_dVNvkfdi8N",
+        "inner": " ",
+        "text": "",
+        "visible": false,
+        "chrome": false,
+        "snippet": "O c t o b e r 2 5 , 2 0 2 6 - N o d e . j s ( u n d i c i , t h e b u i l t - i n f e t c h ) : A b o r t E r r o r : T "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlkatrFQfUBQDiTYbRzFDI8-s2a_pzhhUv3uuL2hRQLTFAdk7rBy94KI8RmZe40DqIYVl6VMg--llzdqNUQmtLbeJ93DxW8Omta7UvlG7grjJ4ofo7rC4tbzdWIAgrz4kyjkK7-4B18U3auHb1Hj-hHl7qr3l1KYz-_-DedeO-RVxoTTgWLmEqp5wXZ_dVNvkfdi8N",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "V i l v a a t h i b a n h t t p s : / / v i l v a a t h i b a n . c o m › h o m e › a r t i c l e s › ' f e t c h i s a "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlkr3kYAKU1vKqalk8ap1raVJHQKHg6fiZflq5OOGYpWSmoHBgCjzUp93ISOibO1rAJE68BnU2P56fPD6ZPN1YKPgw4cAcRWKxRuM6VKDqkKQbbPkXn_DvJKFobgtCvphiImiaO_bHDa6b4B2HX6H4a53Bmfa_34013cxy2DBmHKT-gKSJai8NOTFXYIQeak4bWWYjcYjGN1be-HPgr3hvdfI4MpPPll66d3TN06zGGX7UAHRcu9IbCtsU8jNa1PkJ",
+        "inner": "DEV Community\nhttps://dev.to › gabrielanhaia › abortsignaltimeout-and-abortsignalany-cancel-any-async-call-in-typescript-1d1a\nAbortSignal.timeout() and AbortSignal.any(): Cancel Any Async Call in Type",
+        "text": "DEV Community https://dev.to › gabrielanhaia › abortsignaltimeout-and-abortsignalany-cancel-any-async-call-in-typescript-1d1a AbortSignal.timeout() and AbortSignal.any(): Cancel Any Async Call in Type",
+        "visible": true,
+        "chrome": false,
+        "snippet": "October 24, 2026 - If the signal you own has aborted, its reason is the truth, whatever the error looks like by the time"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlkr3kYAKU1vKqalk8ap1raVJHQKHg6fiZflq5OOGYpWSmoHBgCjzUp93ISOibO1rAJE68BnU2P56fPD6ZPN1YKPgw4cAcRWKxRuM6VKDqkKQbbPkXn_DvJKFobgtCvphiImiaO_bHDa6b4B2HX6H4a53Bmfa_34013cxy2DBmHKT-gKSJai8NOTFXYIQeak4bWWYjcYjGN1be-HPgr3hvdfI4MpPPll66d3TN06zGGX7UAHRcu9IbCtsU8jNa1PkJ",
+        "inner": " ",
+        "text": "",
+        "visible": false,
+        "chrome": false,
+        "snippet": "O c t o b e r 2 4 , 2 0 2 6 - I f t h e s i g n a l y o u o w n h a s a b o r t e d , i t s r e a s o n i s t h e t r u "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlkr3kYAKU1vKqalk8ap1raVJHQKHg6fiZflq5OOGYpWSmoHBgCjzUp93ISOibO1rAJE68BnU2P56fPD6ZPN1YKPgw4cAcRWKxRuM6VKDqkKQbbPkXn_DvJKFobgtCvphiImiaO_bHDa6b4B2HX6H4a53Bmfa_34013cxy2DBmHKT-gKSJai8NOTFXYIQeak4bWWYjcYjGN1be-HPgr3hvdfI4MpPPll66d3TN06zGGX7UAHRcu9IbCtsU8jNa1PkJ",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "D E V C o m m u n i t y h t t p s : / / d e v . t o › g a b r i e l a n h a i a › a b o r t s i g n a l t i m e o u t - "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlk8_4F-FZC1dfFDRQ16eKQJLvTJAvvM9AFBvNBpcXfB-j0d0Ycj0YPm2_SDecw3KbWCbon2-OxmgkzYTJO3k-UNhqwdXf5qFWVru9byjF9uwVDNT2gg_WjlcpgviZxotG97Oi0Bu_85fJBxEL89LgOWxjP5KjIiuFHAO6G2wxrctvQ6nG6s9agDCetIur-zWsa1COsfemjK-RATuhUtEdBw",
+        "inner": "RealCoding Workshop\nhttps://realcoding.blog › en › 2026 › 02 › 02 › nodejs-abortcontroller-fetch-timeout\nHandling Fetch Timeouts with Node.js AbortController | RealCoding Workshop",
+        "text": "RealCoding Workshop https://realcoding.blog › en › 2026 › 02 › 02 › nodejs-abortcontroller-fetch-timeout Handling Fetch Timeouts with Node.js AbortController | RealCoding Workshop",
+        "visible": true,
+        "chrome": false,
+        "snippet": "February 2, 2026 - // One line is all you need const response = await fetch('https://api.example.com/users', { signal: A"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlk8_4F-FZC1dfFDRQ16eKQJLvTJAvvM9AFBvNBpcXfB-j0d0Ycj0YPm2_SDecw3KbWCbon2-OxmgkzYTJO3k-UNhqwdXf5qFWVru9byjF9uwVDNT2gg_WjlcpgviZxotG97Oi0Bu_85fJBxEL89LgOWxjP5KjIiuFHAO6G2wxrctvQ6nG6s9agDCetIur-zWsa1COsfemjK-RATuhUtEdBw",
+        "inner": " ",
+        "text": "",
+        "visible": false,
+        "chrome": false,
+        "snippet": "F e b r u a r y 2 , 2 0 2 6 - / / O n e l i n e i s a l l y o u n e e d c o n s t r e s p o n s e = a w a i t f e t c h "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#Afzs4--Is6FCawo6jAGFsJrPnvhZNLuH3tSxtGnlk8_4F-FZC1dfFDRQ16eKQJLvTJAvvM9AFBvNBpcXfB-j0d0Ycj0YPm2_SDecw3KbWCbon2-OxmgkzYTJO3k-UNhqwdXf5qFWVru9byjF9uwVDNT2gg_WjlcpgviZxotG97Oi0Bu_85fJBxEL89LgOWxjP5KjIiuFHAO6G2wxrctvQ6nG6s9agDCetIur-zWsa1COsfemjK-RATuhUtEdBw",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "R e a l C o d i n g W o r k s h o p h t t p s : / / r e a l c o d i n g . b l o g › e n › 2 0 2 6 › 0 2 › 0 2 › n o d e "
+      },
+      {
+        "href": "https://search.brave.com/search?q=abortsignal.timeout%20is%20not%20a%20function&source=relatedQueries",
+        "inner": "abortsignal.timeout is not a function",
+        "text": "abortsignal.timeout is not a function",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/search?q=abortsignal.timeout%20polyfill&source=relatedQueries",
+        "inner": "abortsignal.timeout polyfill",
+        "text": "abortsignal.timeout polyfill",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/search?q=timeout%20does%20not%20exist%20on%20abortsignal&source=relatedQueries",
+        "inner": "timeout does not exist on abortsignal",
+        "text": "timeout does not exist on abortsignal",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/search?q=node-fetch%20default%20timeout&source=relatedQueries",
+        "inner": "node-fetch default timeout",
+        "text": "node-fetch default timeout",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/search?q=jest%20abortsignal.timeout%20is%20not%20a%20function&source=relatedQueries",
+        "inner": "jest abortsignal.timeout is not a function",
+        "text": "jest abortsignal.timeout is not a function",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/search?q=node%20fetch%20abortsignal%20timeout%20react&source=relatedQueries",
+        "inner": "node fetch abortsignal timeout react",
+        "text": "node fetch abortsignal timeout react",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/search?q=node%20fetch%20timeout%20abortsignal%20example&source=relatedQueries",
+        "inner": "node fetch timeout abortsignal example",
+        "text": "node fetch timeout abortsignal example",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/search?q=node%20fetch%20timeout%20abortsignal%20react&source=relatedQueries",
+        "inner": "node fetch timeout abortsignal react",
+        "text": "node fetch timeout abortsignal react",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/search?q=node+fetch+timeout+abortsignal&offset=1&spellcheck=0",
+        "inner": "Next",
+        "text": "Next",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://account.brave.com/?intent=checkout&product=search",
+        "inner": "Brave Search Premium",
+        "text": "Brave Search Premium",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/help",
+        "inner": "Brave Search Help",
+        "text": "Brave Search Help",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://brave.com/transparency/",
+        "inner": "Transparency Report",
+        "text": "Transparency Report",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://hackerone.com/brave",
+        "inner": "Report a security issue",
+        "text": "Report a security issue",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://status.brave.app/",
+        "inner": "Status",
+        "text": "Status",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://brave.com/download/?mtm_source=brave-search&mtm_medium=searchfooter&mtm_campaign=brave-search&mtm_content=evergreen",
+        "inner": "Brave Browser",
+        "text": "Brave Browser",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/",
+        "inner": "Brave Search",
+        "text": "Brave Search",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://brave.com/wallet/?mtm_source=brave-search&mtm_medium=searchfooter&mtm_campaign=brave-search&mtm_content=evergreen",
+        "inner": "Brave Wallet",
+        "text": "Brave Wallet",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://talk.brave.com/?mtm_source=brave-search&mtm_medium=searchfooter&mtm_campaign=brave-search&mtm_content=evergreen",
+        "inner": "Brave Talk",
+        "text": "Brave Talk",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://brave.com/firewall-vpn/?mtm_source=brave-search&mtm_medium=searchfooter&mtm_campaign=brave-search&mtm_content=evergreen",
+        "inner": "Brave Firewall + VPN",
+        "text": "Brave Firewall + VPN",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://brave.com/playlist/?mtm_source=brave-search&mtm_medium=searchfooter&mtm_campaign=brave-search&mtm_content=evergreen",
+        "inner": "Brave Playlist",
+        "text": "Brave Playlist",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://brave.com/brave-news/?mtm_source=brave-search&mtm_medium=searchfooter&mtm_campaign=brave-search&mtm_content=evergreen",
+        "inner": "Brave News",
+        "text": "Brave News",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://brave.com/brave-rewards/?mtm_source=brave-search&mtm_medium=searchfooter&mtm_campaign=brave-search&mtm_content=evergreen",
+        "inner": "Brave Rewards",
+        "text": "Brave Rewards",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://brave.com/search/api/?mtm_source=brave-search&mtm_medium=searchfooter&mtm_campaign=brave-search&mtm_content=evergreen",
+        "inner": "Brave Search API",
+        "text": "Brave Search API",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://brave.com/brave-ads/?mtm_source=brave-search&mtm_medium=searchfooter&mtm_campaign=brave-search&mtm_content=evergreen",
+        "inner": "Brave Ads",
+        "text": "Brave Ads",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/help/privacy-policy",
+        "inner": "Privacy Policy",
+        "text": "Privacy Policy",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://brave.com/terms-of-use/",
+        "inner": "Terms of Use",
+        "text": "Terms of Use",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      }
+    ],
+    "anchors": 93,
+    "bodyText": "Ask\nAll\nImages\nNews\nVideos\nMaps\nGoggles\nAI-generated answer. Please verify critical facts.\nGitHub\nhttps://github.com › node-fetch › timeout-signal\nGitHub - node-fetch/timeout-signal: Create an AbortSignal that aborts after a delay. · GitHub\nDeprecated! Use AbortSignal.timeout(ms) instead! ... import"
+  },
+  "brave-general": {
+    "captured": "2026-11-27",
+    "links": [
+      {
+        "href": "https://search.brave.com/",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/",
+        "inner": "",
+        "text": "",
+        "visible": false,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/settings",
+        "inner": " ",
+        "text": "",
+        "visible": false,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/ask?q=carbonara+recipe&source=web",
+        "inner": "Ask",
+        "text": "Ask",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/search?q=carbonara+recipe&source=web",
+        "inner": "All",
+        "text": "All",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/images?q=carbonara+recipe&source=web",
+        "inner": "Images",
+        "text": "Images",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/news?q=carbonara+recipe&source=web",
+        "inner": "News",
+        "text": "News",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/videos?q=carbonara+recipe&source=web",
+        "inner": "Videos",
+        "text": "Videos",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/maps/search?q=carbonara+recipe&source=web",
+        "inner": "Maps",
+        "text": "Maps",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/goggles?q=carbonara+recipe&source=web",
+        "inner": "Goggles",
+        "text": "Goggles",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://cooking.nytimes.com/recipes/12965-spaghetti-carbonara",
+        "inner": "30m\n5.0\nCarbonara\nSalt, 2 large eggs and 2 large yolks, room temperature, 1 ounce (about ⅓ packed cup) grated pecorino Romano, plus additional for serving, 1 ounce (about ⅓ packed cup) grated Parmesan",
+        "text": "30m 5.0 Carbonara Salt, 2 large eggs and 2 large yolks, room temperature, 1 ounce (about ⅓ packed cup) grated pecorino Romano, plus additional for serving, 1 ounce (about ⅓ packed cup) grated Parmesan",
+        "visible": true,
+        "chrome": false,
+        "snippet": "20m Carbonara (real) 175g/6 oz guanciale (pancetta or block bacon), ( weight after skin removed (Note 1)), 2 large eggs "
+      },
+      {
+        "href": "https://www.recipetineats.com/carbonara/",
+        "inner": "20m\nCarbonara (real)\n175g/6 oz guanciale (pancetta or block bacon), ( weight after skin removed (Note 1)), 2 large eggs ((Note 2)), 2 egg yolks ((Note 2)), 100g/3.5 oz parmigiano reggiano (, finely sh",
+        "text": "20m Carbonara (real) 175g/6 oz guanciale (pancetta or block bacon), ( weight after skin removed (Note 1)), 2 large eggs ((Note 2)), 2 egg yolks ((Note 2)), 100g/3.5 oz parmigiano reggiano (, finely sh",
+        "visible": true,
+        "chrome": false,
+        "snippet": "30m 5.0 Carbonara Salt, 2 large eggs and 2 large yolks, room temperature, 1 ounce (about ⅓ packed cup) grated pecorino R"
+      },
+      {
+        "href": "https://www.bbcgoodfood.com/recipes/ultimate-spaghetti-carbonara-recipe",
+        "inner": "35m\nUltimate spaghetti carbonara recipe\n100g pancetta, 50g pecorino cheese, 50g parmesan, 3 large eggs, 350g spaghetti, 2 plump garlic cloves peeled and left whole, 50g unsalted butter, sea salt and f",
+        "text": "35m Ultimate spaghetti carbonara recipe 100g pancetta, 50g pecorino cheese, 50g parmesan, 3 large eggs, 350g spaghetti, 2 plump garlic cloves peeled and left whole, 50g unsalted butter, sea salt and f",
+        "visible": true,
+        "chrome": false,
+        "snippet": "30m 5.0 Carbonara Salt, 2 large eggs and 2 large yolks, room temperature, 1 ounce (about ⅓ packed cup) grated pecorino R"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAgI-zokmOE54W343RBNdfz02yDGEvL49PnR6WGP3F-vCD9OtA2G_dGlVBrV73aj1zysTD1NTg68Jp2ORIBkMkcDpRKdbkCdkBfjoALAy2xihvetKgiMDXDnFMInfhwtF_maBdy3_eA5cW8xgzzhWsS4cIvF0XcP6mfVx0liAeiPzemFVKqp8JG-49KN6VcUbw0wQ",
+        "inner": "NYTimes\nhttps://cooking.nytimes.com › recipes › 12965-spaghetti-carbonara\nCarbonara Recipe • 5★ • 30 min",
+        "text": "NYTimes https://cooking.nytimes.com › recipes › 12965-spaghetti-carbonara Carbonara Recipe • 5★ • 30 min",
+        "visible": true,
+        "chrome": false,
+        "snippet": "September 28, 2026 - Log in or sign up to mark this recipe as cooked. ... Never combine the ingredients in the pan you h"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAgcmTzW3mAhVKDoAIcNvBKZLXqfmsEdQn1bCMhq0vIA90T4i_Iegmm0lSoWWGhtswLyDtjgjNBBT97sX2KBuYji0k5OxbgNwctY3FFy8zbpPuIfsHe6LmYqaZJRlBqCBjavHbiJY_FaPRuZEx8OEV3m6nmq0yplXcijhEGgw",
+        "inner": "RecipeTin Eats\nhttps://recipetineats.com › home › quick and easy › carbonara\nCarbonara - RecipeTin Eats",
+        "text": "RecipeTin Eats https://recipetineats.com › home › quick and easy › carbonara Carbonara - RecipeTin Eats",
+        "visible": true,
+        "chrome": false,
+        "snippet": "April 28, 2025 - Equally important is that the fat that melts out of the guanciale is required to thicken the carbonara "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAgcmTzW3mAhVKDoAIcNvBKZLXqfmsEdQn1bCMhq0vIA90T4i_Iegmm0lSoWWGhtswLyDtjgjNBBT97sX2KBuYji0k5OxbgNwctY3FFy8zbpPuIfsHe6LmYqaZJRlBqCBjavHbiJY_FaPRuZEx8OEV3m6nmq0yplXcijhEGgw",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "R e c i p e T i n E a t s h t t p s : / / r e c i p e t i n e a t s . c o m › h o m e › q u i c k a n d e a s y › c a r "
+      },
+      {
+        "href": "https://cooking.nytimes.com/recipes/12965-spaghetti-carbonara",
+        "inner": "",
+        "text": "cooking.nytimes.com cooking.nytimes.com › recipes › 12965-spaghetti-carbonara Carbonara Recipe • 5★ • 30 min",
+        "visible": true,
+        "chrome": false,
+        "snippet": "How can I reheat carbonara? This is a dish that is best enjoyed as soon as it is made, when its sauce is at its satiny b"
+      },
+      {
+        "href": "https://cooking.nytimes.com/recipes/12965-spaghetti-carbonara",
+        "inner": "",
+        "text": "cooking.nytimes.com cooking.nytimes.com › recipes › 12965-spaghetti-carbonara Carbonara Recipe • 5★ • 30 min",
+        "visible": true,
+        "chrome": false,
+        "snippet": "Why does the temperature matter so much for spaghetti carbonara? If cold eggs are added to hot pasta, they can overheat "
+      },
+      {
+        "href": "https://www.youtube.com/watch?v=YIdq_U6e8rw",
+        "inner": "18:29\nYouTube\nHow to Make Spaghetti Carbonara: The Technique That Stops Scrambled ...\nApril 25, 2026",
+        "text": "18:29 YouTube How to Make Spaghetti Carbonara: The Technique That Stops Scrambled ... April 25, 2026",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://www.youtube.com/watch?v=VCiCqjhfUOg",
+        "inner": "05:39\nYouTube\nCreamy Pasta Carbonara Recipe - YouTube\nApril 23, 2026",
+        "text": "05:39 YouTube Creamy Pasta Carbonara Recipe - YouTube April 23, 2026",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://www.youtube.com/watch?v=CG1Yzk_F0P8",
+        "inner": "10:11\nYouTube\nHow Italians Make Real Spaghetti Carbonara - YouTube\nOctober 10, 2025",
+        "text": "10:11 YouTube How Italians Make Real Spaghetti Carbonara - YouTube October 10, 2025",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://www.youtube.com/watch?v=M94peyp_3UE",
+        "inner": "11:36\nYouTube\nThis Might Be the Best Carbonara Recipe on YouTube - YouTube\nSeptember 18, 2026",
+        "text": "11:36 YouTube This Might Be the Best Carbonara Recipe on YouTube - YouTube September 18, 2026",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/videos?q=carbonara%20recipe&source=vcluster",
+        "inner": "View all ",
+        "text": "View all",
+        "visible": false,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/videos?q=carbonara%20recipe&source=vcluster",
+        "inner": "View all",
+        "text": "View all",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAgqA8MzkVrjstJweL3k5Ydf6ioVxo_YNWvmGhYnnctaHgt8wjs6XJiBSc7Ad8mwYnpUKqDLkQLEUmmtRL_XYU5aNVjBPUBq9HcpIziV4zAPfN1EAvSPIx7P2duVA3IENljqVQRdbRZFOny_3tRa-byRWxEmB4ThkgM6T8bk7H_xrMGWZlF8UZDp2QJYI-lZsgjVTWmD2XEGEo8ogK",
+        "inner": "BBC Good Food\nhttps://bbcgoodfood.com › home › recipes › ultimate spaghetti carbonara recipe\nUltimate spaghetti carbonara recipe | Good Food",
+        "text": "BBC Good Food https://bbcgoodfood.com › home › recipes › ultimate spaghetti carbonara recipe Ultimate spaghetti carbonara recipe | Good Food",
+        "visible": true,
+        "chrome": false,
+        "snippet": "October 22, 2026 - Discover how to make traditional spaghetti carbonara. This classic Italian pasta dish combines a silk"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAgqA8MzkVrjstJweL3k5Ydf6ioVxo_YNWvmGhYnnctaHgt8wjs6XJiBSc7Ad8mwYnpUKqDLkQLEUmmtRL_XYU5aNVjBPUBq9HcpIziV4zAPfN1EAvSPIx7P2duVA3IENljqVQRdbRZFOny_3tRa-byRWxEmB4ThkgM6T8bk7H_xrMGWZlF8UZDp2QJYI-lZsgjVTWmD2XEGEo8ogK",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "B B C G o o d F o o d h t t p s : / / b b c g o o d f o o d . c o m › h o m e › r e c i p e s › u l t i m a t e s p a g "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAg_4HjaiiH97d4TJTuJ--UmwLpnBu6fx8kTiSL0fUZAhHFbarlY2BankBWYuSkJJNGnVOJk0fm0z5BAqBImbKnhwQaQykWsHvTvM__Ej423g7o4VbjYtmYFCWrfKgcoB5EbTuCqrA_k9Dy9NYA7vzp_PzPKdfN_b_U_pBJmt8kwHRleD6e5OkqRv3X3r6NTuOFyoZBQ",
+        "inner": "Simply Recipes\nhttps://simplyrecipes.com › recipes › spaghetti_alla_carbonara\nYou'll Love Our Foolproof Recipe for Spaghetti Carbonara",
+        "text": "Simply Recipes https://simplyrecipes.com › recipes › spaghetti_alla_carbonara You'll Love Our Foolproof Recipe for Spaghetti Carbonara",
+        "visible": true,
+        "chrome": false,
+        "snippet": "July 21, 2026 - Classic spaghetti carbonara is an indulgent yet surprisingly simple recipe. Made with pancetta (or bacon"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAg_4HjaiiH97d4TJTuJ--UmwLpnBu6fx8kTiSL0fUZAhHFbarlY2BankBWYuSkJJNGnVOJk0fm0z5BAqBImbKnhwQaQykWsHvTvM__Ej423g7o4VbjYtmYFCWrfKgcoB5EbTuCqrA_k9Dy9NYA7vzp_PzPKdfN_b_U_pBJmt8kwHRleD6e5OkqRv3X3r6NTuOFyoZBQ",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "S i m p l y R e c i p e s h t t p s : / / s i m p l y r e c i p e s . c o m › r e c i p e s › s p a g h e t t i _ a l l "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAhPra_AJN1XNf36Ecpja-6lTvFSUogoMJvYDSHRM1OO3FjYyh0KVeta6t-u2VuJ_XyQM0jLXSFuC497SScRbfyXQsyVIgckl04oyvhHFkhVtzkJA2LkGYRn-Y12HUYjJ9G1BpzMzI4P3r30KFuu3wF74zW4etN9k2sncvDAFCVuWmw4qnmSiuAg",
+        "inner": "The Kitchn\nhttps://thekitchn.com › carbonara-recipe-23613143\nSpaghetti Carbonara Recipe (4 Ingredients, 30 Minutes) | The Kitchn",
+        "text": "The Kitchn https://thekitchn.com › carbonara-recipe-23613143 Spaghetti Carbonara Recipe (4 Ingredients, 30 Minutes) | The Kitchn",
+        "visible": true,
+        "chrome": false,
+        "snippet": "April 17, 2025 - Carbonara is one of several classic Roman pasta dishes that calls for minimal but overlapping ingredien"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAhPra_AJN1XNf36Ecpja-6lTvFSUogoMJvYDSHRM1OO3FjYyh0KVeta6t-u2VuJ_XyQM0jLXSFuC497SScRbfyXQsyVIgckl04oyvhHFkhVtzkJA2LkGYRn-Y12HUYjJ9G1BpzMzI4P3r30KFuu3wF74zW4etN9k2sncvDAFCVuWmw4qnmSiuAg",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "T h e K i t c h n h t t p s : / / t h e k i t c h n . c o m › c a r b o n a r a - r e c i p e - 2 3 6 1 3 1 4 3 S p a g "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAhaLWTpDtM7_VW5RNP3gGalE8VR0D6mSbY1T0C4JXQAeubQiql1S8pn7pSEHJ7cW1pOGJ_vAfPbKBuBifK2D6XEBRTCqJVcW7mZHxFTXVVDU6IKsaUUEWQennJWYFnoANDGMebr4xfwDRsYXc86H-kMuffZa-ab0_TbH5KogjHp14UJ6xw0QUbBHL6U4_cDQxLbyCCTLSa1ZUkg8CoCInq9lMdtUaP0mnKLa8wgo",
+        "inner": "La Cucina Italiana\nhttps://lacucinaitaliana.com › italian food › how to cook › classic carbonara recipe\nClassic Carbonara Recipe - La Cucina Italiana",
+        "text": "La Cucina Italiana https://lacucinaitaliana.com › italian food › how to cook › classic carbonara recipe Classic Carbonara Recipe - La Cucina Italiana",
+        "visible": true,
+        "chrome": false,
+        "snippet": "February 21, 2023 - In the warm pan with the hot pasta, the eggs will cook gently and become creamy – don't stir over he"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAhaLWTpDtM7_VW5RNP3gGalE8VR0D6mSbY1T0C4JXQAeubQiql1S8pn7pSEHJ7cW1pOGJ_vAfPbKBuBifK2D6XEBRTCqJVcW7mZHxFTXVVDU6IKsaUUEWQennJWYFnoANDGMebr4xfwDRsYXc86H-kMuffZa-ab0_TbH5KogjHp14UJ6xw0QUbBHL6U4_cDQxLbyCCTLSa1ZUkg8CoCInq9lMdtUaP0mnKLa8wgo",
+        "inner": " ",
+        "text": "",
+        "visible": false,
+        "chrome": false,
+        "snippet": "F e b r u a r y 2 1 , 2 0 2 3 - I n t h e w a r m p a n w i t h t h e h o t p a s t a , t h e e g g s w i l l c o o k g "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAhaLWTpDtM7_VW5RNP3gGalE8VR0D6mSbY1T0C4JXQAeubQiql1S8pn7pSEHJ7cW1pOGJ_vAfPbKBuBifK2D6XEBRTCqJVcW7mZHxFTXVVDU6IKsaUUEWQennJWYFnoANDGMebr4xfwDRsYXc86H-kMuffZa-ab0_TbH5KogjHp14UJ6xw0QUbBHL6U4_cDQxLbyCCTLSa1ZUkg8CoCInq9lMdtUaP0mnKLa8wgo",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "L a C u c i n a I t a l i a n a h t t p s : / / l a c u c i n a i t a l i a n a . c o m › i t a l i a n f o o d › h o w "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAhgc7GXLh1HJGF121QMxtLtMSN3PLYTC2yLMeU5JFgk695pgFY2HSKBp6CYJLxqT8S1zxYVzTFvj4lTFB8MESzpvWkqeIByfOxAJvHR-j-_sFP2PbX49hrWpeo17kwr1gUv10GxJmrUFgMu0EU2GA0ny22R_8fudnM0DIj-ScX8_gMck6bybvGL2WBgibCJcJQ7sA",
+        "inner": "No Regretti Spaghetti\nhttps://noregrettispaghetti.co › home › blog › the best roman style spaghetti carbonara\nThe best Roman-style spaghetti carbonara recipe",
+        "text": "No Regretti Spaghetti https://noregrettispaghetti.co › home › blog › the best roman style spaghetti carbonara The best Roman-style spaghetti carbonara recipe",
+        "visible": true,
+        "chrome": false,
+        "snippet": "July 28, 2025 - Using only a handful of ingredients – eggs, guanciale, black pepper and pecorino Romano, this recipe wil"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAhgc7GXLh1HJGF121QMxtLtMSN3PLYTC2yLMeU5JFgk695pgFY2HSKBp6CYJLxqT8S1zxYVzTFvj4lTFB8MESzpvWkqeIByfOxAJvHR-j-_sFP2PbX49hrWpeo17kwr1gUv10GxJmrUFgMu0EU2GA0ny22R_8fudnM0DIj-ScX8_gMck6bybvGL2WBgibCJcJQ7sA",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "N o R e g r e t t i S p a g h e t t i h t t p s : / / n o r e g r e t t i s p a g h e t t i . c o › h o m e › b l o g › "
+      },
+      {
+        "href": "https://search.brave.com/search?q=carbonara%20recipe%20!g",
+        "inner": "Google",
+        "text": "Google",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/search?q=carbonara%20recipe%20!b",
+        "inner": "Bing",
+        "text": "Bing",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/search?q=carbonara%20recipe%20!mojeek",
+        "inner": "Mojeek",
+        "text": "Mojeek",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAhzsGT4EgnToQsx3WOKnzmBXQFmIiWFEt4hv4bS6YOeoiE9pPXfhdA2jWIkEZdVvaSFxZr7qkKZxZI77Qc1-TGrRGx7G3TkfamrAjuuT3k3QHxp58UuLrpZUwu2yz4g5oBLWcKFWzUSzekkTYuB0vZuZ1uaauRCPq-H_q8e1SfefnVtmcdjnNAw",
+        "inner": "Familystyle Food\nhttps://familystylefood.com › home › dinner › pasta › classic pasta carbonara recipe (with bacon)\nClassic Pasta Carbonara Recipe - Familystyle Food",
+        "text": "Familystyle Food https://familystylefood.com › home › dinner › pasta › classic pasta carbonara recipe (with bacon) Classic Pasta Carbonara Recipe - Familystyle Food",
+        "visible": true,
+        "chrome": false,
+        "snippet": "April 29, 2026 - Hot pasta and a splash of starchy cooking water turn an egg-and-cheese mixture into a rich, glossy sauc"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAhzsGT4EgnToQsx3WOKnzmBXQFmIiWFEt4hv4bS6YOeoiE9pPXfhdA2jWIkEZdVvaSFxZr7qkKZxZI77Qc1-TGrRGx7G3TkfamrAjuuT3k3QHxp58UuLrpZUwu2yz4g5oBLWcKFWzUSzekkTYuB0vZuZ1uaauRCPq-H_q8e1SfefnVtmcdjnNAw",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "F a m i l y s t y l e F o o d h t t p s : / / f a m i l y s t y l e f o o d . c o m › h o m e › d i n n e r › p a s t a "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAiEPVNII_BS5EC2fhbT_x0hSt5u2Tnqf88mYzDNrypLGjaMY1ZoeV0zTonCCtoRjz_ZoKeHHr1SrHnCbuhdNvx3N68zh-Hpao0K0Z-U7yQUG172vbIUWnWlsEeGWJYsXrSIHzQNWAAIr4cgspemF8gbKn6BrXeB9BA3SRXJxLV6drDKqEn923vHrd-DYDw1SPAA",
+        "inner": "Bon Appétit\nhttps://bonappetit.com › recipe › simple-spaghetti-carbonara\nSpaghetti Carbonara, Step-by-Step Recipe | Bon Appétit",
+        "text": "Bon Appétit https://bonappetit.com › recipe › simple-spaghetti-carbonara Spaghetti Carbonara, Step-by-Step Recipe | Bon Appétit",
+        "visible": true,
+        "chrome": false,
+        "snippet": "August 17, 2026 - This recipe calls for 3 Tbsp. Diamond Crystal or 1 Tbsp. plus 2¼ tsp. Morton kosher salt for a full 6 "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAiEPVNII_BS5EC2fhbT_x0hSt5u2Tnqf88mYzDNrypLGjaMY1ZoeV0zTonCCtoRjz_ZoKeHHr1SrHnCbuhdNvx3N68zh-Hpao0K0Z-U7yQUG172vbIUWnWlsEeGWJYsXrSIHzQNWAAIr4cgspemF8gbKn6BrXeB9BA3SRXJxLV6drDKqEn923vHrd-DYDw1SPAA",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "B o n A p p é t i t h t t p s : / / b o n a p p e t i t . c o m › r e c i p e › s i m p l e - s p a g h e t t i - c a r "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAidW3DITiaWQjDg204vZjGSTkPo4K3yORPagFgjSO7h6ax4BUfz0EGj13jXbNQoJpffDy8v2UM2HsVNkkPZA4Zr3Y4PnzL8CmDdpO_P49Bh5iu2a-V29cWCZgQK_cmCgixT54kTNTmMKt8OxhBeFSD1yQYeigJv8ESrtfEqqlxgQ",
+        "inner": "Kitchen Sanctuary\nhttps://kitchensanctuary.com › home › recipes › pasta › carbonara\nCarbonara - Nicky's Kitchen Sanctuary",
+        "text": "Kitchen Sanctuary https://kitchensanctuary.com › home › recipes › pasta › carbonara Carbonara - Nicky's Kitchen Sanctuary",
+        "visible": true,
+        "chrome": false,
+        "snippet": "February 2, 2026 - A classic carbonara doesn’t need cream in order to get that traditional creamy texture. The eggs, che"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAidW3DITiaWQjDg204vZjGSTkPo4K3yORPagFgjSO7h6ax4BUfz0EGj13jXbNQoJpffDy8v2UM2HsVNkkPZA4Zr3Y4PnzL8CmDdpO_P49Bh5iu2a-V29cWCZgQK_cmCgixT54kTNTmMKt8OxhBeFSD1yQYeigJv8ESrtfEqqlxgQ",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "K i t c h e n S a n c t u a r y h t t p s : / / k i t c h e n s a n c t u a r y . c o m › h o m e › r e c i p e s › p a "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAioTvnW_T1Df3bYWhhVv4c9g6a0KTdeNyTUyvovzss2Gbz5kMsx75WCbjGhK83-7pV8VqyCEe-IgUPlQX5yrZ490jD_dJ7UefkBusJ17MtAslVf2kT9Qsz5BGt6v3ukqomgSpBFPG6uOin4rrifNJwnlIbIltvo3RhrkIOkBXLA9VfiScDw",
+        "inner": "Budget Bytes\nhttps://budgetbytes.com › recipes › pasta recipes › quick pasta recipes › easy spaghetti carbonara\nMy 5-Ingredient Spaghetti Carbonara Is Easy, Cozy, and Delicious!",
+        "text": "Budget Bytes https://budgetbytes.com › recipes › pasta recipes › quick pasta recipes › easy spaghetti carbonara My 5-Ingredient Spaghetti Carbonara Is Easy, Cozy, and Delicious!",
+        "visible": true,
+        "chrome": false,
+        "snippet": "September 5, 2025 - Spaghetti carbonara is the epitome of simple, satisfying pasta recipes. This Italian dish is just sp"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAioTvnW_T1Df3bYWhhVv4c9g6a0KTdeNyTUyvovzss2Gbz5kMsx75WCbjGhK83-7pV8VqyCEe-IgUPlQX5yrZ490jD_dJ7UefkBusJ17MtAslVf2kT9Qsz5BGt6v3ukqomgSpBFPG6uOin4rrifNJwnlIbIltvo3RhrkIOkBXLA9VfiScDw",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "B u d g e t B y t e s h t t p s : / / b u d g e t b y t e s . c o m › r e c i p e s › p a s t a r e c i p e s › q u i c "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAiy7j7B0Vj6y2dznFxcu_qk_TdWOPndkHG42ArRTaBuwfteT8472kHAv-59osErtNgHDQRBR6bd-OIfXZm0ar82G515d0n8TIpD3SJfq2-X9KglQgT-vC04C4dCGL3OXoR7pvfUk_cxXYYufTCknogWhY5bjO36WWGNhRqP5aHqvMU5IciftDNVyAtHdarZdRYl7lraTak1VqDzHWAgs",
+        "inner": "Delish\nhttps://delish.com › meals & cooking › recipes › spaghetti carbonara\nBest Pasta Carbonara Recipe",
+        "text": "Delish https://delish.com › meals & cooking › recipes › spaghetti carbonara Best Pasta Carbonara Recipe",
+        "visible": true,
+        "chrome": false,
+        "snippet": "November 7, 2025 - I found 5 large egg yolks plus 1 whole egg are the perfect ratio for the perfect carbonara. The Chees"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAiy7j7B0Vj6y2dznFxcu_qk_TdWOPndkHG42ArRTaBuwfteT8472kHAv-59osErtNgHDQRBR6bd-OIfXZm0ar82G515d0n8TIpD3SJfq2-X9KglQgT-vC04C4dCGL3OXoR7pvfUk_cxXYYufTCknogWhY5bjO36WWGNhRqP5aHqvMU5IciftDNVyAtHdarZdRYl7lraTak1VqDzHWAgs",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "D e l i s h h t t p s : / / d e l i s h . c o m › m e a l s & c o o k i n g › r e c i p e s › s p a g h e t t i c a r b "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAjNXHT34uo1DHWeJ8WxWaql8K9Jbqo2CMbSyBPTySWduwaFafaNmSwJW19k1MHxCoLtaqO9RM_EVvkVjOYIf2lA9HPIJxvJmsnUDds6K_UP1-dRvVq6X9gdWIn_nZU1Hzg-VdYvhIA6PbIncvfxsTZLzcvV07EomaXOeqs-JzYNHDHg4dwXFmwqklKY68pEXSKg8",
+        "inner": "BBC\nhttps://bbc.co.uk › food › recipes › spaghettiallacarbona_73311\nEasy spaghetti carbonara recipe - BBC Food",
+        "text": "BBC https://bbc.co.uk › food › recipes › spaghettiallacarbona_73311 Easy spaghetti carbonara recipe - BBC Food",
+        "visible": true,
+        "chrome": false,
+        "snippet": "February 2, 2026 - Some recipes call for egg yolks only, but using whole eggs makes the sauce less likely to fail. Make "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAjNXHT34uo1DHWeJ8WxWaql8K9Jbqo2CMbSyBPTySWduwaFafaNmSwJW19k1MHxCoLtaqO9RM_EVvkVjOYIf2lA9HPIJxvJmsnUDds6K_UP1-dRvVq6X9gdWIn_nZU1Hzg-VdYvhIA6PbIncvfxsTZLzcvV07EomaXOeqs-JzYNHDHg4dwXFmwqklKY68pEXSKg8",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "B B C h t t p s : / / b b c . c o . u k › f o o d › r e c i p e s › s p a g h e t t i a l l a c a r b o n a _ 7 3 3 1 1 "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAjaBbLVMV21r_f05d0iofMW47yYC5Jr8AMTdm-J59NSmIEwRLeryaJy-P59FEc7cS8G0pyLVX3jv4gvoVa4ejM9gbNQQnld0wwbyUkrQVB8HEsm2XnkxRV39DOVVwoiudf26rTxA5HKHPIWhyGYhNcx5balWSILQ_Gy4XZVt60uMZ2JsluZItd9tQId6hvcAqmIbQva6GbDq5DA",
+        "inner": "Recipes from Italy\nhttps://recipesfromitaly.com › home › italian pasta recipes › long pasta recipes › traditional spaghetti carbonara recipe\nTraditional Spaghetti Carbonara Recipe",
+        "text": "Recipes from Italy https://recipesfromitaly.com › home › italian pasta recipes › long pasta recipes › traditional spaghetti carbonara recipe Traditional Spaghetti Carbonara Recipe",
+        "visible": true,
+        "chrome": false,
+        "snippet": "October 27, 2026 - Spaghetti Carbonara is one of the most famous pasta dishes from Roman cuisine. This authentic Italian"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAjaBbLVMV21r_f05d0iofMW47yYC5Jr8AMTdm-J59NSmIEwRLeryaJy-P59FEc7cS8G0pyLVX3jv4gvoVa4ejM9gbNQQnld0wwbyUkrQVB8HEsm2XnkxRV39DOVVwoiudf26rTxA5HKHPIWhyGYhNcx5balWSILQ_Gy4XZVt60uMZ2JsluZItd9tQId6hvcAqmIbQva6GbDq5DA",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "R e c i p e s f r o m I t a l y h t t p s : / / r e c i p e s f r o m i t a l y . c o m › h o m e › i t a l i a n p a s "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAjtM1WrVBLK737WeQe7bR3n0sBIzuTtxQlI7by5C5GH2wrGX6pAGJ56m8zLh3Nnpv8jseRUa_voSSeXWEBERIeM_SFCWwkKGDqYVmSavvj4W2GLXY_zA4UcJ74fZpl51E6lxLirGzdK-xediA1gH0VcrGVoFhj-zSQUo2knk1O9geUlz3RU-hehBd0FBlpyrePY9-5tvq9_1X79B2eCWdeBJcNYMC",
+        "inner": "Jamie Oliver\nhttps://jamieoliver.com › recipes › pasta › gennaro-s-classic-spaghetti-carbonara\nGennaro's classic spaghetti carbonara - Pasta recipes",
+        "text": "Jamie Oliver https://jamieoliver.com › recipes › pasta › gennaro-s-classic-spaghetti-carbonara Gennaro's classic spaghetti carbonara - Pasta recipes",
+        "visible": true,
+        "chrome": false,
+        "snippet": "January 25, 2016 - A spaghetti carbonara recipe is a failsafe classic. This Italian carbonara uses the traditional guanc"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAjtM1WrVBLK737WeQe7bR3n0sBIzuTtxQlI7by5C5GH2wrGX6pAGJ56m8zLh3Nnpv8jseRUa_voSSeXWEBERIeM_SFCWwkKGDqYVmSavvj4W2GLXY_zA4UcJ74fZpl51E6lxLirGzdK-xediA1gH0VcrGVoFhj-zSQUo2knk1O9geUlz3RU-hehBd0FBlpyrePY9-5tvq9_1X79B2eCWdeBJcNYMC",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "J a m i e O l i v e r h t t p s : / / j a m i e o l i v e r . c o m › r e c i p e s › p a s t a › g e n n a r o - s - c "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAj0v2P7uZmW_mesZqmowmE00GvfXkrCtonhI7Fo1bldbvdUcFuJWIC0MFXc2_2Hx7b03Tgm1hutxxIFfT0NthWwXK6NBxFWLMJNUEbmNUJf9UZjzRyjbd2rWp3_93zUkJk5ss9noAsY8rdzYIWcfDAqH3idAlWVCkc_hqW3RKt6QGJvt7787Er-bADg",
+        "inner": "Savory Experiments\nhttps://savoryexperiments.com › home › recipes › pastas › authentic carbonara\nAuthentic Carbonara Recipe {Roman-Style, No Cream!}",
+        "text": "Savory Experiments https://savoryexperiments.com › home › recipes › pastas › authentic carbonara Authentic Carbonara Recipe {Roman-Style, No Cream!}",
+        "visible": true,
+        "chrome": false,
+        "snippet": "August 14, 2026 - Authentic Roman carbonara with guanciale, eggs, Pecorino Romano and black pepper-no cream, no scramble"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAj0v2P7uZmW_mesZqmowmE00GvfXkrCtonhI7Fo1bldbvdUcFuJWIC0MFXc2_2Hx7b03Tgm1hutxxIFfT0NthWwXK6NBxFWLMJNUEbmNUJf9UZjzRyjbd2rWp3_93zUkJk5ss9noAsY8rdzYIWcfDAqH3idAlWVCkc_hqW3RKt6QGJvt7787Er-bADg",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "S a v o r y E x p e r i m e n t s h t t p s : / / s a v o r y e x p e r i m e n t s . c o m › h o m e › r e c i p e s › "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAkPUR1d9HKH6_5-Ibgty9G_djCXfmh8gb5JPZ7_A41TOv2C8hanAwgOgjgEwXjyBhaSiUN8gnHEQ-wWl61_ElVc9WsZaYA9Y8l3G-4glx6ueo8BdGeBSaCxhZ--HH2_4YDjp_Nq8QEtgILBCV6-heVhlhoeY_eUZBDw",
+        "inner": "CJ Eats Recipes\nhttps://cjeatsrecipes.com › home › all recipes › noodles & pastas › authentic carbonara – 15 minutes! (video)\nAuthentic Carbonara - 15 Minutes! (VIDEO) - CJ Eats Recipes",
+        "text": "CJ Eats Recipes https://cjeatsrecipes.com › home › all recipes › noodles & pastas › authentic carbonara – 15 minutes! (video) Authentic Carbonara - 15 Minutes! (VIDEO) - CJ Eats Recipes",
+        "visible": true,
+        "chrome": false,
+        "snippet": "November 30, 2025 - My authentic Carbonara recipe results in a creamy, and decadent dish that uses zero cream — just a c"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAkPUR1d9HKH6_5-Ibgty9G_djCXfmh8gb5JPZ7_A41TOv2C8hanAwgOgjgEwXjyBhaSiUN8gnHEQ-wWl61_ElVc9WsZaYA9Y8l3G-4glx6ueo8BdGeBSaCxhZ--HH2_4YDjp_Nq8QEtgILBCV6-heVhlhoeY_eUZBDw",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "C J E a t s R e c i p e s h t t p s : / / c j e a t s r e c i p e s . c o m › h o m e › a l l r e c i p e s › n o o d l "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAka5oYRbp8RkfwpLhdmp538INWXWJjqSdgm7vuq5NhZQvYa0q832PxIVt5Pg_yFHWnJvR3GTXLOGJtp9sIX-w4B9e5kmpszbyETxGqzkuuwyo75jRSjqbCQjKkQDyO_WTFB43Gxn2_jPAVofEstjLrQ3YTF476rKWteUD6jdISYejdN4oQEjzVa4M",
+        "inner": "An Italian in my Kitchen\nhttps://anitalianinmykitchen.com › home › recipes › ingredient › pasta › authentic spaghetti carbonara\nAuthentic Spaghetti Carbonara Recipe - An Italian in my Kitchen",
+        "text": "An Italian in my Kitchen https://anitalianinmykitchen.com › home › recipes › ingredient › pasta › authentic spaghetti carbonara Authentic Spaghetti Carbonara Recipe - An Italian in my Kitchen",
+        "visible": true,
+        "chrome": false,
+        "snippet": "February 28, 2023 - This Authentic Spaghetti Carbonara is made with just 4 ingredients, egg yolks, black pepper, pecorin"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAka5oYRbp8RkfwpLhdmp538INWXWJjqSdgm7vuq5NhZQvYa0q832PxIVt5Pg_yFHWnJvR3GTXLOGJtp9sIX-w4B9e5kmpszbyETxGqzkuuwyo75jRSjqbCQjKkQDyO_WTFB43Gxn2_jPAVofEstjLrQ3YTF476rKWteUD6jdISYejdN4oQEjzVa4M",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "A n I t a l i a n i n m y K i t c h e n h t t p s : / / a n i t a l i a n i n m y k i t c h e n . c o m › h o m e › r e "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAkhB5yVP-gQ6x6jyNVlkEtVVfkxj-hkfBXuJViRciGpBo5d6jUObRUfkDBD6jHAfiuy-qWEAShcBynT0TK3zI7hv85LoAgHI84luPFaJWnezLSxtaon331XcRKBczAseLq3NK7g-XeUcqrhnwJqgJ16UiBdL1TIP15DTI4qWjMKYIJ4oJ",
+        "inner": "Jo Cooks\nhttps://jocooks.com › home › recipes › easy carbonara\nEasy Carbonara - Jo Cooks",
+        "text": "Jo Cooks https://jocooks.com › home › recipes › easy carbonara Easy Carbonara - Jo Cooks",
+        "visible": true,
+        "chrome": false,
+        "snippet": "May 5, 2025 - I use 3 large eggs for a rich, silky texture without making it too heavy. Some recipes use just yolks, but"
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAkhB5yVP-gQ6x6jyNVlkEtVVfkxj-hkfBXuJViRciGpBo5d6jUObRUfkDBD6jHAfiuy-qWEAShcBynT0TK3zI7hv85LoAgHI84luPFaJWnezLSxtaon331XcRKBczAseLq3NK7g-XeUcqrhnwJqgJ16UiBdL1TIP15DTI4qWjMKYIJ4oJ",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "J o C o o k s h t t p s : / / j o c o o k s . c o m › h o m e › r e c i p e s › e a s y c a r b o n a r a E a s y C a r "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAkywikanZgI38kD5wvfzVsELBB54MYX8XFfPG6KbaX3LL9J2_Y59Zk_kusF0LIG2jQrAVYxteXEZMnUkfdDm5oY5DpBRGlzRFMFCKZ_IHK9xggzJIvL2vFjb7WLWDd2N-I1qII0ZUGkAUnYY-0TdACZVZbOcT6Gu-vTphkNlpn59tDJVCAHNmnDG3zajgAA",
+        "inner": "Jamie Oliver\nhttps://jamieoliver.com › recipes › pasta › easy-carbonara\nEasy carbonara recipe",
+        "text": "Jamie Oliver https://jamieoliver.com › recipes › pasta › easy-carbonara Easy carbonara recipe",
+        "visible": true,
+        "chrome": false,
+        "snippet": "March 23, 2020 - Pasta recipes / Easy carbonara · Save recipe · Bacon, eggs & Parmesan · Save recipe · About the recipe "
+      },
+      {
+        "href": "https://search.brave.com/go/v1#AeOp90ve4ZMiawo6jAGuiD9GmQGZdGXbSneBquKAkywikanZgI38kD5wvfzVsELBB54MYX8XFfPG6KbaX3LL9J2_Y59Zk_kusF0LIG2jQrAVYxteXEZMnUkfdDm5oY5DpBRGlzRFMFCKZ_IHK9xggzJIvL2vFjb7WLWDd2N-I1qII0ZUGkAUnYY-0TdACZVZbOcT6Gu-vTphkNlpn59tDJVCAHNmnDG3zajgAA",
+        "inner": "",
+        "text": "",
+        "visible": true,
+        "chrome": false,
+        "snippet": "J a m i e O l i v e r h t t p s : / / j a m i e o l i v e r . c o m › r e c i p e s › p a s t a › e a s y - c a r b o n "
+      },
+      {
+        "href": "https://search.brave.com/search?q=carbonara%20recipe%20cheese&source=relatedQueries",
+        "inner": "carbonara recipe cheese",
+        "text": "carbonara recipe cheese",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/search?q=carbonara%20recipe%20with%20egg&source=relatedQueries",
+        "inner": "carbonara recipe with egg",
+        "text": "carbonara recipe with egg",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/search?q=authentic%20carbonara%20recipe&source=relatedQueries",
+        "inner": "authentic carbonara recipe",
+        "text": "authentic carbonara recipe",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/search?q=creamy%20carbonara%20recipe&source=relatedQueries",
+        "inner": "creamy carbonara recipe",
+        "text": "creamy carbonara recipe",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/search?q=carbonara%20recipe%20italian&source=relatedQueries",
+        "inner": "carbonara recipe italian",
+        "text": "carbonara recipe italian",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/search?q=filipino%20carbonara%20recipe&source=relatedQueries",
+        "inner": "filipino carbonara recipe",
+        "text": "filipino carbonara recipe",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/search?q=tuna%20carbonara%20recipe&source=relatedQueries",
+        "inner": "tuna carbonara recipe",
+        "text": "tuna carbonara recipe",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/search?q=spaghetti%20carbonara%20recipe%20with%20cream&source=relatedQueries",
+        "inner": "spaghetti carbonara recipe with cream",
+        "text": "spaghetti carbonara recipe with cream",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/search?q=carbonara+recipe&offset=1&spellcheck=0",
+        "inner": "Next",
+        "text": "Next",
+        "visible": true,
+        "chrome": false,
+        "snippet": ""
+      },
+      {
+        "href": "https://account.brave.com/?intent=checkout&product=search",
+        "inner": "Brave Search Premium",
+        "text": "Brave Search Premium",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/help",
+        "inner": "Brave Search Help",
+        "text": "Brave Search Help",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://brave.com/transparency/",
+        "inner": "Transparency Report",
+        "text": "Transparency Report",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://hackerone.com/brave",
+        "inner": "Report a security issue",
+        "text": "Report a security issue",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://status.brave.app/",
+        "inner": "Status",
+        "text": "Status",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://brave.com/download/?mtm_source=brave-search&mtm_medium=searchfooter&mtm_campaign=brave-search&mtm_content=evergreen",
+        "inner": "Brave Browser",
+        "text": "Brave Browser",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/",
+        "inner": "Brave Search",
+        "text": "Brave Search",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://brave.com/wallet/?mtm_source=brave-search&mtm_medium=searchfooter&mtm_campaign=brave-search&mtm_content=evergreen",
+        "inner": "Brave Wallet",
+        "text": "Brave Wallet",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://talk.brave.com/?mtm_source=brave-search&mtm_medium=searchfooter&mtm_campaign=brave-search&mtm_content=evergreen",
+        "inner": "Brave Talk",
+        "text": "Brave Talk",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://brave.com/firewall-vpn/?mtm_source=brave-search&mtm_medium=searchfooter&mtm_campaign=brave-search&mtm_content=evergreen",
+        "inner": "Brave Firewall + VPN",
+        "text": "Brave Firewall + VPN",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://brave.com/playlist/?mtm_source=brave-search&mtm_medium=searchfooter&mtm_campaign=brave-search&mtm_content=evergreen",
+        "inner": "Brave Playlist",
+        "text": "Brave Playlist",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://brave.com/brave-news/?mtm_source=brave-search&mtm_medium=searchfooter&mtm_campaign=brave-search&mtm_content=evergreen",
+        "inner": "Brave News",
+        "text": "Brave News",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://brave.com/brave-rewards/?mtm_source=brave-search&mtm_medium=searchfooter&mtm_campaign=brave-search&mtm_content=evergreen",
+        "inner": "Brave Rewards",
+        "text": "Brave Rewards",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://brave.com/search/api/?mtm_source=brave-search&mtm_medium=searchfooter&mtm_campaign=brave-search&mtm_content=evergreen",
+        "inner": "Brave Search API",
+        "text": "Brave Search API",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://brave.com/brave-ads/?mtm_source=brave-search&mtm_medium=searchfooter&mtm_campaign=brave-search&mtm_content=evergreen",
+        "inner": "Brave Ads",
+        "text": "Brave Ads",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://search.brave.com/help/privacy-policy",
+        "inner": "Privacy Policy",
+        "text": "Privacy Policy",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      },
+      {
+        "href": "https://brave.com/terms-of-use/",
+        "inner": "Terms of Use",
+        "text": "Terms of Use",
+        "visible": true,
+        "chrome": true,
+        "snippet": ""
+      }
+    ],
+    "anchors": 90,
+    "bodyText": "Ask\nAll\nImages\nNews\nVideos\nMaps\nGoggles\nRecipes\nView all\n30m\n5.0\nCarbonara\nSalt, 2 large eggs and 2 large yolks, room temperature, 1 ounce (about ⅓ packed cup) grated pecorino Romano, plus additional for serving, 1 ounce (about ⅓ packed cup) grated Parmesan, Coarsely ground black pepper, 1 tablespoo"
+  }
+}
