@@ -218,13 +218,29 @@ state the engine already holds, and a trailing note sent in the user role starts
 last-user checkpoint. What falls between checkpoints is a context shed, which rewrites history
 further back. Checkpoint spacing is the engine's setting to tune; the roles stay the model's.
 
-### Search Brave, not Google or Bing, when driving a browser
+### Search an engine whose links carry the real address, and check by count
 
 On live results pages, Google and Bing launder every outbound link through a tracker
 (`google.com/goto?url=…`, `bing.com/ck/a?…`): 0 of 53 and 0 of 46 visible links survived to a usable
-URL, and `cite` is a display string, not a fallback. Brave and DuckDuckGo return real links. Brave
-also runs its own index rather than reselling Bing, so it isn't correlated with the engine most
-likely to block you next.
+URL, and `cite` is a display string, not a fallback. Brave did the same in November 2026: most of
+its ranked results now link to `search.brave.com/go/v1#<token>`, with the destination nowhere on the
+page. Reika searched Brave at the time, and a coding query came back as one result out of 93 links,
+that one Brave's footer link to its security disclosure page.
+
+DuckDuckGo's HTML version (`html.duckduckgo.com/html/`) still gives each result's address, in the
+`uddg` parameter of its link, so it can be read without following the redirect. On the same day it
+gave 8 relevant results with real titles for a coding, a current-events and a general query, where
+Brave gave 1, 2 and 4.
+
+Two things follow for any harness that reads a results page:
+
+- **An engine that changes does not fail; it answers badly.** A page whose results are all wrapped
+  links still has a footer, so the extractor returns one stray link and the search looks like it
+  worked. Fall back to the next engine on too few usable results, not on errors, and skip links in
+  the page's header, footer and navigation.
+- **Test the filter against recorded pages.** Record each engine's links with the same collector the
+  browser runs, and test the filter on them in CI. A redesign then fails a test instead of reaching
+  the model as a search that found nothing.
 
 ### Use a persistent browser profile, not a fresh headless one
 
