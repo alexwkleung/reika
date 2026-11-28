@@ -10,7 +10,7 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
 - Experimental: with `REIKA_EDIT_POSITION=1`, `edit` can insert new lines beside a line that
   contains a short string, or replace a range of lines checked against a short per-line hash that
   `read` then shows. It is for models that will not rebuild exact text they no longer have in
-  context. Off by default.
+  context. Off by default (#1134).
 
 ## [0.15.0] - 2026-11-27
 
