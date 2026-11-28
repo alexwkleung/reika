@@ -12,7 +12,8 @@ The project `.env` belongs to whatever repo you open, so it is read narrowly: on
 and never the ones that change the sandbox, approvals, endpoints, keys or MCP servers
 (`REIKA_SANDBOX`, `REIKA_AUTO_APPROVE`, `REIKA_MCP`, `REIKA_MCP_SERVERS`, `REIKA_PASTE_FETCH`,
 `REIKA_SKILL_AUTO`, `REIKA_URL_GROUNDING`, `REIKA_CDP_SEARCH`, `REIKA_CDP_PORT`,
-`REIKA_DEBUG_FILE`, and every key ending in `_URL` or `_API_KEY`). Set those in your shell or the
+`REIKA_DEBUG_FILE`, `REIKA_CHROME_PATH`, `REIKA_MODE_MODELS`, `REIKA_SPILL_STATS_FILE`, and every
+key ending in `_URL` or `_API_KEY`). Set those in your shell or the
 global file; Reika prints a warning naming any it ignored.
 
 The keys are grouped by area below. In each table, the **Default** column is what Reika uses when
