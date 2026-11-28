@@ -33,6 +33,8 @@ export const pageDescriptions: Record<string, string> = {
     'Engineering notes and measured findings from building Reika, a coding agent harness for small local models.',
   'support.md':
     'Reika is free and open source under Apache-2.0. Ways to fund the project, contribute, and get in touch.',
+  'privacy.md':
+    'Reika has no telemetry. Every network request it makes and every file it writes, and the setting that turns each one off.',
   'contributors.md':
     'The people who have contributed code, translations, security reviews and test reports to Reika.',
   // A translated zh page gets its own; one that shows the English text borrows the English one.

@@ -108,7 +108,7 @@ Set these in your shell, a project `.env`, or `~/.config/reika/.env` (in that or
 
 - **Approvals** default to `safe`: ordinary edits and commands run on their own, but a dangerous command (`rm -rf`, a force push, a package install, `curl`) or a write outside the project still asks you first. `bypass` can only be set at launch, never mid-session.
 - **Sandbox** (macOS, on by default): model-chosen shell commands can write only inside the project, temp, and cache directories, and have no network apart from loopback and read-only `git`/`gh`. A command you explicitly approve runs unsandboxed. `REIKA_SANDBOX=0` turns it off.
-- **No telemetry.** Your code goes to the model server you configure and nowhere else: with a local server it never leaves your machine, and with a cloud API it goes to that provider. The only other requests are the web tools (when the model uses one or you paste a link), a download of the public models.dev catalog to look up context limits (hosted endpoints only, and never with your data), and whatever the MCP servers you configure do on their own.
+- **No telemetry.** Your code goes to the model server you configure and nowhere else: with a local server it never leaves your machine, and with a cloud API it goes to that provider. The only other requests are the web tools (when the model uses one or you paste a link), a download of the public models.dev catalog to look up context limits (hosted endpoints only, and never with your data), and whatever the MCP servers you configure do on their own. [Privacy and data](docs/privacy.md) lists every request and every file Reika writes.
 
 Found a way around one of these? Report it privately; see [SECURITY.md](SECURITY.md).
 
@@ -128,6 +128,7 @@ The same pages are on the website, [reikacode.com](https://reikacode.com).
 | [Findings](docs/findings.md)                     | The measured record: what broke, what held, and how each number was obtained                |
 | [Platforms](docs/platforms.md)                   | Requirements, running on a weak machine, what differs on Linux and Windows                  |
 | [Architecture and caveats](docs/architecture.md) | How the harness works, and known limitations                                                |
+| [Privacy and data](docs/privacy.md)              | Every network request Reika makes, every file it writes, and how to turn each one off       |
 | [Contributing](CONTRIBUTING.md)                  | Scripts, design philosophy, a pointer to `AGENTS.md`, and external contributor guidelines   |
 | [Changelog](CHANGELOG.md)                        | What changed in each release                                                                |
 

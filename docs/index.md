@@ -84,6 +84,9 @@ docs:
   - title: Findings
     details: What broke and what held
     link: /findings
+  - title: Privacy and data
+    details: What leaves your machine
+    link: /privacy
   - title: Support
     details: Funding and other ways to help
     link: /support

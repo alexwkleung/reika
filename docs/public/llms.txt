@@ -26,4 +26,5 @@ Install with `npm i -g @alexwkleung/reika`, `pnpm add -g @alexwkleung/reika` or 
 
 - [README](https://raw.githubusercontent.com/alexwkleung/reika/main/README.md): the repository's landing page
 - [Support](https://raw.githubusercontent.com/alexwkleung/reika/main/docs/support.md): funding and other ways to help
+- [Privacy and data](https://raw.githubusercontent.com/alexwkleung/reika/main/docs/privacy.md): every network request Reika makes and every file it writes, with the setting that turns each off
 - [Contributors](https://raw.githubusercontent.com/alexwkleung/reika/main/docs/contributors.md): people who contributed code, translations, security reviews and test reports

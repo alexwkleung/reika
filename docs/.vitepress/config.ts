@@ -101,6 +101,7 @@ export default defineConfigWithTheme<TranslationTheme>({
             text: '项目',
             items: [
               { text: '支持项目（英文）', link: '/zh/support' },
+              { text: '隐私与数据（英文）', link: '/zh/privacy' },
               { text: '贡献者', link: '/zh/contributors' },
             ],
           },
@@ -112,7 +113,7 @@ export default defineConfigWithTheme<TranslationTheme>({
         returnToTopLabel: '返回顶部',
         footer: {
           message:
-            '基于 Apache-2.0 许可证免费开源 · <a href="/zh/support">支持项目（英文）</a> · <a href="/zh/support#contact">联系（英文）</a>',
+            '基于 Apache-2.0 许可证免费开源 · <a href="/zh/support">支持项目（英文）</a> · <a href="/zh/privacy">隐私（英文）</a> · <a href="/zh/support#contact">联系（英文）</a>',
           copyright: 'Copyright 2026 Alex Leung',
         },
       },
@@ -240,6 +241,7 @@ export default defineConfigWithTheme<TranslationTheme>({
         text: 'Project',
         items: [
           { text: 'Support', link: '/support' },
+          { text: 'Privacy and data', link: '/privacy' },
           { text: 'Contributors', link: '/contributors' },
         ],
       },
@@ -247,7 +249,7 @@ export default defineConfigWithTheme<TranslationTheme>({
     socialLinks: [{ icon: 'github', link: 'https://github.com/alexwkleung/reika' }],
     footer: {
       message:
-        'Free and open source under the Apache-2.0 license · <a href="/support">Support the project</a> · <a href="/support#contact">Contact</a>',
+        'Free and open source under the Apache-2.0 license · <a href="/support">Support the project</a> · <a href="/privacy">Privacy</a> · <a href="/support#contact">Contact</a>',
       copyright: 'Copyright 2026 Alex Leung',
     },
   },
