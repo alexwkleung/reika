@@ -19,6 +19,9 @@ keys, commands and tools. Reika is 0.x, so a minor version may change behavior a
   replay of saved sessions it made folds about a fifth rarer at a 24k window and over a quarter rarer at 32k. `REIKA_AGE_ARGS=0` turns it off
   (#1126).
 
+- `REIKA_PR_BADGE=0` turns off the status bar's pull request badge, and with it the `gh pr view`
+  lookup it makes against GitHub about once a minute (#1129).
+
 ### Changed
 
 - When reika pauses reading because the model keeps re-reading, it now tells the model the pause
