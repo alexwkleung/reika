@@ -243,3 +243,53 @@ describe('parseLineRef', () => {
     expect(parseLineRef('line 120')).toBeNull();
   });
 });
+
+describe('old_string failures point at the range form (#1132)', () => {
+  const missingLine = {
+    path: 'f.ts',
+    old_string: 'export function b() {\n  return 3;\n}',
+    new_string: 'x',
+  };
+
+  it('names the closest block as a hashed range when the flag is on', async () => {
+    process.env.REIKA_EDIT_POSITION = '1';
+    await write();
+    const r = await positionalEditTool.run(missingLine, ctx());
+    expect(r.summary).toContain(
+      `replace them as whole lines by position instead: start_line "${ref(5, 'export function b() {')}", end_line "${ref(7, '}')}"`,
+    );
+  });
+
+  it('lets the pointed range be used as is', async () => {
+    process.env.REIKA_EDIT_POSITION = '1';
+    const p = await write();
+    const r = await positionalEditTool.run(missingLine, ctx());
+    const [, start, end] = /start_line "([^"]+)", end_line "([^"]+)"/.exec(r.summary)!;
+    const done = await positionalEditTool.run(
+      { path: 'f.ts', start_line: start, end_line: end, new_string: 'export const b = 3;' },
+      ctx(),
+    );
+    expect(done.summary).toMatch(/^Edited/);
+    expect(await readFile(p, 'utf8')).toContain('}\n\nexport const b = 3;\n');
+  });
+
+  it('lists each match as a range when old_string is not unique', async () => {
+    process.env.REIKA_EDIT_POSITION = '1';
+    await write();
+    const r = await positionalEditTool.run(
+      { path: 'f.ts', old_string: '}', new_string: '};' },
+      ctx(),
+    );
+    expect(r.summary).toContain(`start_line "${ref(3, '}')}", end_line "${ref(3, '}')}"; or`);
+    expect(r.summary).toContain(`start_line "${ref(7, '}')}"`);
+  });
+
+  it('leaves the message exactly as before with the flag off', async () => {
+    delete process.env.REIKA_EDIT_POSITION;
+    await write();
+    const r = await editTool.run(missingLine, ctx());
+    expect(r.summary).toBe(
+      'Edit failed: old_string not found in f.ts. Closest match starts at line 5 ("export function b() {") but line 6 differs: expected "return 3;", file has "return 2;". Re-read there and copy verbatim.',
+    );
+  });
+});

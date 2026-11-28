@@ -7,7 +7,7 @@ import {
   resolveUserPath,
 } from './_paths.js';
 import type { Tool, EditFailure, ToolContext, ToolResult } from '../types.js';
-import { gutterLine, lineHash, parseLineRef } from './_lineref.js';
+import { gutterLine, lineHash, parseLineRef, positionalEditsEnabled } from './_lineref.js';
 import { buildEditDiff, editDiffStartLine } from './_diff.js';
 import { surfaceImportedDeps } from './_deps.js';
 import { groundUrls } from './_urls.js';
@@ -79,7 +79,9 @@ export const editTool: Tool = {
         const a = lineOf(text, first);
         const b = lineOf(text, second);
         return {
-          summary: `Edit failed: old_string appears multiple times in ${display} (lines ${a}, ${b}); add surrounding context to make it unique`,
+          summary:
+            `Edit failed: old_string appears multiple times in ${display} (lines ${a}, ${b}); add surrounding context to make it unique` +
+            rangePointer(text.split('\n'), [a - 1, b - 1], blockLineCount(oldStr)),
         };
       }
       start = first;
@@ -89,7 +91,13 @@ export const editTool: Tool = {
       const fuzzy = fuzzyLineMatch(text, oldStr, newStr);
       if (fuzzy.status === 'multiple') {
         return {
-          summary: `Edit failed: old_string appears multiple times in ${display} (lines ${fuzzy.lines.join(', ')}); add surrounding context to make it unique`,
+          summary:
+            `Edit failed: old_string appears multiple times in ${display} (lines ${fuzzy.lines.join(', ')}); add surrounding context to make it unique` +
+            rangePointer(
+              text.split('\n'),
+              fuzzy.lines.map(l => l - 1),
+              blockLineCount(oldStr),
+            ),
         };
       }
       if (fuzzy.status === 'mixed') {
@@ -671,7 +679,7 @@ function fuzzyLineMatch(text: string, oldStr: string, newStr: string): FuzzyResu
     const closest = locateClosest(fileLines, oldTrim);
     return {
       status: 'none',
-      hint: formatNotFoundHint(closest, oldLines, oldTrim),
+      hint: formatNotFoundHint(closest, oldLines, oldTrim, fileLines),
       failure: closestToFailure(closest, fileLines, oldTrim),
     };
   }
@@ -801,14 +809,49 @@ function locateByTokenOverlap(fileLines: string[], oldTrim: string[]): number | 
 
 // Point the model at the likely spot when even the tolerant match fails, so it can correct in one
 // retry instead of probing with cat/sed — the costly thing for a weak model to discover on its own.
-function formatNotFoundHint(closest: Closest, oldLines: string[], oldTrim: string[]): string {
+function formatNotFoundHint(
+  closest: Closest,
+  oldLines: string[],
+  oldTrim: string[],
+  fileLines: string[],
+): string {
   const i0 = oldTrim.findIndex(t => t !== '');
   if (i0 === -1) return '';
   if (!closest.found) return ' No line matches it even ignoring whitespace.';
   return (
     ` Closest match starts at line ${closest.start + 1} ("${oldLines[i0].trim()}")` +
-    ` but line ${closest.divergentLine} differs: expected "${closest.expected}", file has "${closest.actual}". Re-read there and copy verbatim.`
+    ` but line ${closest.divergentLine} differs: expected "${closest.expected}", file has "${closest.actual}". Re-read there and copy verbatim.` +
+    rangePointer(fileLines, [closest.start], oldTrim.length)
   );
+}
+
+// #1132: an old_string miss is where a model that knows the lines but not their exact bytes is
+// stuck, and the range form needs only what the harness already has here: line numbers and
+// hashes. Absent (no anchor) gets none, since its token-overlap region is a guess. Flag-gated, so
+// a session without positional edits reads exactly as before.
+const RANGE_POINTER_MAX = 4;
+function rangePointer(fileLines: string[], starts: number[], count: number): string {
+  if (!positionalEditsEnabled()) return '';
+  const total =
+    fileLines.length > 1 && fileLines[fileLines.length - 1] === ''
+      ? fileLines.length - 1
+      : fileLines.length;
+  const ranges = starts
+    .slice(0, RANGE_POINTER_MAX)
+    .map(s => [s, Math.min(total, s + count) - 1])
+    .filter(([from, to]) => from >= 0 && to >= from)
+    .map(
+      ([from, to]) =>
+        `start_line "${from + 1}:${lineHash(fileLines[from])}", end_line "${to + 1}:${lineHash(fileLines[to])}"`,
+    );
+  if (ranges.length === 0) return '';
+  return starts.length > 1
+    ? ` Or replace one of them as whole lines by position: ${ranges.join('; or ')}.`
+    : ` If those are the lines you meant, replace them as whole lines by position instead: ${ranges[0]}.`;
+}
+
+function blockLineCount(oldStr: string): number {
+  return (oldStr.endsWith('\n') ? oldStr.slice(0, -1) : oldStr).split('\n').length;
 }
 
 // Same divergence as the hint, as data the agent loop can lift into a non-aging recovery directive.
