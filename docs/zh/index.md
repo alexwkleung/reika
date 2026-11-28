@@ -86,6 +86,9 @@ docs:
   - title: 研究结果（英文）
     details: 哪些失效、哪些有效
     link: /zh/findings
+  - title: 隐私与数据（英文）
+    details: 哪些数据会离开你的电脑
+    link: /zh/privacy
   - title: 支持项目（英文）
     details: 资助与其他帮助方式
     link: /zh/support

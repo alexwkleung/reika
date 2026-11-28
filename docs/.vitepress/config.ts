@@ -101,6 +101,7 @@ export default defineConfigWithTheme<TranslationTheme>({
             text: '项目',
             items: [
               { text: '支持项目（英文）', link: '/zh/support' },
+              { text: '隐私与数据（英文）', link: '/zh/privacy' },
               { text: '贡献者', link: '/zh/contributors' },
             ],
           },
@@ -240,6 +241,7 @@ export default defineConfigWithTheme<TranslationTheme>({
         text: 'Project',
         items: [
           { text: 'Support', link: '/support' },
+          { text: 'Privacy and data', link: '/privacy' },
           { text: 'Contributors', link: '/contributors' },
         ],
       },
