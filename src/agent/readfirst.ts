@@ -2,7 +2,8 @@ import { readFile } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';
 import { findFreshToolBlockStart } from '../provider/toolcall.js';
 import { escapesProject, resolveUserPath } from '../tools/_paths.js';
-import { classifyEditMatch } from '../tools/edit.js';
+import { GUTTER_PREFIX_RE } from '../tools/_lineref.js';
+import { classifyEditMatch, positionLands } from '../tools/edit.js';
 import type { Message } from '../types.js';
 
 // Read-first gate (#72). Weak models blind-apply edits to files whose contents are not in front of
@@ -126,7 +127,7 @@ const MIN_PROBE_CHARS = 12;
 export function probeLine(excerpt: string): string | undefined {
   let best: string | undefined;
   for (const raw of excerpt.split('\n')) {
-    const line = raw.replace(/^\s*\d+│/, '').trim();
+    const line = raw.replace(GUTTER_PREFIX_RE, '').trim();
     if (line.length >= MIN_PROBE_CHARS && (best === undefined || line.length > best.length)) {
       best = line;
     }
@@ -207,6 +208,22 @@ export async function oldStringProvesBytes(
   try {
     const text = await readFile(resolveUserPath(cwd, path), 'utf8');
     return classifyEditMatch(text, oldStr, newStr) === 'exact';
+  } catch {
+    return false;
+  }
+}
+
+// The positional form's proof (#1132): an anchor that names exactly one line, or a range whose
+// edge hashes match the file, is not a guess. An anchor needs nothing from the file in context,
+// which is the point of it; a matching hash came from a read of those lines, and the replaced
+// lines are returned in the result. Same caller contract as oldStringProvesBytes.
+export async function positionProvesBytes(
+  cwd: string,
+  path: string,
+  args: Record<string, unknown>,
+): Promise<boolean> {
+  try {
+    return positionLands(await readFile(resolveUserPath(cwd, path), 'utf8'), args);
   } catch {
     return false;
   }

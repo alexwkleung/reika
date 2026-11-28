@@ -7,10 +7,12 @@ import {
   buildReadFirstDirective,
   isLive,
   oldStringProvesBytes,
+  positionProvesBytes,
   probeLine,
   probeWouldLand,
 } from './readfirst.js';
 import { resolveUserPath } from '../tools/_paths.js';
+import { lineHash } from '../tools/_lineref.js';
 import type { Message } from '../types.js';
 
 const CWD = '/repo';
@@ -223,6 +225,12 @@ describe('probeLine', () => {
     );
   });
 
+  it('strips the hashed gutter of positional edits (#1132)', () => {
+    expect(probeLine('    5:a3f│  const somethingMuchLonger = 2;')).toBe(
+      'const somethingMuchLonger = 2;',
+    );
+  });
+
   it('returns undefined when nothing clears the length floor', () => {
     expect(probeLine('   10│  }\n   11│);\n   12│')).toBeUndefined();
   });
@@ -356,6 +364,42 @@ describe('oldStringProvesBytes', () => {
       false,
     );
     expect(await oldStringProvesBytes(dir, 'nope.ts', LINE, 'x')).toBe(false);
+  });
+});
+
+describe('positionProvesBytes', () => {
+  const LINE = 'export function anchoredHere() {';
+  let dir: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'reika-proven-pos-'));
+    await writeFile(join(dir, 'a.ts'), `${LINE}\n}\n`, 'utf8');
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('accepts a unique anchor with nothing read, and a range whose hash matches', async () => {
+    expect(
+      await positionProvesBytes(dir, 'a.ts', { insert_after: 'anchoredHere', new_string: 'x' }),
+    ).toBe(true);
+    expect(
+      await positionProvesBytes(dir, 'a.ts', {
+        start_line: `1:${lineHash(LINE)}`,
+        new_string: 'x',
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects a stale hash, a missing anchor and an unreadable file', async () => {
+    expect(await positionProvesBytes(dir, 'a.ts', { start_line: '1:000', new_string: 'x' })).toBe(
+      false,
+    );
+    expect(
+      await positionProvesBytes(dir, 'a.ts', { insert_after: 'nowhere', new_string: 'x' }),
+    ).toBe(false);
+    expect(await positionProvesBytes(dir, 'nope.ts', { insert_after: 'x', new_string: 'x' })).toBe(
+      false,
+    );
   });
 });
 
