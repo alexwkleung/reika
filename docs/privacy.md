@@ -21,6 +21,10 @@ page is meant to save you reading all of it.
 
 A few things that bound the rows above:
 
+- **The search browser is a real Chrome, and Chrome makes its own requests** to Google (updates,
+  Safe Browsing and the like), whatever Reika does with it. When Reika launches it, it uses a separate profile with sync
+  off. If a Chrome is already listening on the debugging port (`REIKA_CDP_PORT`, 9222 by default),
+  Reika uses that one instead. To avoid it, set `REIKA_CDP_SEARCH=0`.
 - **MCP servers run as their own processes, and what they do is up to them.** Reika gives them only
   a minimal environment, never your API keys.
 - **Shell commands the model runs are sandboxed on macOS** and have no network except loopback and
@@ -35,7 +39,7 @@ A few things that bound the rows above:
 
 ## What Reika keeps on disk
 
-Everything lives under `~/.config/reika/` unless noted. Nothing here is uploaded anywhere.
+Everything lives under `~/.config/reika/` unless noted. Reika never sends these files anywhere itself. They are ordinary files, though, so if the model reads one (it can read any file you can), its contents go to your model server like any other read.
 
 | Path                                                | What it holds                                                                                                                                  | Turn it off                                                  |
 | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
