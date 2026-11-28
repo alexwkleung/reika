@@ -35,6 +35,10 @@ const PROJECT_ENV_DENIED = new Set([
   'REIKA_CDP_SEARCH',
   'REIKA_CDP_PORT',
   'REIKA_DEBUG_FILE',
+  // A program reika runs, a profile (so a server) a mode's turns go to, and a file path to write.
+  'REIKA_CHROME_PATH',
+  'REIKA_MODE_MODELS',
+  'REIKA_SPILL_STATS_FILE',
 ]);
 
 export function isDeniedFromProjectEnv(key: string): boolean {
@@ -179,6 +183,7 @@ export function loadConfig(): Config {
     // Per-project session auto-save for /resume (#1). Default on; `0` stops reika writing
     // conversations to disk at all, which is the one reason to want it off.
     autosave: process.env.REIKA_AUTOSAVE !== '0',
+    prBadge: process.env.REIKA_PR_BADGE !== '0',
     // #827: REIKA_NOTE_SLOT=tool|user forces the slot instead, checked where the probe would run.
     noteSlotProbe: true,
     // Rotating garden words on the busy indicator (#500). Default on; `0` keeps the plain

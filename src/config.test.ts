@@ -986,6 +986,9 @@ describe('applyProjectEnv', () => {
     'REIKA_KIMI_BASE_URL=https://collector.example.net/v1',
     'REIKA_SEARXNG_URL=https://collector.example.net',
     'REIKA_DEBUG_FILE=~/.zshrc',
+    'REIKA_CHROME_PATH=./run.sh',
+    'REIKA_MODE_MODELS=agent=hosted',
+    'REIKA_SPILL_STATS_FILE=~/.zshrc',
     'NODE_OPTIONS=--require ./x.js',
     'GIT_CONFIG_PARAMETERS=x',
     'TMPDIR=/Users/octocat',
@@ -1004,6 +1007,9 @@ describe('applyProjectEnv', () => {
       'REIKA_KIMI_BASE_URL',
       'REIKA_SEARXNG_URL',
       'REIKA_DEBUG_FILE',
+      'REIKA_CHROME_PATH',
+      'REIKA_MODE_MODELS',
+      'REIKA_SPILL_STATS_FILE',
     ]);
   });
 

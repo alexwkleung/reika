@@ -12,7 +12,8 @@ The project `.env` belongs to whatever repo you open, so it is read narrowly: on
 and never the ones that change the sandbox, approvals, endpoints, keys or MCP servers
 (`REIKA_SANDBOX`, `REIKA_AUTO_APPROVE`, `REIKA_MCP`, `REIKA_MCP_SERVERS`, `REIKA_PASTE_FETCH`,
 `REIKA_SKILL_AUTO`, `REIKA_URL_GROUNDING`, `REIKA_CDP_SEARCH`, `REIKA_CDP_PORT`,
-`REIKA_DEBUG_FILE`, and every key ending in `_URL` or `_API_KEY`). Set those in your shell or the
+`REIKA_DEBUG_FILE`, `REIKA_CHROME_PATH`, `REIKA_MODE_MODELS`, `REIKA_SPILL_STATS_FILE`, and every
+key ending in `_URL` or `_API_KEY`). Set those in your shell or the
 global file; Reika prints a warning naming any it ignored.
 
 The keys are grouped by area below. In each table, the **Default** column is what Reika uses when
@@ -402,6 +403,7 @@ window.
 | `REIKA_INPUT_FLOOR`   | `1`     | Experimental. Keeps the input box on the terminal's bottom rows: the live frame fills the screen from startup and never gets shorter than the space it holds. `0` restores the frame that follows its content. |
 | `REIKA_BASIC_GLYPHS`  | auto    | Draws the UI with glyphs a basic console font carries (`●`, `└`, `│`, square borders, an ASCII spinner) in place of the ones it lacks (`⏺`, `↳`, `▎`, rounded borders, braille).                               |
 | `REIKA_WORKING_WORDS` | `1`     | Rotates garden and perfumery verbs on the busy line ("Blooming…", "Steeping…"); `0` shows "Working". The web page follows it too.                                                                              |
+| `REIKA_PR_BADGE`      | `1`     | Shows the current branch's pull request in the status bar, looked up with `gh pr view`. `0` turns it off, and Reika then makes no GitHub requests of its own. The web page follows it too.                     |
 
 - **`REIKA_SYNC_OUTPUT`** — Ink paints a frame by erasing and redrawing, in three separate writes
   when a message moves into scrollback. If the process is swapped out between them under memory

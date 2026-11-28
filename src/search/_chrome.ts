@@ -3,6 +3,7 @@ import { accessSync, constants, mkdirSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { debugLog } from '../debug.js';
+import { protectLoopbackPort } from '../tools/_sandbox.js';
 import { SearchUnavailableError } from './types.js';
 
 // A tab, as the search provider needs it. The provider depends on this and nothing else, so its
@@ -59,6 +60,10 @@ export class ChromeHost implements BrowserHost {
     this.port = opts.port ?? DEFAULT_PORT;
     this.binary = opts.binary;
     this.profileDir = opts.profileDir ?? join(homedir(), '.config', 'reika', 'chrome');
+    // The debugging port takes commands from any local process (`--remote-allow-origins=*`), so a
+    // sandboxed command could tell this browser to load any URL: the network deny and the exfil
+    // check, both bypassed. Held for the whole session, since the port may answer before we launch.
+    protectLoopbackPort(this.port);
   }
 
   async newTab(): Promise<TabHandle> {
